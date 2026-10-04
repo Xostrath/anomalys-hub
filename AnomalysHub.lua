@@ -3038,6 +3038,7 @@ local function create(className, properties, parent)
 	end
 	object.Parent = parent
 	if className == "TextButton" and configStore.StyleButton then configStore.StyleButton(object) end
+	if configStore.StyleTypography then configStore.StyleTypography(object) end
 	return object
 end
 
@@ -21434,8 +21435,27 @@ function configStore.InstallFarmPresentation()
 end
 configStore.InstallFarmPresentation()
 
+function configStore.StyleTypography(object)
+	if not (object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox"))
+		or not object:IsDescendantOf(screenGui) then return end
+	local font = object.Font
+	local heading = object.Name == "Heading" or object.Name == "Title" or object.Name == "Brand"
+	local bold = heading or font == Enum.Font.GothamBold or font == Enum.Font.GothamBlack
+		or font == Enum.Font.BuilderSansBold or font == Enum.Font.BuilderSansExtraBold
+	object.Font = bold and Enum.Font.BuilderSansBold or Enum.Font.BuilderSansMedium
+	-- Idempotent sizing: preserve compact rows and do not enlarge the window/cards.
+	local originalSize = object:GetAttribute("HubOriginalTextSize") or object.TextSize
+	object:SetAttribute("HubOriginalTextSize", originalSize)
+	local targetSize = math.max(originalSize, heading and 16 or 14)
+	if object.Size.Y.Scale == 0 and object.Size.Y.Offset > 0 then
+		targetSize = math.max(originalSize, math.min(targetSize, object.Size.Y.Offset - 2))
+	end
+	object.TextSize = targetSize
+end
+
 function configStore.PolishInterface()
 	for _, object in ipairs(screenGui:GetDescendants()) do
+		configStore.StyleTypography(object)
 		if object:IsA("Frame") and object ~= window and object ~= configStore.Sidebar and object ~= topBar then
 			local stroke = object:FindFirstChildOfClass("UIStroke")
 			if stroke and stroke.Transparency < 1 then stroke.Transparency = 0.2 end
@@ -21443,7 +21463,7 @@ function configStore.PolishInterface()
 			create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.45}, object)
 		end
 		if object:IsA("TextLabel") and object.Name == "Heading" then
-			object.Font = Enum.Font.Code
+			object.Font = Enum.Font.BuilderSansBold
 			object.TextColor3 = colors.Accent
 		end
 	end

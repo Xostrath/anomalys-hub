@@ -3163,7 +3163,7 @@ configStore.WindowShadow = create("Frame", {
 	BorderSizePixel = 0,
 }, screenGui)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, configStore.WindowShadow)
-configStore.ShadowScale = create("UIScale", {Scale = 1}, configStore.WindowShadow)
+configStore.ShadowScale = create("UIScale", {Scale = 0.5}, configStore.WindowShadow)
 
 local window = create("Frame", {
 	Name = "Window",
@@ -3177,11 +3177,12 @@ local window = create("Frame", {
 }, screenGui)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, window)
 create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.05}, window)
-configStore.WindowScale = create("UIScale", {Scale = 1}, window)
+configStore.WindowScale = create("UIScale", {Scale = 0.5}, window)
 function configStore.UpdateWindowScale()
 	local camera = workspace.CurrentCamera
 	local viewport = camera and camera.ViewportSize or Vector2.new(1024, 720)
-	local scale = math.clamp(math.min((viewport.X - 24) / 1024, (viewport.Y - 24) / 720), 0.2, 1)
+	-- Scale the entire layout together, at half the previous rendered size.
+	local scale = 0.5 * math.clamp(math.min((viewport.X - 24) / 1024, (viewport.Y - 24) / 720), 0.2, 1)
 	configStore.WindowScale.Scale = scale
 	configStore.ShadowScale.Scale = scale
 end

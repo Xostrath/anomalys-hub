@@ -2738,8 +2738,8 @@ local npcSafety = {
 		Authorized = configStore.FeatureAccess.FastAttack,
 		Enabled = false,
 		Interval = 0.10,
-		-- One swing in flight at a time (the server pairs each hit with the latest
-		-- swing). SwingDelay adapts between the bounds from observed damage.
+		-- Keep one delayed swing in flight. Timing uses bounded comparisons of
+		-- observed HP loss, then holds; these observations are not server acks.
 		SwingDelay = 0.13,
 		Level = 4,
 		MinSwingDelay = 0.05,
@@ -11014,9 +11014,10 @@ function npcSafety.UpdateDirectLightTelemetry()
 		diagnostic.TelemetryLabel.TextColor3 = colors.Warning
 		return
 	end
-	local settingSummary = diagnostic.LastBenchmarkSummary
-		or string.format(
-			"swing delay %.2fs | %d per tick | landing %s | %.0f dmg/s",
+	local settingSummary = string.format(
+			"%s L%d | %.2fs x%d | HP events/req %s | %.0f dmg/s",
+			diagnostic.Tuning and diagnostic.Tuning.Phase or "MEASURING",
+			diagnostic.Level,
 			diagnostic.SwingDelay,
 			diagnostic.Pairs,
 			diagnostic.LandRate and string.format("%d%%", math.floor(diagnostic.LandRate * 100 + 0.5)) or "--",
@@ -11048,6 +11049,11 @@ function npcSafety.SetDirectLightInterval(value)
 	parsed = math.clamp(parsed, diagnostic.MinimumInterval, diagnostic.MaximumInterval)
 	parsed = math.floor(parsed * 100 + 0.5) / 100
 	diagnostic.Interval = parsed
+	if diagnostic.BenchmarkRunning then
+		npcSafety.ResetDirectLightBenchmarkLevel(diagnostic.BenchmarkLevel)
+	elseif npcSafety.RebaseDirectLightTuning then
+		npcSafety.RebaseDirectLightTuning()
+	end
 	if diagnostic.IntervalBox then
 		diagnostic.IntervalBox.Text = string.format("%.2f", parsed)
 	end
@@ -11061,7 +11067,7 @@ function npcSafety.StopDirectLightDiagnostic(reason)
 		diagnostic.BenchmarkRunning = false
 		diagnostic.BenchmarkCollecting = false
 		diagnostic.LastBenchmarkSummary = "SPEED TEST CANCELED"
-		npcSafety.ApplyDirectLightLevel(diagnostic.BenchmarkOriginalLevel or diagnostic.Level)
+		npcSafety.HoldDirectLightLevel(diagnostic.BenchmarkOriginalLevel or diagnostic.Level, nil)
 		if diagnostic.BenchmarkButton then
 			diagnostic.BenchmarkButton.Text = "Speed Test"
 			diagnostic.BenchmarkButton.BackgroundColor3 = colors.Surface
@@ -11202,13 +11208,19 @@ function npcSafety.SendDirectLightRequest()
 	return true
 end
 
--- Hill-climbs damage per second over speed levels (long swing delay -> no delay
--- -> several swing+hit pairs per tick). Keeps moving while damage/sec holds or
--- improves and reverses when it drops, so it settles near the server's limit.
+-- Explicit Speed Test still covers all levels. Automatic tuning compares at
+-- most four nearby/fallback settings, then holds the best observed result.
 npcSafety.DirectLight.Levels = {
 	{0.30, 1}, {0.24, 1}, {0.18, 1}, {0.13, 1}, {0.09, 1}, {0.05, 1}, {0, 1},
 	{0, 2}, {0, 3}, {0, 4}, {0, 5}, {0, 6}, {0, 8},
 }
+
+function npcSafety.ResetDirectLightWindow()
+	local diagnostic = npcSafety.DirectLight
+	diagnostic.WindowHits, diagnostic.WindowDamage, diagnostic.WindowLoss = 0, 0, 0
+	diagnostic.WindowStartedAt = os.clock() + 0.5
+	diagnostic.WindowReady = false
+end
 
 function npcSafety.ApplyDirectLightLevel(level)
 	local diagnostic = npcSafety.DirectLight
@@ -11216,41 +11228,115 @@ function npcSafety.ApplyDirectLightLevel(level)
 	diagnostic.Level = level
 	diagnostic.SwingDelay = diagnostic.Levels[level][1]
 	diagnostic.Pairs = diagnostic.Levels[level][2]
+	npcSafety.ResetDirectLightWindow()
+end
+
+function npcSafety.BeginDirectLightSearch()
+	local diagnostic = npcSafety.DirectLight
+	local level = diagnostic.Level or 4
+	local queue, seen = {}, {}
+	for _, candidate in ipairs({level, math.max(1, level - 1), math.min(#diagnostic.Levels, level + 1), 1}) do
+		if not seen[candidate] then
+			seen[candidate] = true
+			table.insert(queue, candidate)
+		end
+	end
+	diagnostic.Tuning = {Phase = "TESTING", Queue = queue, Index = 1, BestScore = 0,
+		Mode = npcSafety.PositionMode, BadWindows = 0}
+	diagnostic.LastBenchmarkSummary = nil
+	npcSafety.ApplyDirectLightLevel(queue[1])
+end
+
+function npcSafety.HoldDirectLightLevel(level, score)
+	local diagnostic = npcSafety.DirectLight
+	npcSafety.ApplyDirectLightLevel(level)
+	diagnostic.Tuning = {Phase = "HOLDING", BestLevel = level, BestScore = score or 0,
+		ReferenceScore = score and score > 0 and score or nil, BadWindows = 0,
+		RetryAt = os.clock() + 20, Mode = npcSafety.PositionMode}
+end
+
+function npcSafety.RebaseDirectLightTuning()
+	local diagnostic = npcSafety.DirectLight
+	local tuning = diagnostic.Tuning
+	-- NPC health/defence, mode and interval changes make old DPS incomparable.
+	-- Retain a proven setting, but establish a fresh reference on this target.
+	if tuning and (tuning.Phase == "HOLDING" or tuning.BestLevel) then
+		npcSafety.HoldDirectLightLevel(tuning.BestLevel or diagnostic.Level, nil)
+	else
+		npcSafety.BeginDirectLightSearch()
+	end
+	diagnostic.Score, diagnostic.LandRate = nil, nil
+end
+
+function npcSafety.CanMeasureDirectLight()
+	local diagnostic = npcSafety.DirectLight
+	local target = diagnostic.Target
+	local character = localPlayer.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local targetRoot = target and getNpcRoot(target)
+	return diagnostic.Enabled and not unloaded and root and targetRoot
+		and npcSafety.IsDirectLightTargetAllowed(target) and not npcSafety.IsKnocked(target)
+		and npcApproachPhase == "Rise" and not npcSafety.AboveTransitionStage
+		and not npcSafety.LootMode and not npcSafety.GripMode and not npcSafety.RecoveryMode
+		and not npcSafety.HideMode and not npcSafety.PlayerEvadeMode
+		and (targetRoot.Position - root.Position).Magnitude <= 30
 end
 
 function npcSafety.AdaptDirectLightDelay()
 	local diagnostic = npcSafety.DirectLight
-	if diagnostic.BenchmarkRunning then
+	if diagnostic.BenchmarkRunning then return end
+	if not npcSafety.CanMeasureDirectLight() then
+		npcSafety.ResetDirectLightWindow()
+		if diagnostic.Tuning then diagnostic.Tuning.BadWindows = 0 end
+		return
+	end
+	local tuning = diagnostic.Tuning
+	if not tuning or tuning.Mode ~= npcSafety.PositionMode then
+		npcSafety.RebaseDirectLightTuning()
 		return
 	end
 	local now = os.clock()
-	if diagnostic.WindowStartedAt == 0 then
-		diagnostic.WindowStartedAt = now
+	if not diagnostic.WindowReady then
+		-- Discard delayed health replication from the previous setting/warmup.
+		diagnostic.WindowHits, diagnostic.WindowDamage, diagnostic.WindowLoss = 0, 0, 0
+		if now >= diagnostic.WindowStartedAt then
+			diagnostic.WindowStartedAt, diagnostic.WindowReady = now, true
+		end
 		return
 	end
 	local elapsed = now - diagnostic.WindowStartedAt
-	if elapsed < 1.5 or diagnostic.WindowHits < 4 then
-		return
-	end
+	if elapsed < 3 or diagnostic.WindowHits < 4 then return end
 	diagnostic.LandRate = diagnostic.Pairs == 1 and math.min(diagnostic.WindowDamage / diagnostic.WindowHits, 1) or nil
 	local score = diagnostic.WindowLoss / elapsed
 	diagnostic.Score = score
-	local previous = diagnostic.PreviousScore
-	if previous and score < previous * 0.92 then
-		diagnostic.Direction = -(diagnostic.Direction or 1)
+	if tuning.Phase == "TESTING" then
+		-- Prefer the existing/lower-traffic setting unless improvement exceeds
+		-- 8%, so tiny replication fluctuations do not select a new timing.
+		if score > 0 and (not tuning.BestLevel or score > tuning.BestScore * 1.08) then
+			tuning.BestLevel, tuning.BestScore = diagnostic.Level, score
+		end
+		tuning.Index += 1
+		local candidate = tuning.Queue[tuning.Index]
+		if candidate then
+			npcSafety.ApplyDirectLightLevel(candidate)
+		else
+			npcSafety.HoldDirectLightLevel(tuning.BestLevel or 1, tuning.BestScore)
+		end
+	else
+		local reference = tuning.ReferenceScore
+		if score <= 0 or (reference and score < reference * 0.65) then
+			tuning.BadWindows += 1
+		else
+			tuning.BadWindows = 0
+			tuning.ReferenceScore = reference and (reference * 0.8 + score * 0.2) or score
+		end
+		if tuning.BadWindows >= 3 and now >= tuning.RetryAt then
+			npcSafety.BeginDirectLightSearch()
+		else
+			diagnostic.WindowHits, diagnostic.WindowDamage, diagnostic.WindowLoss = 0, 0, 0
+			diagnostic.WindowStartedAt = now
+		end
 	end
-	diagnostic.Direction = diagnostic.Direction or 1
-	local nextLevel = (diagnostic.Level or 1) + diagnostic.Direction
-	if nextLevel < 1 or nextLevel > #diagnostic.Levels then
-		diagnostic.Direction = -diagnostic.Direction
-		nextLevel = (diagnostic.Level or 1) + diagnostic.Direction
-	end
-	npcSafety.ApplyDirectLightLevel(nextLevel)
-	diagnostic.PreviousScore = score
-	diagnostic.WindowHits = 0
-	diagnostic.WindowDamage = 0
-	diagnostic.WindowLoss = 0
-	diagnostic.WindowStartedAt = now
 end
 
 function npcSafety.SetDirectLightTarget(target)
@@ -11263,11 +11349,12 @@ function npcSafety.SetDirectLightTarget(target)
 		diagnostic.HealthConnection = nil
 	end
 	diagnostic.Target = nil
-	diagnostic.WindowHits = 0
-	diagnostic.WindowDamage = 0
-	diagnostic.WindowLoss = 0
-	diagnostic.WindowStartedAt = 0
-	diagnostic.PreviousScore = nil
+	if not diagnostic.BenchmarkRunning then
+		npcSafety.RebaseDirectLightTuning()
+	else
+		-- Restart this level's sample instead of combining different NPCs.
+		npcSafety.ResetDirectLightBenchmarkLevel(diagnostic.BenchmarkLevel)
+	end
 	diagnostic.StartHealth = nil
 	diagnostic.CurrentHealth = nil
 	diagnostic.LastHealth = nil
@@ -11325,14 +11412,14 @@ function npcSafety.FinishDirectLightBenchmark(cancelled, reason)
 	diagnostic.BenchmarkRunning = false
 	diagnostic.BenchmarkCollecting = false
 	if cancelled then
-		npcSafety.ApplyDirectLightLevel(diagnostic.BenchmarkOriginalLevel or diagnostic.Level)
+		npcSafety.HoldDirectLightLevel(diagnostic.BenchmarkOriginalLevel or diagnostic.Level, nil)
 		diagnostic.LastBenchmarkSummary = reason or "SPEED TEST CANCELED"
 	elseif not diagnostic.BenchmarkBestLevel or diagnostic.BenchmarkBestScore <= 0 then
-		npcSafety.ApplyDirectLightLevel(diagnostic.BenchmarkOriginalLevel or diagnostic.Level)
+		npcSafety.HoldDirectLightLevel(diagnostic.BenchmarkOriginalLevel or diagnostic.Level, nil)
 		diagnostic.LastBenchmarkSummary = "TEST INCONCLUSIVE: no damage observed"
 	else
 		local bestLevel = diagnostic.BenchmarkBestLevel
-		npcSafety.ApplyDirectLightLevel(bestLevel)
+		npcSafety.HoldDirectLightLevel(bestLevel, diagnostic.BenchmarkBestScore)
 		local best = diagnostic.Levels[bestLevel]
 		diagnostic.LastBenchmarkSummary = string.format(
 			"BEST L%d: %.1f dmg/s (%.2fs x%d)",
@@ -11391,6 +11478,10 @@ function npcSafety.UpdateDirectLightBenchmark(deltaTime)
 	if not diagnostic.BenchmarkRunning or not diagnostic.Target then
 		return
 	end
+	if not npcSafety.CanMeasureDirectLight() then
+		npcSafety.ResetDirectLightBenchmarkLevel(diagnostic.BenchmarkLevel)
+		return
+	end
 	if not diagnostic.BenchmarkCollecting then
 		diagnostic.BenchmarkWarmupRemaining = math.max(diagnostic.BenchmarkWarmupRemaining - deltaTime, 0)
 		if diagnostic.BenchmarkWarmupRemaining > 0 then
@@ -11399,6 +11490,7 @@ function npcSafety.UpdateDirectLightBenchmark(deltaTime)
 		diagnostic.BenchmarkCollecting = true
 		diagnostic.BenchmarkLevelDamage = 0
 		diagnostic.BenchmarkLevelStartRequests = diagnostic.RequestsSent
+		return
 	end
 	diagnostic.BenchmarkLevelElapsed += deltaTime
 	if diagnostic.BenchmarkLevelElapsed < diagnostic.BenchmarkLevelDuration then
@@ -11459,10 +11551,17 @@ function npcSafety.StartDirectLightDiagnostic()
 		if not diagnostic.Enabled then
 			return
 		end
-		if npcSafety.LootMode then
-			return
-		end
 		npcSafety.SetDirectLightTarget(activeNpcTarget)
+		-- Reset even when no request is sent (player exclusion, travel, loot,
+		-- etc.), so idle wall time cannot be scored as poor attack timing.
+		if not npcSafety.CanMeasureDirectLight() then
+			npcSafety.ResetDirectLightWindow()
+			if diagnostic.Tuning then diagnostic.Tuning.BadWindows = 0 end
+			if diagnostic.BenchmarkRunning then
+				npcSafety.ResetDirectLightBenchmarkLevel(diagnostic.BenchmarkLevel)
+			end
+		end
+		if npcSafety.LootMode then return end
 		diagnostic.Elapsed = math.max(os.clock() - diagnostic.StartedAt, 0)
 		if not diagnostic.Target then
 			npcSafety.UpdateDirectLightTelemetry()

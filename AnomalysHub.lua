@@ -17085,19 +17085,22 @@ function configStore.BodyRing.Update()
 	local state = body.State
 	if not state or state.Spin ~= spin or math.abs(body.AngleDelta(center, state.Center)) > 0.5
 		or math.abs(width - state.Width) > 0.5 then
-		state = {Spin = spin, Center = center, Width = width, ReadyAt = now + 0.12 + math.random() * 0.06}
+		state = {Spin = spin, Center = center, Width = width}
 		body.State = state
 	end
 	local angle = spin.Rotation % 360
 	local elapsed = state.SampleAt and now - state.SampleAt or 0
 	local speed = elapsed > 0 and elapsed <= 0.12 and body.AngleDelta(angle, state.Angle) / elapsed or nil
 	state.Angle, state.SampleAt = angle, now
-	-- Aim near the middle, with both current and next-frame angles inside the
-	-- visible arc. Never queue a delayed press that could outlive the hit window.
+	-- Press on the first sampled entry, one degree inside the visible arc.
+	-- No reaction timer: both the observed and projected angles must be inside,
+	-- so prediction cannot fire early or queue an input after the window closes.
+	local margin = math.min(1, width * 0.1)
+	local halfWindow = width / 2 - margin
 	local predicted = angle + (speed or 0) * math.min(elapsed * 0.5, 0.016)
-	local inside = math.abs(body.AngleDelta(angle, center)) <= width * 0.35
-		and math.abs(body.AngleDelta(predicted, center)) <= math.min(width * 0.20, 8)
-	if not state.Pressed and not body.KeyHeld and now >= state.ReadyAt and speed
+	local inside = math.abs(body.AngleDelta(angle, center)) <= halfWindow
+		and math.abs(body.AngleDelta(predicted, center)) <= halfWindow
+	if not state.Pressed and not body.KeyHeld and speed
 		and math.abs(speed) >= 1 and math.abs(speed) <= 1440 and inside then
 		local ok = pcall(VirtualInputManager.SendKeyEvent, VirtualInputManager, true, Enum.KeyCode.Space, false, game)
 		if ok then
@@ -17112,7 +17115,7 @@ function configStore.BodyRing.Update()
 		end
 	end
 	configStore.AutoClash.SetStatus(string.format("BODY RING // %s // %d PRESSES",
-		state.Pressed and "WAITING FOR NEXT ROUND" or "TIMING SPACE", body.Presses), colors.Success)
+		state.Pressed and "WAITING FOR NEXT ROUND" or "TIMING ARC ENTRY", body.Presses), colors.Success)
 end
 
 connect(configStore.BodyRing.Button.Activated, function()

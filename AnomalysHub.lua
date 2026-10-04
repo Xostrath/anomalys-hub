@@ -7122,7 +7122,7 @@ npcSafety.DirectLight.BenchmarkButton = create("TextButton", {
 	BackgroundColor3 = colors.Surface,
 	BorderSizePixel = 0,
 	Font = Enum.Font.GothamSemibold,
-	Text = "Speed Test",
+	Text = "Interval Test",
 	TextColor3 = colors.Muted,
 	TextSize = 9,
 }, npcSafety.DirectLight.Card)
@@ -10994,6 +10994,7 @@ function npcSafety.UpdateDirectLightTelemetry()
 		local level = math.max(diagnostic.BenchmarkLevel, 1)
 		local setting = diagnostic.Levels and diagnostic.Levels[level]
 		local settingText = setting and string.format("%.2fs x%d", setting[1], setting[2]) or "--"
+		if diagnostic.BenchmarkPlan then settingText = string.format("%.3fs interval | 0 delay x2", diagnostic.Interval) end
 		local stage = diagnostic.BenchmarkCollecting
 			and string.format("%.1f/%.1fs active", diagnostic.BenchmarkLevelElapsed, diagnostic.BenchmarkLevelDuration)
 			or (telemetry.Target and string.format("warmup %.1fs", diagnostic.BenchmarkWarmupRemaining) or "waiting for NPC")
@@ -11002,9 +11003,9 @@ function npcSafety.UpdateDirectLightTelemetry()
 			and diagnostic.BenchmarkLevelDamage / diagnostic.BenchmarkLevelElapsed
 			or 0
 		diagnostic.TelemetryLabel.Text = string.format(
-			"TEST %d/%d | %s | %s\nHP %s | level damage %.1f | %.1f dmg/s\nbest %s | press Speed Test to cancel",
-			level,
-			#diagnostic.Levels,
+			"TEST %d/%d | %s | %s\nHP %s | sample damage %.1f | %.1f dmg/s\nbest %s | press Cancel Test to cancel",
+			diagnostic.BenchmarkPlan and diagnostic.BenchmarkStep or level,
+			diagnostic.BenchmarkPlan and #diagnostic.BenchmarkPlan or #diagnostic.Levels,
 			stage,
 			settingText,
 			currentHealth,
@@ -11030,7 +11031,7 @@ function npcSafety.UpdateDirectLightTelemetry()
 		settingSummary = diagnostic.LastBenchmarkSummary .. (diagnostic.BenchmarkReportSaved and " | REPORT SAVED" or " | REPORT UNSAVED")
 	end
 	diagnostic.TelemetryLabel.Text = string.format(
-		"%s | %d req (%.1f/s) | %.2fs interval | %.1fs\nHP %s -> %s | loss %.1f | %d damage events (%.1f/s)\n%s",
+		"%s | %d req (%.1f/s) | %.3fs interval | %.1fs\nHP %s -> %s | loss %.1f | %d damage events (%.1f/s)\n%s",
 		telemetry.Enabled and (telemetry.Target and "RUNNING" or "WAITING") or diagnostic.LastStopReason,
 		telemetry.RequestsSent,
 		telemetry.RequestsPerSecond,
@@ -11053,15 +11054,16 @@ function npcSafety.SetDirectLightInterval(value)
 		parsed = diagnostic.Interval
 	end
 	parsed = math.clamp(parsed, diagnostic.MinimumInterval, diagnostic.MaximumInterval)
-	parsed = math.floor(parsed * 100 + 0.5) / 100
+	parsed = math.floor(parsed * 1000 + 0.5) / 1000
+	if diagnostic.BenchmarkRunning and parsed ~= diagnostic.Interval then
+		npcSafety.FinishDirectLightBenchmark(true, "INCONCLUSIVE: interval changed manually")
+	end
 	diagnostic.Interval = parsed
-	if diagnostic.BenchmarkRunning then
-		npcSafety.ResetDirectLightBenchmarkLevel(diagnostic.BenchmarkLevel)
-	elseif npcSafety.RebaseDirectLightTuning then
+	if not diagnostic.BenchmarkRunning and npcSafety.RebaseDirectLightTuning then
 		npcSafety.RebaseDirectLightTuning()
 	end
 	if diagnostic.IntervalBox then
-		diagnostic.IntervalBox.Text = string.format("%.2f", parsed)
+		diagnostic.IntervalBox.Text = string.format("%.3f", parsed)
 	end
 	npcSafety.UpdateDirectLightTelemetry()
 	return parsed
@@ -11074,9 +11076,10 @@ function npcSafety.StopDirectLightDiagnostic(reason)
 		diagnostic.BenchmarkRunning = false
 		diagnostic.BenchmarkCollecting = false
 		diagnostic.LastBenchmarkSummary = "SPEED TEST CANCELED"
+		npcSafety.RestoreDirectLightBenchmarkInterval(false)
 		npcSafety.HoldDirectLightLevel(diagnostic.BenchmarkOriginalLevel or diagnostic.Level, nil)
 		if diagnostic.BenchmarkButton then
-			diagnostic.BenchmarkButton.Text = "Speed Test"
+			diagnostic.BenchmarkButton.Text = "Interval Test"
 			diagnostic.BenchmarkButton.BackgroundColor3 = colors.Surface
 			diagnostic.BenchmarkButton.TextColor3 = colors.Muted
 		end
@@ -11465,6 +11468,8 @@ function npcSafety.RecordDirectLightBenchmarkRow(status, reason)
 	local m = diagnostic.BenchmarkMetrics or {}
 	local duration = diagnostic.BenchmarkLevelElapsed or 0
 	local row = {Level = diagnostic.BenchmarkLevel, Status = status, Reason = reason or "",
+		Step = diagnostic.BenchmarkStep or 0,
+		Round = diagnostic.BenchmarkPlan and diagnostic.BenchmarkPlan[diagnostic.BenchmarkStep].Round or 0,
 		SwingDelay = setting[1], Pairs = setting[2], Interval = diagnostic.Interval,
 		Damage = diagnostic.BenchmarkLevelDamage or 0, Duration = duration,
 		Requests = diagnostic.RequestsSent - (diagnostic.BenchmarkLevelStartRequests or diagnostic.RequestsSent),
@@ -11484,7 +11489,9 @@ function npcSafety.SaveDirectLightBenchmark(status, force)
 	local now = os.clock()
 	if not force and now - (diagnostic.BenchmarkSaveAt or -math.huge) < 2 then return end
 	diagnostic.BenchmarkSaveAt = now
-	local lines = {"FAST ATTACK SPEED TEST v3 // interruption-tolerant measurement; working swing-and-hit protocol",
+	local lines = {"FAST ATTACK SPEED TEST v4 // repeated interval comparison; working swing-and-hit protocol",
+		"test_kind=" .. (diagnostic.BenchmarkPlan and "INTERVALS: 0 delay x2; 0.100/0.075/0.050; 3 rotated rounds; 4s samples" or "LEVELS"),
+		"Interval selection: median DPS; require >8% improvement and wins in at least 2/3 rounds versus the slower incumbent. Incomplete runs restore original settings.",
 		"Observed client HP loss is not a server acknowledgement; health updates may batch multiple hits. Other damage/healing can confound results.",
 		"Only COMPLETE rows from the same target instance compete. DISCARDED rows are evidence, not scores.",
 		"Brief approach/range interruptions include time and HP loss: max 0.15s each / 0.30s per sample. Hard exclusions discard immediately.",
@@ -11497,6 +11504,10 @@ function npcSafety.SaveDirectLightBenchmark(status, force)
 			.. " pause=" .. tostring(diagnostic.BenchmarkPausedReason),
 		"current_sample_seconds=" .. tostring(diagnostic.BenchmarkLevelElapsed) .. " current_HP_loss="
 			.. tostring(diagnostic.BenchmarkLevelDamage) .. " target_HP=" .. tostring(diagnostic.CurrentHealth)}
+	for _, result in ipairs(diagnostic.BenchmarkIntervalSummary or {}) do
+		table.insert(lines, string.format("interval_result=%.3f samples=%d median_DPS=%.3f min_DPS=%.3f max_DPS=%.3f",
+			result.Interval, result.Count, result.Median, result.Min, result.Max))
+	end
 	local reasons = {}
 	for reason in pairs(diagnostic.BenchmarkInterruptions or {}) do table.insert(reasons, reason) end
 	table.sort(reasons)
@@ -11504,12 +11515,12 @@ function npcSafety.SaveDirectLightBenchmark(status, force)
 		local entry = diagnostic.BenchmarkInterruptions[reason]
 		table.insert(lines, string.format("interruption=%s episodes=%d seconds=%.6f", reason, entry.Count, entry.Seconds))
 	end
-	table.insert(lines, "level,status,delay,pairs,interval,sample_s,requests,HP_lost,DPS,start_HP,end_HP,attempts,busy_ticks,mean_callback_s,mean_hit_gap_s,send_errors,canceled_hits,brief_s,reason")
+	table.insert(lines, "level,status,delay,pairs,interval,sample_s,requests,HP_lost,DPS,start_HP,end_HP,attempts,busy_ticks,mean_callback_s,mean_hit_gap_s,send_errors,canceled_hits,brief_s,step,round,reason")
 	for _, row in ipairs(diagnostic.BenchmarkRows or {}) do
 		local values = {row.Level, row.Status, row.SwingDelay, row.Pairs, row.Interval, row.Duration,
 			row.Requests, row.Damage, row.Score, row.StartHealth or "unknown", row.EndHealth or "unknown",
 			row.Attempts, row.BusyTicks, row.MeanCallbackDelay or "unknown", row.MeanHitGap or "unknown",
-			row.SendErrors, row.CanceledHits, row.BriefSeconds, row.Reason}
+			row.SendErrors, row.CanceledHits, row.BriefSeconds, row.Step, row.Round, row.Reason}
 		for index, value in ipairs(values) do values[index] = tostring(value):gsub('[\r\n,]', ' ') end
 		table.insert(lines, table.concat(values, ","))
 	end
@@ -11522,6 +11533,13 @@ end
 
 function npcSafety.ResetDirectLightBenchmarkLevel(level)
 	local diagnostic = npcSafety.DirectLight
+	if diagnostic.BenchmarkPlan then
+		local sample = diagnostic.BenchmarkPlan[diagnostic.BenchmarkStep]
+		level = 8 -- Existing zero-delay two-pair swing/hit setting.
+		if diagnostic.Interval ~= sample.Interval then diagnostic.Accumulator = 0 end
+		diagnostic.Interval, diagnostic.BenchmarkInterval = sample.Interval, sample.Interval
+		if diagnostic.IntervalBox then diagnostic.IntervalBox.Text = string.format("%.3f", sample.Interval) end
+	end
 	npcSafety.ApplyDirectLightLevel(level)
 	diagnostic.BenchmarkLevel = level
 	diagnostic.BenchmarkLevelElapsed = 0
@@ -11539,12 +11557,54 @@ function npcSafety.ResetDirectLightBenchmarkLevel(level)
 	diagnostic.PreviousScore = nil
 end
 
+function npcSafety.SelectDirectLightBenchmarkInterval()
+	local diagnostic = npcSafety.DirectLight
+	diagnostic.BenchmarkIntervalSummary = {}
+	local best
+	for _, interval in ipairs({0.1, 0.075, 0.05}) do
+		local scores, rounds = {}, {}
+		for _, row in ipairs(diagnostic.BenchmarkResults) do
+			if row.Interval == interval then
+				table.insert(scores, row.Score)
+				rounds[row.Round] = row.Score
+			end
+		end
+		-- Never recommend a partially tested candidate or duplicate round.
+		if #scores ~= 3 or not rounds[1] or not rounds[2] or not rounds[3] then return nil end
+		table.sort(scores)
+		local result = {Interval = interval, Count = 3, Median = scores[2], Min = scores[1], Max = scores[3], Rounds = rounds}
+		table.insert(diagnostic.BenchmarkIntervalSummary, result)
+		local wins = 0
+		if best then
+			for round = 1, 3 do if rounds[round] > best.Rounds[round] then wins += 1 end end
+		end
+		if not best or (result.Median > best.Median * 1.08 and wins >= 2) then best = result end
+	end
+	return best
+end
+
+function npcSafety.RestoreDirectLightBenchmarkInterval(useWinner)
+	local diagnostic = npcSafety.DirectLight
+	if not diagnostic.BenchmarkPlan then return end
+	diagnostic.Interval = useWinner and diagnostic.BenchmarkBestInterval or diagnostic.BenchmarkOriginalInterval
+	diagnostic.BenchmarkLevelDuration = diagnostic.BenchmarkOriginalDuration
+	diagnostic.Accumulator = 0
+	if diagnostic.IntervalBox then diagnostic.IntervalBox.Text = string.format("%.3f", diagnostic.Interval) end
+end
+
 function npcSafety.FinishDirectLightBenchmark(cancelled, reason)
 	local diagnostic = npcSafety.DirectLight
 	local wasEnabled = diagnostic.BenchmarkWasEnabled
 	if cancelled then npcSafety.RecordDirectLightBenchmarkRow("DISCARDED", reason or "Canceled") end
 	diagnostic.BenchmarkRunning = false
 	diagnostic.BenchmarkCollecting = false
+	if diagnostic.BenchmarkPlan and not cancelled then
+		local best = npcSafety.SelectDirectLightBenchmarkInterval()
+		diagnostic.BenchmarkBestInterval = best and best.Interval or nil
+		diagnostic.BenchmarkBestLevel = best and best.Median > 0 and 8 or nil
+		diagnostic.BenchmarkBestScore = best and best.Median or 0
+	end
+	npcSafety.RestoreDirectLightBenchmarkInterval(not cancelled and diagnostic.BenchmarkBestScore > 0 and diagnostic.BenchmarkBestInterval ~= nil)
 	if cancelled then
 		npcSafety.HoldDirectLightLevel(diagnostic.BenchmarkOriginalLevel or diagnostic.Level, nil)
 		diagnostic.LastBenchmarkSummary = reason or "SPEED TEST CANCELED"
@@ -11562,9 +11622,12 @@ function npcSafety.FinishDirectLightBenchmark(cancelled, reason)
 			best[1],
 			best[2]
 		)
+		if diagnostic.BenchmarkPlan then
+			diagnostic.LastBenchmarkSummary = string.format("SELECTED %.3fs x2: %.1f median dmg/s (3 rounds)", diagnostic.Interval, diagnostic.BenchmarkBestScore)
+		end
 	end
 	if diagnostic.BenchmarkButton then
-		diagnostic.BenchmarkButton.Text = "Speed Test"
+		diagnostic.BenchmarkButton.Text = "Interval Test"
 		diagnostic.BenchmarkButton.BackgroundColor3 = colors.Surface
 		diagnostic.BenchmarkButton.TextColor3 = colors.Muted
 	end
@@ -11577,7 +11640,7 @@ function npcSafety.FinishDirectLightBenchmark(cancelled, reason)
 	return not cancelled, diagnostic.BenchmarkResults
 end
 
-function npcSafety.StartDirectLightBenchmark()
+function npcSafety.StartDirectLightBenchmark(kind)
 	local diagnostic = npcSafety.DirectLight
 	if not diagnostic.Authorized then
 		return false, "diagnostic_unauthorized"
@@ -11592,6 +11655,8 @@ function npcSafety.StartDirectLightBenchmark()
 	end
 	diagnostic.BenchmarkWasEnabled = diagnostic.Enabled
 	diagnostic.BenchmarkOriginalLevel = diagnostic.Level
+	diagnostic.BenchmarkOriginalInterval = diagnostic.Interval
+	diagnostic.BenchmarkOriginalDuration = diagnostic.BenchmarkLevelDuration
 	if not diagnostic.Enabled then
 		local started, err = npcSafety.StartDirectLightDiagnostic()
 		if not started then
@@ -11600,6 +11665,21 @@ function npcSafety.StartDirectLightBenchmark()
 	end
 	diagnostic.BenchmarkResults = {}
 	diagnostic.BenchmarkRows = {}
+	diagnostic.BenchmarkPlan = nil
+	diagnostic.BenchmarkStep = nil
+	diagnostic.BenchmarkBestInterval = nil
+	diagnostic.BenchmarkIntervalSummary = nil
+	if kind == "intervals" then
+		diagnostic.BenchmarkPlan = {}
+		diagnostic.BenchmarkStep = 1
+		diagnostic.BenchmarkLevelDuration = 4
+		local intervals = {0.1, 0.075, 0.05}
+		for round = 1, 3 do
+			for offset = 0, 2 do
+				table.insert(diagnostic.BenchmarkPlan, {Interval = intervals[(round + offset - 1) % 3 + 1], Round = round})
+			end
+		end
+	end
 	diagnostic.BenchmarkTarget = activeNpcTarget
 	diagnostic.BenchmarkTargetName = activeNpcTarget.Name
 	diagnostic.BenchmarkMode = npcSafety.PositionMode
@@ -11713,6 +11793,9 @@ function npcSafety.UpdateDirectLightBenchmark(deltaTime)
 	npcSafety.RecordDirectLightBenchmarkRow("COMPLETE")
 	table.insert(diagnostic.BenchmarkResults, {
 		Level = level,
+		Interval = diagnostic.Interval,
+		Step = diagnostic.BenchmarkStep or 0,
+		Round = diagnostic.BenchmarkPlan and diagnostic.BenchmarkPlan[diagnostic.BenchmarkStep].Round or 0,
 		SwingDelay = setting[1],
 		Pairs = setting[2],
 		Damage = diagnostic.BenchmarkLevelDamage,
@@ -11722,11 +11805,19 @@ function npcSafety.UpdateDirectLightBenchmark(deltaTime)
 		EndHealth = diagnostic.CurrentHealth,
 		Requests = diagnostic.RequestsSent - diagnostic.BenchmarkLevelStartRequests,
 	})
-	if not diagnostic.BenchmarkBestLevel or score > diagnostic.BenchmarkBestScore then
+	if not diagnostic.BenchmarkPlan and (not diagnostic.BenchmarkBestLevel or score > diagnostic.BenchmarkBestScore) then
 		diagnostic.BenchmarkBestLevel = level
 		diagnostic.BenchmarkBestScore = score
 	end
-	if level >= #diagnostic.Levels then
+	if diagnostic.BenchmarkPlan then
+		if diagnostic.BenchmarkStep >= #diagnostic.BenchmarkPlan then
+			npcSafety.FinishDirectLightBenchmark(false)
+		else
+			diagnostic.BenchmarkStep += 1
+			npcSafety.ResetDirectLightBenchmarkLevel(8)
+			npcSafety.SaveDirectLightBenchmark("RUNNING", true)
+		end
+	elseif level >= #diagnostic.Levels then
 		npcSafety.FinishDirectLightBenchmark(false)
 	else
 		npcSafety.ResetDirectLightBenchmarkLevel(level + 1)
@@ -16901,7 +16992,7 @@ connect(npcSafety.DirectLight.BenchmarkButton.Activated, function()
 	if npcSafety.DirectLight.BenchmarkRunning then
 		npcSafety.FinishDirectLightBenchmark(true)
 	else
-		npcSafety.StartDirectLightBenchmark()
+		npcSafety.StartDirectLightBenchmark("intervals")
 	end
 end)
 connect(npcSafety.SaibamanSpawner.SpawnButton.Activated, npcSafety.SpawnSaibaman)
@@ -20906,6 +20997,9 @@ controller.GetDirectLightSpeedTestReport = function()
 		npcSafety.DirectLight.BenchmarkReportSaved
 end
 controller.StartDirectLightSpeedTest = npcSafety.StartDirectLightBenchmark
+controller.StartDirectLightIntervalTest = function()
+	return npcSafety.StartDirectLightBenchmark("intervals")
+end
 controller.StopDirectLightSpeedTest = function()
 	if not npcSafety.DirectLight.BenchmarkRunning then return false, "not_running" end
 	return npcSafety.FinishDirectLightBenchmark(true)

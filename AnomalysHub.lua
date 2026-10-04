@@ -1092,6 +1092,9 @@ local function fireMenuRerollAction(actionValue)
 	return pcall(remote.FireServer, remote, fireArg, payload)
 end
 
+local SPIN_ANIM_WAIT = 1.25
+local readMenuState
+
 local function serverAcceptedSpin(beforeRaceSpins, afterRaceSpins, beforeRace, afterRace)
 	if afterRaceSpins < beforeRaceSpins then
 		return true, "spin count dropped"
@@ -1224,9 +1227,7 @@ local function menuTraitSpinOnce()
 	return fireMenuRerollAction(resolveMenuServerActions().RerollTrait)
 end
 
-local SPIN_ANIM_WAIT = 1.25
-
-local function readMenuState()
+readMenuState = function()
 	local getRace, _ = readMenuRaceSelection()
 	local dataRace, dataTrait = readCharacterDataRace(PROBE_TIMEOUT)
 	local race = dataRace or getRace
@@ -2323,7 +2324,7 @@ local configStore = {
 		Entries = {},
 		Buttons = {},
 		Tracked = {},
-		AlertedBalls = setmetatable({}, {__mode = "k"}),
+		AlertedBalls = {},
 		WorldConnections = {},
 		UpdateElapsed = 0,
 	},
@@ -2584,7 +2585,10 @@ function configStore.Write(name, data, overwrite)
 		return false, "Config serialization failed."
 	end
 	local ok = pcall(writefile, path, body)
-	return ok, ok and nil or "Could not write the config file."
+	if ok then
+		return true
+	end
+	return false, "Could not write the config file."
 end
 
 function configStore.Delete(name)
@@ -2689,8 +2693,8 @@ local kiControlSweepCooldownUntil = 0
 local kiControlDesignatedTarget = nil
 local kiControlAimSerial = 0
 local kiControlCameraState = nil
-local handledTrainingTargets = setmetatable({}, {__mode = "k"})
-local boundTrainingButtons = setmetatable({}, {__mode = "k"})
+local handledTrainingTargets = {}
+local boundTrainingButtons = {}
 local selectedNpcType = nil
 local npcTargetingEnabled = false
 local activeNpcTarget = nil
@@ -2760,9 +2764,26 @@ local npcSafety = {
 		HealthChangeEvents = 0,
 		LastHealth = nil,
 		LastStopReason = "Ready",
+		BenchmarkRunning = false,
+		BenchmarkWasEnabled = false,
+		BenchmarkOriginalLevel = 4,
+		BenchmarkLevelDuration = 3,
+		BenchmarkWarmupDuration = 0.5,
+		BenchmarkWarmupRemaining = 0,
+		BenchmarkCollecting = false,
+		BenchmarkLevel = 0,
+		BenchmarkLevelElapsed = 0,
+		BenchmarkLevelDamage = 0,
+		BenchmarkLevelStartRequests = 0,
+		BenchmarkResults = {},
+		BenchmarkBestLevel = nil,
+		BenchmarkBestScore = 0,
+		LastBenchmarkSummary = nil,
 		Card = nil,
 		ToggleButton = nil,
 		IntervalBox = nil,
+		RecordButton = nil,
+		BenchmarkButton = nil,
 		TelemetryLabel = nil,
 	},
 	NormalAttackAttempts = 0,
@@ -2847,7 +2868,7 @@ local npcSafety = {
 	LootScanCooldownUntil = 0,
 	ChestRetryDelay = 30,
 	ChestApproachOffset = 1.5,
-	IgnoredChestPrompts = setmetatable({}, {__mode = "k"}),
+	IgnoredChestPrompts = {},
 	NpcWatchlist = {"Super 17"},
 	WatchlistPresenceCounts = {},
 	WatchlistScanElapsed = 0,
@@ -2930,7 +2951,7 @@ local npcLinearVelocity = nil
 local npcAlignOrientation = nil
 local npcPreviousAutoRotate = nil
 local npcPreviousPlatformStand = nil
-local npcCollisionStates = setmetatable({}, {__mode = "k"})
+local npcCollisionStates = {}
 local npcCombatController = nil
 local npcCameraShakeHooks = {}
 local npcCameraShakeNoop = function()
@@ -4970,7 +4991,7 @@ function qolState.SetNoclipEnabled(enabled)
 				end)
 			end
 		end
-		npcCollisionStates = setmetatable({}, {__mode = "k"})
+		npcCollisionStates = {}
 	end
 	return true
 end
@@ -6033,7 +6054,6 @@ configStore.Session = {
 	Counters = {Kills = 0, Chests = 0, Hops = 0, Deaths = 0, ZeniEarned = 0},
 	StartLevel = nil,
 	CurrentLevel = nil,
-	KilledModels = setmetatable({}, {__mode = "k"}),
 	ZeniValue = nil,
 	LastZeni = nil,
 	UpdateElapsed = 0,
@@ -6195,7 +6215,6 @@ function configStore.Session.Reset()
 		session.Counters[key] = 0
 	end
 	session.StartLevel = session.CurrentLevel
-	session.KilledModels = setmetatable({}, {__mode = "k"})
 	session.Save()
 	session.Render()
 end
@@ -6212,16 +6231,22 @@ function configStore.Session.RecordKill(model)
 end
 
 -- Also counts NPCs that die outright (never knocked) while being farmed.
+function configStore.Session.StopWatchingTarget()
+	local session = configStore.Session
+	if session.WatchedConnection then
+		session.WatchedConnection:Disconnect()
+		session.WatchedConnection = nil
+	end
+	session.WatchedTarget = nil
+end
+
 function configStore.Session.WatchTarget()
 	local session = configStore.Session
 	local target = npcTargetingEnabled and activeNpcTarget or nil
 	if session.WatchedTarget == target then
 		return
 	end
-	if session.WatchedConnection then
-		session.WatchedConnection:Disconnect()
-		session.WatchedConnection = nil
-	end
+	session.StopWatchingTarget()
 	session.WatchedTarget = target
 	local humanoid = target and target:FindFirstChildOfClass("Humanoid")
 	if humanoid then
@@ -6650,6 +6675,9 @@ configStore.AutoClash.MashButton = configStore.AutoClash.MakeButton("Mash", "Mas
 	UDim2.new(1, -12, 0, 72), UDim2.fromOffset(160, 28))
 configStore.AutoClash.RecordButton = configStore.AutoClash.MakeButton("Record", "Record clash UI: OFF",
 	UDim2.new(1, -180, 0, 72), UDim2.fromOffset(160, 28))
+configStore.BodyRing = {Enabled = false, Presses = 0, KeyHeld = false}
+configStore.BodyRing.Button = configStore.AutoClash.MakeButton("BodyRing", "Auto Body Ring: OFF",
+	UDim2.new(1, -12, 0, 42), UDim2.fromOffset(160, 26))
 configStore.AutoClash.StatusLabel = create("TextLabel", {
 	Name = "Status",
 	Position = UDim2.fromOffset(14, 110),
@@ -7061,7 +7089,7 @@ create("UIStroke", {Color = colors.AccentSoft, Thickness = 1}, npcSafety.DirectL
 npcSafety.DirectLight.RecordButton = create("TextButton", {
 	Name = "RecordM1",
 	Position = UDim2.fromOffset(434, 32),
-	Size = UDim2.new(1, -448, 0, 32),
+	Size = UDim2.new(0.5, -224, 0, 32),
 	AutoButtonColor = false,
 	BackgroundColor3 = colors.Surface,
 	BorderSizePixel = 0,
@@ -7072,6 +7100,21 @@ npcSafety.DirectLight.RecordButton = create("TextButton", {
 }, npcSafety.DirectLight.Card)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, npcSafety.DirectLight.RecordButton)
 create("UIStroke", {Color = colors.AccentSoft, Thickness = 1}, npcSafety.DirectLight.RecordButton)
+
+npcSafety.DirectLight.BenchmarkButton = create("TextButton", {
+	Name = "SpeedTest",
+	Position = UDim2.new(0.5, 218, 0, 32),
+	Size = UDim2.new(0.5, -232, 0, 32),
+	AutoButtonColor = false,
+	BackgroundColor3 = colors.Surface,
+	BorderSizePixel = 0,
+	Font = Enum.Font.GothamSemibold,
+	Text = "Speed Test",
+	TextColor3 = colors.Muted,
+	TextSize = 9,
+}, npcSafety.DirectLight.Card)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, npcSafety.DirectLight.BenchmarkButton)
+create("UIStroke", {Color = colors.AccentSoft, Thickness = 1}, npcSafety.DirectLight.BenchmarkButton)
 
 npcSafety.DirectLight.TelemetryLabel = create("TextLabel", {
 	Name = "DirectLightTelemetry",
@@ -9099,6 +9142,7 @@ end
 function configStore.DragonBallESP.StartTracking()
 	configStore.DragonBallESP.DisconnectWorld()
 	table.clear(configStore.DragonBallESP.Tracked)
+	table.clear(configStore.DragonBallESP.AlertedBalls)
 	configStore.DragonBallESP.Primed = false
 	for _, descendant in ipairs(workspace:GetDescendants()) do
 		configStore.DragonBallESP.Consider(descendant)
@@ -9128,6 +9172,8 @@ function configStore.DragonBallESP.CollectBalls()
 			table.insert(balls, {Instance = instance, Holder = holder})
 		else
 			configStore.DragonBallESP.Tracked[instance] = nil
+			configStore.DragonBallESP.AlertedBalls[instance] = nil
+			configStore.DragonBallESP.RemoveEntry(instance)
 		end
 	end
 	if configStore.DragonBallESP.Settings.Holders then
@@ -9173,6 +9219,7 @@ function configStore.DragonBallESP.SetEnabled(enabled)
 	else
 		configStore.DragonBallESP.DisconnectWorld()
 		table.clear(configStore.DragonBallESP.Tracked)
+		table.clear(configStore.DragonBallESP.AlertedBalls)
 		configStore.DragonBallESP.Clear()
 	end
 	configStore.DragonBallESP.RenderButtons()
@@ -9453,7 +9500,7 @@ local function restoreNpcMovementState()
 			end)
 		end
 	end
-	npcCollisionStates = setmetatable({}, {__mode = "k"})
+	npcCollisionStates = {}
 end
 
 local function getNpcCombatController()
@@ -10847,8 +10894,42 @@ function npcSafety.UpdateDirectLightTelemetry()
 	local telemetry = npcSafety.GetDirectLightDiagnosticTelemetry()
 	local startHealth = telemetry.StartHealth and string.format("%.1f", telemetry.StartHealth) or "--"
 	local currentHealth = telemetry.CurrentHealth and string.format("%.1f", telemetry.CurrentHealth) or "--"
+	if diagnostic.BenchmarkRunning then
+		local level = math.max(diagnostic.BenchmarkLevel, 1)
+		local setting = diagnostic.Levels and diagnostic.Levels[level]
+		local settingText = setting and string.format("%.2fs x%d", setting[1], setting[2]) or "--"
+		local stage = diagnostic.BenchmarkCollecting
+			and string.format("%.1f/%.1fs active", diagnostic.BenchmarkLevelElapsed, diagnostic.BenchmarkLevelDuration)
+			or (telemetry.Target and string.format("warmup %.1fs", diagnostic.BenchmarkWarmupRemaining) or "waiting for NPC")
+		local score = diagnostic.BenchmarkLevelElapsed > 0
+			and diagnostic.BenchmarkLevelDamage / diagnostic.BenchmarkLevelElapsed
+			or 0
+		diagnostic.TelemetryLabel.Text = string.format(
+			"TEST %d/%d | %s | %s\nHP %s | level damage %.1f | %.1f dmg/s\nbest %s | press Speed Test to cancel",
+			level,
+			#diagnostic.Levels,
+			stage,
+			settingText,
+			currentHealth,
+			diagnostic.BenchmarkLevelDamage,
+			score,
+			diagnostic.BenchmarkBestLevel
+				and string.format("L%d %.1f dmg/s", diagnostic.BenchmarkBestLevel, diagnostic.BenchmarkBestScore)
+				or "--"
+		)
+		diagnostic.TelemetryLabel.TextColor3 = colors.Warning
+		return
+	end
+	local settingSummary = diagnostic.LastBenchmarkSummary
+		or string.format(
+			"swing delay %.2fs | %d per tick | landing %s | %.0f dmg/s",
+			diagnostic.SwingDelay,
+			diagnostic.Pairs,
+			diagnostic.LandRate and string.format("%d%%", math.floor(diagnostic.LandRate * 100 + 0.5)) or "--",
+			diagnostic.Score or 0
+		)
 	diagnostic.TelemetryLabel.Text = string.format(
-		"%s | %d req (%.1f/s) | %.2fs interval | %.1fs\nHP %s -> %s | loss %.1f | %d damage events (%.1f/s)\nswing delay %.2fs | %d per tick | landing %s | %.0f dmg/s",
+		"%s | %d req (%.1f/s) | %.2fs interval | %.1fs\nHP %s -> %s | loss %.1f | %d damage events (%.1f/s)\n%s",
 		telemetry.Enabled and (telemetry.Target and "RUNNING" or "WAITING") or diagnostic.LastStopReason,
 		telemetry.RequestsSent,
 		telemetry.RequestsPerSecond,
@@ -10859,10 +10940,7 @@ function npcSafety.UpdateDirectLightTelemetry()
 		telemetry.ObservedHealthLoss,
 		telemetry.HealthChangeEvents,
 		telemetry.DamageEventsPerSecond,
-		diagnostic.SwingDelay,
-		diagnostic.Pairs,
-		diagnostic.LandRate and string.format("%d%%", math.floor(diagnostic.LandRate * 100 + 0.5)) or "--",
-		diagnostic.Score or 0
+		settingSummary
 	)
 	diagnostic.TelemetryLabel.TextColor3 = telemetry.Enabled and colors.Warning or colors.Muted
 end
@@ -10885,6 +10963,17 @@ end
 
 function npcSafety.StopDirectLightDiagnostic(reason)
 	local diagnostic = npcSafety.DirectLight
+	if diagnostic.BenchmarkRunning then
+		diagnostic.BenchmarkRunning = false
+		diagnostic.BenchmarkCollecting = false
+		diagnostic.LastBenchmarkSummary = "SPEED TEST CANCELED"
+		npcSafety.ApplyDirectLightLevel(diagnostic.BenchmarkOriginalLevel or diagnostic.Level)
+		if diagnostic.BenchmarkButton then
+			diagnostic.BenchmarkButton.Text = "Speed Test"
+			diagnostic.BenchmarkButton.BackgroundColor3 = colors.Surface
+			diagnostic.BenchmarkButton.TextColor3 = colors.Muted
+		end
+	end
 	if diagnostic.StartedAt > 0 then
 		diagnostic.Elapsed = math.max(os.clock() - diagnostic.StartedAt, 0)
 	end
@@ -11030,6 +11119,9 @@ end
 
 function npcSafety.AdaptDirectLightDelay()
 	local diagnostic = npcSafety.DirectLight
+	if diagnostic.BenchmarkRunning then
+		return
+	end
 	local now = os.clock()
 	if diagnostic.WindowStartedAt == 0 then
 		diagnostic.WindowStartedAt = now
@@ -11096,14 +11188,143 @@ function npcSafety.SetDirectLightTarget(target)
 		local previousHealth = diagnostic.LastHealth
 		diagnostic.CurrentHealth = health
 		if previousHealth and health < previousHealth - 0.01 then
-			diagnostic.ObservedHealthLoss += previousHealth - health
+			local loss = previousHealth - health
+			diagnostic.ObservedHealthLoss += loss
 			diagnostic.HealthChangeEvents += 1
 			diagnostic.WindowDamage += 1
-			diagnostic.WindowLoss += previousHealth - health
+			diagnostic.WindowLoss += loss
+			if diagnostic.BenchmarkRunning and diagnostic.BenchmarkCollecting then
+				diagnostic.BenchmarkLevelDamage += loss
+			end
 		end
 		diagnostic.LastHealth = health
 	end)
 	return true
+end
+
+function npcSafety.ResetDirectLightBenchmarkLevel(level)
+	local diagnostic = npcSafety.DirectLight
+	npcSafety.ApplyDirectLightLevel(level)
+	diagnostic.BenchmarkLevel = level
+	diagnostic.BenchmarkLevelElapsed = 0
+	diagnostic.BenchmarkLevelDamage = 0
+	diagnostic.BenchmarkLevelStartRequests = diagnostic.RequestsSent
+	diagnostic.BenchmarkWarmupRemaining = diagnostic.BenchmarkWarmupDuration
+	diagnostic.BenchmarkCollecting = false
+	diagnostic.WindowHits = 0
+	diagnostic.WindowDamage = 0
+	diagnostic.WindowLoss = 0
+	diagnostic.WindowStartedAt = 0
+	diagnostic.PreviousScore = nil
+end
+
+function npcSafety.FinishDirectLightBenchmark(cancelled, reason)
+	local diagnostic = npcSafety.DirectLight
+	local wasEnabled = diagnostic.BenchmarkWasEnabled
+	diagnostic.BenchmarkRunning = false
+	diagnostic.BenchmarkCollecting = false
+	if cancelled then
+		npcSafety.ApplyDirectLightLevel(diagnostic.BenchmarkOriginalLevel or diagnostic.Level)
+		diagnostic.LastBenchmarkSummary = reason or "SPEED TEST CANCELED"
+	elseif not diagnostic.BenchmarkBestLevel or diagnostic.BenchmarkBestScore <= 0 then
+		npcSafety.ApplyDirectLightLevel(diagnostic.BenchmarkOriginalLevel or diagnostic.Level)
+		diagnostic.LastBenchmarkSummary = "TEST INCONCLUSIVE: no damage observed"
+	else
+		local bestLevel = diagnostic.BenchmarkBestLevel
+		npcSafety.ApplyDirectLightLevel(bestLevel)
+		local best = diagnostic.Levels[bestLevel]
+		diagnostic.LastBenchmarkSummary = string.format(
+			"BEST L%d: %.1f dmg/s (%.2fs x%d)",
+			bestLevel,
+			diagnostic.BenchmarkBestScore,
+			best[1],
+			best[2]
+		)
+	end
+	if diagnostic.BenchmarkButton then
+		diagnostic.BenchmarkButton.Text = "Speed Test"
+		diagnostic.BenchmarkButton.BackgroundColor3 = colors.Surface
+		diagnostic.BenchmarkButton.TextColor3 = colors.Muted
+	end
+	if not wasEnabled then
+		npcSafety.StopDirectLightDiagnostic(diagnostic.LastBenchmarkSummary)
+	end
+	diagnostic.LastStopReason = diagnostic.LastBenchmarkSummary
+	npcSafety.UpdateDirectLightTelemetry()
+	return not cancelled, diagnostic.BenchmarkResults
+end
+
+function npcSafety.StartDirectLightBenchmark()
+	local diagnostic = npcSafety.DirectLight
+	if not diagnostic.Authorized then
+		return false, "diagnostic_unauthorized"
+	end
+	if diagnostic.BenchmarkRunning then
+		return false, "already_running"
+	end
+	diagnostic.BenchmarkWasEnabled = diagnostic.Enabled
+	diagnostic.BenchmarkOriginalLevel = diagnostic.Level
+	if not diagnostic.Enabled then
+		local started, err = npcSafety.StartDirectLightDiagnostic()
+		if not started then
+			return false, err
+		end
+	end
+	diagnostic.BenchmarkResults = {}
+	diagnostic.BenchmarkBestLevel = nil
+	diagnostic.BenchmarkBestScore = 0
+	diagnostic.LastBenchmarkSummary = nil
+	diagnostic.BenchmarkRunning = true
+	if diagnostic.BenchmarkButton then
+		diagnostic.BenchmarkButton.Text = "Cancel Test"
+		diagnostic.BenchmarkButton.BackgroundColor3 = colors.Warning
+		diagnostic.BenchmarkButton.TextColor3 = colors.Text
+	end
+	npcSafety.ResetDirectLightBenchmarkLevel(1)
+	npcSafety.UpdateDirectLightTelemetry()
+	return true
+end
+
+function npcSafety.UpdateDirectLightBenchmark(deltaTime)
+	local diagnostic = npcSafety.DirectLight
+	if not diagnostic.BenchmarkRunning or not diagnostic.Target then
+		return
+	end
+	if not diagnostic.BenchmarkCollecting then
+		diagnostic.BenchmarkWarmupRemaining = math.max(diagnostic.BenchmarkWarmupRemaining - deltaTime, 0)
+		if diagnostic.BenchmarkWarmupRemaining > 0 then
+			return
+		end
+		diagnostic.BenchmarkCollecting = true
+		diagnostic.BenchmarkLevelDamage = 0
+		diagnostic.BenchmarkLevelStartRequests = diagnostic.RequestsSent
+	end
+	diagnostic.BenchmarkLevelElapsed += deltaTime
+	if diagnostic.BenchmarkLevelElapsed < diagnostic.BenchmarkLevelDuration then
+		return
+	end
+	local duration = diagnostic.BenchmarkLevelElapsed
+	local score = duration > 0 and diagnostic.BenchmarkLevelDamage / duration or 0
+	local level = diagnostic.BenchmarkLevel
+	local setting = diagnostic.Levels[level]
+	table.insert(diagnostic.BenchmarkResults, {
+		Level = level,
+		SwingDelay = setting[1],
+		Pairs = setting[2],
+		Damage = diagnostic.BenchmarkLevelDamage,
+		Duration = duration,
+		Score = score,
+		Requests = diagnostic.RequestsSent - diagnostic.BenchmarkLevelStartRequests,
+	})
+	if not diagnostic.BenchmarkBestLevel or score > diagnostic.BenchmarkBestScore then
+		diagnostic.BenchmarkBestLevel = level
+		diagnostic.BenchmarkBestScore = score
+	end
+	if level >= #diagnostic.Levels then
+		npcSafety.FinishDirectLightBenchmark(false)
+	else
+		npcSafety.ResetDirectLightBenchmarkLevel(level + 1)
+	end
 end
 
 function npcSafety.StartDirectLightDiagnostic()
@@ -11154,6 +11375,7 @@ function npcSafety.StartDirectLightDiagnostic()
 				return
 			end
 		end
+		npcSafety.UpdateDirectLightBenchmark(deltaTime)
 		npcSafety.UpdateDirectLightTelemetry()
 	end)
 
@@ -11228,8 +11450,32 @@ function npcSafety.RemoteSpy.Install()
 		end
 		return original(self, ...)
 	end))
+	spy.HookFunction = hook
+	spy.Original = original
 	spy.Installed = true
 	return true
+end
+
+function npcSafety.RemoteSpy.Uninstall()
+	local spy = npcSafety.RemoteSpy
+	spy.Active = false
+	spy.Dirty = false
+	if not spy.Installed then
+		return true
+	end
+	local restored = false
+	local restore = environment.restorehookmetamethod
+		or (type(restorehookmetamethod) == "function" and restorehookmetamethod)
+	if type(restore) == "function" and spy.Original then
+		restored = pcall(restore, game, "__namecall", spy.Original)
+	end
+	if not restored and type(spy.HookFunction) == "function" and spy.Original then
+		restored = pcall(spy.HookFunction, game, "__namecall", spy.Original)
+	end
+	spy.Installed = false
+	spy.HookFunction = nil
+	spy.Original = nil
+	return restored
 end
 
 function npcSafety.RemoteSpy.Start()
@@ -11337,7 +11583,7 @@ function npcSafety.ClickGuiButton(button)
 	return ok
 end
 
-npcSafety.TrackedPrompts = setmetatable({}, {__mode = "k"})
+npcSafety.TrackedPrompts = {}
 for _, instance in ipairs(workspace:GetDescendants()) do
 	if instance:IsA("ProximityPrompt") then
 		npcSafety.TrackedPrompts[instance] = true
@@ -11350,6 +11596,7 @@ connect(workspace.DescendantAdded, function(instance)
 end)
 connect(workspace.DescendantRemoving, function(instance)
 	npcSafety.TrackedPrompts[instance] = nil
+	npcSafety.IgnoredChestPrompts[instance] = nil
 end)
 
 function npcSafety.FindNearbyChestPrompt(position, radius)
@@ -11419,7 +11666,7 @@ function npcSafety.GetWatchlistNpcCountsInTravelNpcs()
 	return counts
 end
 
-npcSafety.Super17Candidates = setmetatable({}, {__mode = "k"})
+npcSafety.Super17Candidates = {}
 function npcSafety.TrackSuper17Candidate(instance)
 	if instance:IsA("Model") and npcSafety.ModelMatchesSuper17Watch(instance) then
 		npcSafety.Super17Candidates[instance] = true
@@ -12429,7 +12676,10 @@ function qolState.ServerNavigation.QueueSelfForTeleport()
 	if queueFunction and type(loaderUrl) == "string" and string.match(loaderUrl, "^https://") then
 		local ok = pcall(queueFunction, "loadstring(game:HttpGet(" .. string.format("%q", loaderUrl) .. "))()")
 		if ok then qolState.ServerNavigation.TeleportQueueArmed = true end
-		return ok, ok and nil or "The executor rejected the teleport queue request."
+		if ok then
+			return true
+		end
+		return false, "The executor rejected the teleport queue request."
 	end
 	local source = environment.__GohanHubSource
 	if not queueFunction or type(source) ~= "string" or #source < 1000 then
@@ -12440,7 +12690,10 @@ function qolState.ServerNavigation.QueueSelfForTeleport()
 		.. ";e.__GohanHubSource=s;local f,er=loadstring(s);if f then f() else warn('[GohanHub Queue] '..tostring(er)) end"
 	local ok = pcall(queueFunction, queuedSource)
 	if ok then qolState.ServerNavigation.TeleportQueueArmed = true end
-	return ok, ok and nil or "The executor rejected the teleport queue request."
+	if ok then
+		return true
+	end
+	return false, "The executor rejected the teleport queue request."
 end
 
 function qolState.ServerNavigation.BlockPlayerProfile(player)
@@ -15038,6 +15291,13 @@ end)
 connect(npcSafety.DirectLight.IntervalBox.FocusLost, function()
 	npcSafety.SetDirectLightInterval(npcSafety.DirectLight.IntervalBox.Text)
 end)
+connect(npcSafety.DirectLight.BenchmarkButton.Activated, function()
+	if npcSafety.DirectLight.BenchmarkRunning then
+		npcSafety.FinishDirectLightBenchmark(true)
+	else
+		npcSafety.StartDirectLightBenchmark()
+	end
+end)
 connect(npcSafety.SaibamanSpawner.SpawnButton.Activated, npcSafety.SpawnSaibaman)
 connect(npcSafety.SaibamanSpawner.LoopButton.Activated, function()
 	npcSafety.SetSaibamanSpawnLoop(not npcSafety.SaibamanSpawner.LoopEnabled)
@@ -15870,7 +16130,7 @@ local function stopTrainingSession(statusText)
 	kiControlLastShotAt = 0
 	kiControlSweepCooldownUntil = 0
 	kiControlDesignatedTarget = nil
-	handledTrainingTargets = setmetatable({}, {__mode = "k"})
+	handledTrainingTargets = {}
 	local selected = trainingDefinitionByButton[selectedTrainingButton]
 	setTrainingStatus(statusText or ("Selected: " .. selected.Label .. " - press M and choose " .. selected.Button), colors.Success)
 end
@@ -15898,7 +16158,7 @@ local function startTrainingSession(buttonName)
 	kiControlLastShotAt = 0
 	kiControlSweepCooldownUntil = 0
 	kiControlDesignatedTarget = nil
-	handledTrainingTargets = setmetatable({}, {__mode = "k"})
+	handledTrainingTargets = {}
 	setTrainingStatus(definition.Label .. " - waiting for minigame...", colors.Success)
 end
 
@@ -16199,7 +16459,6 @@ local function bindTrainingButton(object)
 		return
 	end
 
-	boundTrainingButtons[object] = true
 	local function onSelected()
 		if trainingDefinitionByButton[object.Name] then
 			startTrainingSession(object.Name)
@@ -16207,8 +16466,10 @@ local function bindTrainingButton(object)
 			stopTrainingSession("Ready - selected training is not automated")
 		end
 	end
-	connect(object.MouseButton1Down, onSelected)
-	connect(object.Activated, onSelected)
+	boundTrainingButtons[object] = {
+		connect(object.MouseButton1Down, onSelected),
+		connect(object.Activated, onSelected),
+	}
 end
 
 for _, descendant in ipairs(playerGui:GetDescendants()) do
@@ -16216,6 +16477,16 @@ for _, descendant in ipairs(playerGui:GetDescendants()) do
 end
 
 connect(playerGui.DescendantAdded, bindTrainingButton)
+connect(playerGui.DescendantRemoving, function(object)
+	local buttonConnections = boundTrainingButtons[object]
+	if not buttonConnections then
+		return
+	end
+	for _, connection in ipairs(buttonConnections) do
+		connection:Disconnect()
+	end
+	boundTrainingButtons[object] = nil
+end)
 
 connect(statDropdownButton.Activated, function()
 	if not configStore.FeatureAccess.AutoTraining then
@@ -16647,6 +16918,15 @@ function configStore.AutoClash.Update()
 	if not clash.Enabled or unloaded then
 		return
 	end
+	-- The ring requires angular timing; generic clash retries must not press it.
+	local contest = playerGui:FindFirstChild("MindContest")
+	local contestRoot = contest and contest:FindFirstChild("Root")
+	if contestRoot and contestRoot:IsA("GuiObject") and isGuiVisible(contestRoot) then
+		if not configStore.BodyRing.Enabled then
+			clash.SetStatus("BODY RING // ENABLE AUTO BODY RING TO TIME SPACE", colors.Muted)
+		end
+		return
+	end
 	if activeTrainingButton then
 		clash.SetStatus("CLASH // PAUSED WHILE AUTO TRAINING RUNS", colors.Muted)
 		return
@@ -16720,6 +17000,126 @@ function configStore.AutoClash.Update()
 	end
 end
 
+-- Ring coordinates come directly from the recorded MindContest GUI. The arc
+-- wraps around zero, so use its largest empty gap to find the occupied interval.
+function configStore.BodyRing.AngleDelta(angle, origin)
+	return (angle - origin + 180) % 360 - 180
+end
+
+function configStore.BodyRing.ArcWindow(angles)
+	if #angles < 2 then return nil end
+	table.sort(angles)
+	local largest, start = -1, 0
+	for index, angle in ipairs(angles) do
+		local nextAngle = angles[index + 1] or angles[1] + 360
+		if nextAngle - angle > largest then
+			largest, start = nextAngle - angle, nextAngle % 360
+		end
+	end
+	local width = 360 - largest
+	if width < 4 or width >= 180 then return nil end
+	return (start + width / 2) % 360, width
+end
+
+function configStore.BodyRing.Release()
+	local body = configStore.BodyRing
+	if body.KeyHeld then
+		pcall(VirtualInputManager.SendKeyEvent, VirtualInputManager, false, Enum.KeyCode.Space, false, game)
+		body.KeyHeld = false
+	end
+end
+
+function configStore.BodyRing.SetEnabled(enabled)
+	local body = configStore.BodyRing
+	body.Release()
+	body.Enabled = enabled == true
+	body.State = nil
+	body.Button.Text = body.Enabled and "Auto Body Ring: ON" or "Auto Body Ring: OFF"
+	body.Button.BackgroundColor3 = body.Enabled and colors.Accent or colors.Surface
+	body.Button.TextColor3 = body.Enabled and colors.Background or colors.Muted
+end
+
+function configStore.BodyRing.Update()
+	local body = configStore.BodyRing
+	if not body.Enabled or unloaded then return end
+	local now = os.clock()
+	if body.KeyHeld and now >= body.ReleaseAt then body.Release() end
+	local contest = playerGui:FindFirstChild("MindContest")
+	local root = contest and contest:FindFirstChild("Root")
+	local card = root and root:FindFirstChild("Card")
+	local ring = card and card:FindFirstChild("Ring")
+	local spin = ring and ring:FindFirstChild("Spin")
+	local arc = ring and ring:FindFirstChild("Arc")
+	local note = card and card:FindFirstChild("Note")
+	if not card or not card:IsA("GuiObject") or not isGuiVisible(card) then
+		body.State = nil
+		body.Release()
+		return
+	end
+	local status = note and note:IsA("TextLabel") and string.upper(note.Text) or ""
+	if not spin or not spin:IsA("GuiObject") or not isGuiVisible(spin) or not arc
+		or string.find(status, "GET READY", 1, true) or string.find(status, "WON", 1, true)
+		or string.find(status, "LOST", 1, true) then
+		body.State = nil
+		body.Release()
+		configStore.AutoClash.SetStatus("BODY RING // " .. (status ~= "" and status or "WAITING FOR NEEDLE"), colors.Muted)
+		return
+	end
+	if activeTrainingButton or UserInputService:GetFocusedTextBox() then
+		body.State = nil
+		body.Release()
+		configStore.AutoClash.SetStatus("BODY RING // PAUSED FOR TRAINING OR TEXT INPUT", colors.Muted)
+		return
+	end
+	local angles = {}
+	for _, segment in ipairs(arc:GetChildren()) do
+		if segment:IsA("GuiObject") and segment.Visible then
+			table.insert(angles, segment.Rotation % 360)
+		end
+	end
+	local center, width = body.ArcWindow(angles)
+	if not center then
+		configStore.AutoClash.SetStatus("BODY RING // WAITING FOR TARGET ARC", colors.Muted)
+		return
+	end
+	local state = body.State
+	if not state or state.Spin ~= spin or math.abs(body.AngleDelta(center, state.Center)) > 0.5
+		or math.abs(width - state.Width) > 0.5 then
+		state = {Spin = spin, Center = center, Width = width, ReadyAt = now + 0.12 + math.random() * 0.06}
+		body.State = state
+	end
+	local angle = spin.Rotation % 360
+	local elapsed = state.SampleAt and now - state.SampleAt or 0
+	local speed = elapsed > 0 and elapsed <= 0.12 and body.AngleDelta(angle, state.Angle) / elapsed or nil
+	state.Angle, state.SampleAt = angle, now
+	-- Aim near the middle, with both current and next-frame angles inside the
+	-- visible arc. Never queue a delayed press that could outlive the hit window.
+	local predicted = angle + (speed or 0) * math.min(elapsed * 0.5, 0.016)
+	local inside = math.abs(body.AngleDelta(angle, center)) <= width * 0.35
+		and math.abs(body.AngleDelta(predicted, center)) <= math.min(width * 0.20, 8)
+	if not state.Pressed and not body.KeyHeld and now >= state.ReadyAt and speed
+		and math.abs(speed) >= 1 and math.abs(speed) <= 1440 and inside then
+		local ok = pcall(VirtualInputManager.SendKeyEvent, VirtualInputManager, true, Enum.KeyCode.Space, false, game)
+		if ok then
+			state.Pressed = true
+			body.Presses += 1
+			body.KeyHeld = true
+			body.ReleaseAt = now + 0.045
+		else
+			body.SetEnabled(false)
+			configStore.AutoClash.SetStatus("BODY RING // KEYBOARD INPUT UNAVAILABLE", colors.DangerHover)
+			return
+		end
+	end
+	configStore.AutoClash.SetStatus(string.format("BODY RING // %s // %d PRESSES",
+		state.Pressed and "WAITING FOR NEXT ROUND" or "TIMING SPACE", body.Presses), colors.Success)
+end
+
+connect(configStore.BodyRing.Button.Activated, function()
+	configStore.BodyRing.SetEnabled(not configStore.BodyRing.Enabled)
+end)
+connect(RunService.RenderStepped, configStore.BodyRing.Update)
+
 function configStore.AutoClash.CountCandidates()
 	local count = 0
 	for _ in pairs(configStore.AutoClash.Candidates) do
@@ -16747,8 +17147,13 @@ function configStore.AutoClash.FlushLog()
 	if not clash.LogDirty or type(writefile) ~= "function" then
 		return
 	end
-	clash.LogDirty = false
-	pcall(writefile, clash.LogFile, table.concat(clash.LogLines, "\n"))
+	local body = table.concat(clash.LogLines, "\n")
+	local ok = pcall(writefile, clash.LogFile, body)
+	if clash.SessionLogFile then
+		local sessionOk = pcall(writefile, clash.SessionLogFile, body)
+		ok = ok and sessionOk
+	end
+	if ok then clash.LogDirty = false end
 end
 
 function configStore.AutoClash.UpdateRecorder(deltaTime)
@@ -16900,6 +17305,8 @@ function configStore.AutoClash.SetEnabled(enabled)
 end
 
 function configStore.AutoClash.SetRecording(enabled)
+	configStore.AutoClash.FlushLog()
+	if configStore.MinigameTrace then configStore.MinigameTrace.Flush() end
 	configStore.AutoClash.Recording = enabled == true
 	configStore.AutoClash.PreviousVisible = nil
 	configStore.AutoClash.RecordCount = 0
@@ -16909,11 +17316,7 @@ function configStore.AutoClash.SetRecording(enabled)
 		table.clear(configStore.AutoClash.LogLines)
 		configStore.AutoClash.SnapSeen = nil
 		if configStore.MinigameTrace then
-			table.clear(configStore.MinigameTrace.Buffer)
-			table.clear(configStore.MinigameTrace.Values)
-			table.clear(configStore.MinigameTrace.Dumped)
-			configStore.MinigameTrace.Lines = 0
-			configStore.MinigameTrace.Layer = nil
+			configStore.MinigameTrace.Start()
 		end
 		configStore.AutoClash.Log(string.format("[Anomaly's Hub] Clash recorder on (v2) place=%d, logging to %s",
 			game.PlaceId, configStore.AutoClash.LogFile))
@@ -16952,10 +17355,54 @@ end)
 connect(RunService.RenderStepped, configStore.AutoClash.Update)
 connect(RunService.Heartbeat, configStore.AutoClash.UpdateRecorder)
 
--- Minigame tracer: while the recorder is on, finds the "KEEP THE BODY" panel,
--- dumps its tree (plus decompiled scripts when the executor allows) and logs
--- every property change per frame so the needle and target arc can be mapped.
-configStore.MinigameTrace = {Values = {}, Dumped = {}, Lines = 0, File = configStore.Root .. "/minigame_trace.txt", Buffer = {}}
+-- Each recording has an archive. Values use Instance identity, not names:
+-- duplicate Frame siblings otherwise overwrite each other's cached properties.
+configStore.MinigameTrace = {
+	Values = {}, Dumped = {}, Layers = {}, Baseline = {}, Scripts = {}, NextId = 0,
+	Lines = 0, File = configStore.Root .. "/minigame_trace.txt", Buffer = {},
+}
+
+function configStore.MinigameTrace.Flush()
+	local trace = configStore.MinigameTrace
+	if not trace.Dirty or type(writefile) ~= "function" then return end
+	local body = table.concat(trace.Buffer, "\n")
+	local ok = pcall(writefile, trace.File, body)
+	if trace.SessionFile then
+		local sessionOk = pcall(writefile, trace.SessionFile, body)
+		ok = ok and sessionOk
+	end
+	if ok then trace.Dirty = false end
+end
+
+function configStore.MinigameTrace.Start()
+	local trace = configStore.MinigameTrace
+	trace.Flush()
+	local id = tostring(os.time()) .. "_" .. HttpService:GenerateGUID(false)
+	-- Preserve an older recorder's latest-only files before the first v3 run.
+	if not trace.SessionFile then
+		local read = configStore.GetFunction("readfile")
+		local write = configStore.GetFunction("writefile")
+		if read and write then
+			for _, name in ipairs({"minigame_trace", "clash_log"}) do
+				local ok, old = pcall(read, configStore.Root .. "/" .. name .. ".txt")
+				if ok and type(old) == "string" and #old > 0 then
+					pcall(write, configStore.Root .. "/" .. name .. "_before_" .. id .. ".txt", old)
+				end
+			end
+		end
+	end
+	trace.SessionFile = configStore.Root .. "/minigame_trace_" .. id .. ".txt"
+	configStore.AutoClash.SessionLogFile = configStore.Root .. "/clash_log_" .. id .. ".txt"
+	trace.Values, trace.Dumped, trace.Layers, trace.Baseline = {}, {}, {}, {}
+	trace.Scripts = {}
+	trace.Buffer, trace.Lines, trace.NextId = {}, 0, 0
+	trace.CheckElapsed, trace.FlushElapsed = 0, 0
+	for _, layer in ipairs(playerGui:GetChildren()) do
+		if layer:IsA("LayerCollector") then trace.Baseline[layer] = layer.Enabled end
+	end
+	trace.Write("RECORDER v3 // " .. trace.SessionFile)
+	trace.Flush()
+end
 
 function configStore.MinigameTrace.Describe(object)
 	local fields = {}
@@ -16968,7 +17415,7 @@ function configStore.MinigameTrace.Describe(object)
 		end
 	end
 	if object:IsA("GuiObject") then
-		for _, name in ipairs({"Visible", "Rotation", "Position", "Size", "AnchorPoint", "BackgroundColor3", "BackgroundTransparency"}) do
+		for _, name in ipairs({"Visible", "Rotation", "Position", "Size", "AbsolutePosition", "AbsoluteSize", "AnchorPoint", "BackgroundColor3", "BackgroundTransparency"}) do
 			add(name)
 		end
 		if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
@@ -16993,42 +17440,88 @@ function configStore.MinigameTrace.Describe(object)
 	elseif object:IsA("LayerCollector") then
 		add("Enabled")
 	end
+	for name, value in pairs(object:GetAttributes()) do
+		fields["Attribute:" .. name] = tostring(value)
+	end
 	return fields
 end
 
 function configStore.MinigameTrace.Write(line)
 	local trace = configStore.MinigameTrace
-	if trace.Lines >= 20000 then
+	if trace.Lines >= 100000 then
 		return
 	end
 	trace.Lines += 1
+	if trace.Lines == 100000 then line = "TRACE LIMIT REACHED // start another recording" end
 	table.insert(trace.Buffer, string.format("[%.3f] %s", os.clock(), line))
 	trace.Dirty = true
 end
 
-function configStore.MinigameTrace.FindPanel()
+function configStore.MinigameTrace.FindPanels()
+	local trace = configStore.MinigameTrace
+	local layers = {}
+	for _, layer in ipairs(playerGui:GetChildren()) do
+		if layer:IsA("LayerCollector") and layer.Enabled and not configStore.AutoClash.IsHubGui(layer) then
+			local name = string.lower(layer.Name)
+			if trace.Baseline[layer] ~= true or string.find(name, "maze", 1, true)
+				or string.find(name, "labyrinth", 1, true) or string.find(name, "minigame", 1, true)
+				or name == "mindcontest" then layers[layer] = true end
+		end
+	end
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
-		if (descendant:IsA("TextLabel") or descendant:IsA("TextButton")) and not configStore.AutoClash.IsHubGui(descendant) then
+		if (descendant:IsA("TextLabel") or descendant:IsA("TextButton"))
+			and not configStore.AutoClash.IsHubGui(descendant) and isGuiVisible(descendant) then
 			local text = string.upper((string.gsub(descendant.Text, "<[^>]->", "")))
-			if string.find(text, "KEEP THE BODY", 1, true) or string.find(text, "HIT THE MARK", 1, true) then
-				return descendant:FindFirstAncestorWhichIsA("LayerCollector")
+			if string.find(text, "KEEP THE BODY", 1, true) or string.find(text, "HIT THE MARK", 1, true)
+				or string.find(text, "MAZE", 1, true) or string.find(text, "LABYRINTH", 1, true)
+				or string.find(text, "REACH THE EXIT", 1, true) then
+				local layer = descendant:FindFirstAncestorWhichIsA("LayerCollector")
+				if layer then layers[layer] = true end
 			end
 		end
 	end
-	return nil
+	return layers
+end
+
+function configStore.MinigameTrace.Observe(object)
+	local trace = configStore.MinigameTrace
+	local state = trace.Values[object]
+	local parent = object.Parent
+	if parent and parent ~= playerGui and not trace.Values[parent] then trace.Observe(parent) end
+	local fields = trace.Describe(object)
+	fields.ParentId = tostring(parent and trace.Values[parent] and trace.Values[parent].Id or 0)
+	if not state then
+		trace.NextId += 1
+		state = {Id = trace.NextId, Fields = fields}
+		trace.Values[object] = state
+		local parts = {}
+		for name, value in pairs(fields) do table.insert(parts, name .. "=" .. value) end
+		table.sort(parts)
+		trace.Write(string.format("#%d %s [%s] %s", state.Id, object:GetFullName(), object.ClassName, table.concat(parts, " ")))
+		return
+	end
+	for name, value in pairs(fields) do
+		if state.Fields[name] ~= value then
+			trace.Write(string.format("#%d .%s = %s", state.Id, name, value))
+		end
+	end
+	for name in pairs(state.Fields) do
+		if fields[name] == nil then trace.Write(string.format("#%d .%s = <removed>", state.Id, name)) end
+	end
+	state.Fields = fields
 end
 
 function configStore.MinigameTrace.Dump(layer)
 	local trace = configStore.MinigameTrace
 	trace.Write("===== TREE " .. layer:GetFullName() .. " =====")
+	trace.Observe(layer)
 	for _, descendant in ipairs(layer:GetDescendants()) do
-		local parts = {}
-		for name, value in pairs(trace.Describe(descendant)) do
-			table.insert(parts, name .. "=" .. value)
-		end
-		table.sort(parts)
-		trace.Write(string.format("%s [%s] %s", descendant:GetFullName(), descendant.ClassName, table.concat(parts, " ")))
+		trace.Observe(descendant)
 	end
+	trace.Write("===== END TREE =====")
+	-- Decompilation can yield; run it separately so it cannot stall UI sampling.
+	local sessionFile = trace.SessionFile
+	task.spawn(function()
 	local decompiler = getgenv and (getgenv().decompile or decompile) or nil
 	local scripts = {}
 	for _, descendant in ipairs(layer:GetDescendants()) do
@@ -17043,15 +17536,21 @@ function configStore.MinigameTrace.Dump(layer)
 			if (descendant:IsA("LocalScript") or descendant:IsA("ModuleScript"))
 				and (string.find(lowerName, "body", 1, true) or string.find(lowerName, "mark", 1, true)
 					or string.find(lowerName, "resist", 1, true) or string.find(lowerName, "minigame", 1, true)
-					or string.find(lowerName, "possess", 1, true) or string.find(lowerName, "grab", 1, true)) then
+					or string.find(lowerName, "possess", 1, true) or string.find(lowerName, "grab", 1, true)
+					or string.find(lowerName, "contest", 1, true) or string.find(lowerName, "maze", 1, true)
+					or string.find(lowerName, "labyrinth", 1, true)) then
 				table.insert(scripts, descendant)
 			end
 		end
 	end
 	for _, scriptObject in ipairs(scripts) do
+		if unloaded or not configStore.AutoClash.Recording or trace.SessionFile ~= sessionFile then break end
+		if trace.Scripts[scriptObject] then continue end
+		trace.Scripts[scriptObject] = true
 		trace.Write("SCRIPT " .. scriptObject:GetFullName() .. " [" .. scriptObject.ClassName .. "]")
 		if type(decompiler) == "function" and type(writefile) == "function" then
 			local ok, source = pcall(decompiler, scriptObject)
+			if unloaded or not configStore.AutoClash.Recording or trace.SessionFile ~= sessionFile then break end
 			if ok and type(source) == "string" then
 				local fileName = configStore.Root .. "/src_" .. string.gsub(scriptObject:GetFullName(), "[^%w_]", "_") .. ".lua"
 				pcall(writefile, fileName, source)
@@ -17061,42 +17560,54 @@ function configStore.MinigameTrace.Dump(layer)
 			end
 		end
 	end
-	trace.Write("===== END TREE =====")
+	end)
 end
 
-connect(RunService.Heartbeat, function()
+connect(RunService.Heartbeat, function(deltaTime)
 	local trace = configStore.MinigameTrace
 	if not configStore.AutoClash.Recording or unloaded then
 		return
 	end
-	trace.CheckElapsed = (trace.CheckElapsed or 0) + 1
-	if not (trace.Layer and trace.Layer.Parent) and trace.CheckElapsed % 15 == 0 then
-		trace.Layer = trace.FindPanel()
-		if trace.Layer and not trace.Dumped[trace.Layer:GetFullName()] then
-			trace.Dumped[trace.Layer:GetFullName()] = true
-			warn("[Anomaly's Hub] Minigame panel found: " .. trace.Layer:GetFullName() .. " - tracing to " .. trace.File)
-			trace.Dump(trace.Layer)
-		end
-	end
-	if trace.Layer and trace.Layer.Parent then
-		for _, descendant in ipairs(trace.Layer:GetDescendants()) do
-			local path = descendant:GetFullName()
-			for name, value in pairs(trace.Describe(descendant)) do
-				local key = path .. "|" .. name
-				if trace.Values[key] ~= value then
-					if trace.Values[key] ~= nil then
-						trace.Write(string.format("%s .%s = %s", path, name, value))
-					end
-					trace.Values[key] = value
-				end
+	trace.CheckElapsed = (trace.CheckElapsed or 0) + deltaTime
+	trace.FlushElapsed = (trace.FlushElapsed or 0) + deltaTime
+	if trace.CheckElapsed >= 0.15 then
+		trace.CheckElapsed = 0
+		for layer in pairs(trace.FindPanels()) do
+			trace.Layers[layer] = true
+			if not trace.Dumped[layer] then
+				trace.Dumped[layer] = true
+				warn("[Anomaly's Hub] Minigame panel found: " .. layer:GetFullName() .. " - tracing to " .. tostring(trace.SessionFile))
+				trace.Dump(layer)
 			end
 		end
 	end
-	if trace.Dirty and trace.CheckElapsed % 30 == 0 and type(writefile) == "function" then
-		trace.Dirty = false
-		pcall(writefile, trace.File, table.concat(trace.Buffer, "\n"))
+	for layer in pairs(trace.Layers) do
+		if not layer.Parent then
+			trace.Layers[layer], trace.Dumped[layer], trace.Baseline[layer] = nil, nil, nil
+		else
+			trace.Observe(layer)
+			for _, descendant in ipairs(layer:GetDescendants()) do trace.Observe(descendant) end
+		end
 	end
+	for object, state in pairs(trace.Values) do
+		if not object:IsDescendantOf(playerGui) then
+			trace.Write(string.format("#%d REMOVED", state.Id))
+			trace.Values[object] = nil
+		end
+	end
+	if trace.FlushElapsed >= 0.5 then trace.FlushElapsed = 0; trace.Flush() end
 end)
+-- Only minigame controls are recorded, and never while typing in a text box.
+configStore.MinigameTrace.InputKeys = {W = true, A = true, S = true, D = true,
+	Up = true, Down = true, Left = true, Right = true, Space = true}
+function configStore.MinigameTrace.Input(input, direction)
+	if not configStore.AutoClash.Recording or unloaded or UserInputService:GetFocusedTextBox() then return end
+	local trace = configStore.MinigameTrace
+	local key = input.KeyCode.Name
+	if trace.InputKeys[key] then trace.Write("INPUT " .. key .. " " .. direction) end
+end
+connect(UserInputService.InputBegan, function(input) configStore.MinigameTrace.Input(input, "DOWN") end)
+connect(UserInputService.InputEnded, function(input) configStore.MinigameTrace.Input(input, "UP") end)
 configStore.AutoClash.Render()
 
 connect(RunService.RenderStepped, function()
@@ -17257,7 +17768,7 @@ connect(RunService.RenderStepped, function()
 					end
 				end
 				if clearTargetExists and not kiControlDesignatedTarget then
-					handledTrainingTargets = setmetatable({}, {__mode = "k"})
+					handledTrainingTargets = {}
 					kiControlSweepCooldownUntil = os.clock() + 0.25
 				end
 			end
@@ -17857,6 +18368,7 @@ function configStore.Capture()
 		NpcESPSettings = table.clone(configStore.NpcESP.Settings),
 		AutoClashEnabled = configStore.AutoClash.Enabled,
 		AutoClashMash = configStore.AutoClash.Mash,
+		AutoBodyRingEnabled = configStore.BodyRing.Enabled,
 		DragonBallESPEnabled = configStore.DragonBallESP.Enabled,
 		DragonBallESPSettings = table.clone(configStore.DragonBallESP.Settings),
 		NpcESPMaxDistance = configStore.NpcESP.MaxDistance,
@@ -17995,6 +18507,7 @@ function configStore.Apply(data)
 	if type(data.AutoClashMash) == "boolean" then
 		configStore.AutoClash.Mash = data.AutoClashMash
 	end
+	configStore.BodyRing.SetEnabled(data.AutoBodyRingEnabled == true)
 	if type(data.AutoClashEnabled) == "boolean" then
 		configStore.AutoClash.SetEnabled(data.AutoClashEnabled)
 	else
@@ -18300,13 +18813,20 @@ function controller.Unload()
 	step("auto clash", function()
 		configStore.AutoClash.Enabled = false
 		configStore.AutoClash.Recording = false
+		configStore.BodyRing.SetEnabled(false)
+		configStore.MinigameTrace.Flush()
+		configStore.AutoClash.FlushLog()
 	end)
 	step("dragon ball esp", function()
 		configStore.DragonBallESP.Enabled = false
 		configStore.DragonBallESP.DisconnectWorld()
 		configStore.DragonBallESP.Clear()
 	end)
-	step("session", function() configStore.Session.Save() end)
+	step("session", function()
+		configStore.Session.StopWatchingTarget()
+		configStore.Session.Save()
+	end)
+	step("remote spy", npcSafety.RemoteSpy.Uninstall)
 	step("nearby alert", function()
 		configStore.NearbyAlert.Enabled = false
 		configStore.NearbyAlert.Gui:Destroy()
@@ -18444,6 +18964,16 @@ controller.SetDirectLightDiagnosticEnabled = function(enabled)
 end
 controller.SetDirectLightInterval = npcSafety.SetDirectLightInterval
 controller.GetDirectLightDiagnosticTelemetry = npcSafety.GetDirectLightDiagnosticTelemetry
+controller.StartDirectLightSpeedTest = npcSafety.StartDirectLightBenchmark
+controller.StopDirectLightSpeedTest = function()
+	if not npcSafety.DirectLight.BenchmarkRunning then return false, "not_running" end
+	return npcSafety.FinishDirectLightBenchmark(true)
+end
+controller.GetDirectLightSpeedTestResults = function()
+	return npcSafety.DirectLight.BenchmarkRunning,
+		npcSafety.DirectLight.BenchmarkResults,
+		npcSafety.DirectLight.LastBenchmarkSummary
+end
 controller.IsSaibamanSpawnerAuthorized = function() return npcSafety.SaibamanSpawner.Authorized end
 controller.SpawnSaibaman = npcSafety.SpawnSaibaman
 controller.SetSaibamanSpawnLoop = npcSafety.SetSaibamanSpawnLoop
@@ -18739,4 +19269,5 @@ configStore.PolishInterface()
 configStore.SelectTab("Home")
 configStore.InitializeAutoload()
 print("[" .. HUB_DISPLAY_NAME .. "] Loaded on", currentPlanet, HUB_VERSION, "flight:", flightSpeed, "key:", visibilityKey.Name)
+
 

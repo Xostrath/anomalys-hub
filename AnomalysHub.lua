@@ -11,6 +11,10 @@ if game.PlaceId == 89366025586253 then
   Does not load the full hub. Run via dev/loader_menu.lua (gohan_menu in Volt).
 ]]
 
+-- Match the world hub's settling delay, including automatic menu-place loads.
+if not game:IsLoaded() then game.Loaded:Wait() end
+task.wait(10)
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
@@ -2261,6 +2265,11 @@ end
 -- Anomaly's Hub (executor fork)
 -- Character utilities, NPC automation, Doctor stats, and persistent executor configs.
 
+-- Delay initialization itself, not just visibility: restored automation must not
+-- start behind a hidden HUD. This also covers executor auto-execute on travel.
+if not game:IsLoaded() then game.Loaded:Wait() end
+task.wait(10)
+
 local HUB_DISPLAY_NAME = "Anomaly's Hub"
 local HUB_VERSION = "v1.9"
 local Players = game:GetService("Players")
@@ -2844,7 +2853,6 @@ local npcSafety = {
 	PlayerEvadeDistance = 750,
 	PendingServerHopReason = nil,
 	ContestedNpcCount = 0,
-	NpcPlayerExclusionRange = 200,
 	StrongestOptionName = "Strongest NPC",
 	Profiles = {},
 	ObservedSpawns = {},
@@ -6361,6 +6369,10 @@ connect(configStore.Session.ResetButton.Activated, configStore.Session.Reset)
 connect(localPlayer.OnTeleport, function(state)
 	if state == Enum.TeleportState.Started then
 		configStore.Session.Save()
+		-- Also cover travel initiated by the game's own UI, not only hub buttons.
+		if qolState.ServerNavigation.QueueSelfForTeleport then
+			qolState.ServerNavigation.QueueSelfForTeleport()
+		end
 	end
 end)
 connect(localPlayer.CharacterAdded, configStore.Session.HookCharacter)
@@ -9653,6 +9665,11 @@ function npcSafety.RememberSpawn(npcType, position)
 	end
 end
 
+function npcSafety.IsNpcOutsidePlayerRange(target)
+	local root = target and getNpcRoot(target)
+	return root ~= nil and npcSafety.GetNearbyPlayer(root.Position, npcSafety.PlayerRange) == nil
+end
+
 local function findNearestNpc(npcType, excludedTarget)
 	local character = localPlayer.Character
 	local characterRoot = character and character:FindFirstChild("HumanoidRootPart")
@@ -9672,9 +9689,7 @@ local function findNearestNpc(npcType, excludedTarget)
 			end
 			if model and model ~= excludedTarget and model:IsA("Model") and isLivingNpcOfType(model, npcType) then
 				if npcType ~= npcSafety.StrongestOptionName then npcSafety.RememberSpawn(npcType, root.Position) end
-				local nearbyPlayer = npcSafety.GetNearbyPlayer
-					and npcSafety.GetNearbyPlayer(root.Position, npcSafety.NpcPlayerExclusionRange)
-				if nearbyPlayer then
+				if not npcSafety.IsNpcOutsidePlayerRange(model) then
 					npcSafety.ContestedNpcCount += 1
 				else
 					table.insert(candidates, {
@@ -9804,6 +9819,7 @@ local function attachToNpc(target)
 	if not humanoid or humanoid.Health <= 0 or not characterRoot or not targetRoot then
 		return false
 	end
+	if not npcSafety.IsNpcOutsidePlayerRange(target) then return false end
 
 	local isNewTarget = npcSafety.LastAttachedTarget ~= target
 	if isNewTarget then
@@ -10565,7 +10581,7 @@ function npcSafety.ShouldBlockAttackTeleport()
 		return false
 	end
 	local targetRoot = activeNpcTarget and getNpcRoot(activeNpcTarget)
-	if targetRoot and not npcSafety.GetNearbyPlayer(targetRoot.Position, npcSafety.NpcPlayerExclusionRange) then
+	if targetRoot and npcSafety.IsNpcOutsidePlayerRange(activeNpcTarget) then
 		return false
 	end
 	return npcSafety.PlayerProximityConfirmed == true
@@ -10841,6 +10857,7 @@ function npcSafety.SendLeftClick()
 end
 
 function npcSafety.SendLightAttack()
+	if not npcSafety.IsNpcOutsidePlayerRange(activeNpcTarget) then return false end
 	local combatController = getNpcCombatController()
 	if not combatController or type(combatController.Light) ~= "function" then
 		return false
@@ -10861,7 +10878,7 @@ function npcSafety.IsDirectLightTargetAllowed(target)
 	if target ~= activeNpcTarget or not npcTargetingEnabled or not selectedNpcType then
 		return false
 	end
-	return isLivingNpcOfType(target, selectedNpcType) and getNpcRoot(target) ~= nil
+	return isLivingNpcOfType(target, selectedNpcType) and npcSafety.IsNpcOutsidePlayerRange(target)
 end
 
 function npcSafety.UpdateSaibamanSpawnerUi(message, color)
@@ -12737,6 +12754,28 @@ function npcSafety.GetNearbyPlayer(position, range)
 	return nearestPlayer, nearestDistance
 end
 
+function npcSafety.RetargetContestedNpc()
+	if not activeNpcTarget or npcSafety.IsNpcOutsidePlayerRange(activeNpcTarget) then return false end
+	-- Run before attacks, grips, hide/hop checks and movement on every heartbeat.
+	-- A moving player or an edited radius invalidates the old target immediately.
+	clearNpcConstraintRig()
+	npcAttackElapsed = 0
+	npcAcquireElapsed = 1
+	npcSafety.GripMode = false
+	npcSafety.GripTarget = nil
+	npcSafety.GripElapsed = 0
+	npcSafety.GripConfirmed = false
+	npcSafety.LastTargetPosition = nil
+	npcSafety.SpawnDestination = nil
+	npcSafety.SpawnSource = nil
+	npcSafety.SpawnWaitReason = nil
+	local nextTarget = findNearestNpc(selectedNpcType)
+	if nextTarget and attachToNpc(nextTarget) then
+		setNpcStatus("Player range breached; switching to safe " .. nextTarget.Name .. ".", colors.Success)
+	end
+	return true
+end
+
 function npcSafety.HttpGetJson(url)
 	local environmentRequest = environment.request or environment.http_request
 	local synTable = environment.syn
@@ -13322,14 +13361,14 @@ function npcSafety.FinishPlayerEvade(message)
 	end
 end
 
-function npcSafety.FinishHideMode(message)
+function npcSafety.FinishHideMode(message, keepTarget)
 	npcSafety.HideMode = false
 	npcSafety.HideModePlayer = nil
 	npcSafety.HideModePosition = nil
 	npcSafety.HideModeStartedAt = 0
 	npcSafety.HideClearSince = 0
 	npcSafety.HideServerHopTriggered = false
-	clearNpcConstraintRig()
+	if not keepTarget then clearNpcConstraintRig() end
 	npcAcquireElapsed = 1
 	if message then
 		setNpcStatus(message, colors.Success)
@@ -13347,8 +13386,11 @@ function npcSafety.TryRetargetAfterHide()
 		npcSafety.FinishHideMode(
 			selectedNpcType == npcSafety.StrongestOptionName
 				and string.format("Hide: switched to safe strongest %s (%.0f PL, %.0f studs).", nearest.Name, targetPower or 0, distance)
-				or string.format("Hide: switched to safe %s (%.0f studs away).", nearest.Name, distance)
+				or string.format("Hide: switched to safe %s (%.0f studs away).", nearest.Name, distance),
+			true
 		)
+		-- The old threat belongs to the abandoned spot, not this safe target.
+		npcSafety.UpdatePlayerProximityThreat()
 		return true
 	end
 	if contestedCount and contestedCount > 0 then
@@ -13458,7 +13500,7 @@ function npcSafety.UpdateHideMode(character, humanoid, characterRoot)
 		end
 	end
 	if activeNpcTarget then
-		npcSafety.FinishHideMode(nil)
+		npcSafety.FinishHideMode(nil, true)
 		return false
 	end
 	applyNpcNoclip(character, true)
@@ -16289,6 +16331,7 @@ connect(RunService.Heartbeat, function(deltaTime)
 	-- AutoFarm always requires noclip, independently of the QoL button. Reapply
 	-- it every Heartbeat to every current and newly inserted character BasePart.
 	applyNpcNoclip(character, true)
+	npcSafety.RetargetContestedNpc()
 	npcSafety.UpdatePlayerProximityThreat()
 	npcSafety.UpdateHideMode(character, humanoid, characterRoot)
 	if npcSafety.UpdatePlayerEvade(character, humanoid, characterRoot) then
@@ -16507,9 +16550,10 @@ connect(RunService.Heartbeat, function(deltaTime)
 				npcSafety.SpawnDestination = nil
 				npcSafety.SpawnSource = nil
 				npcSafety.SpawnWaitReason = string.format(
-					"All %d live %s target%s are within %d studs of another player; hopping servers...",
+					"All %d live %s target%s are within %d studs of another player; " ..
+						(npcSafety.ServerHopEnabled and "hopping servers..." or "scanning for a safe target..."),
 					contestedNpcCount, tostring(selectedNpcType), contestedNpcCount == 1 and "" or "s",
-					npcSafety.NpcPlayerExclusionRange)
+					npcSafety.PlayerRange)
 				if npcSafety.ServerHopEnabled then
 					local threatPlayer = npcSafety.GetNearbyPlayer(characterRoot.Position, math.huge)
 					npcSafety.RequestServerHop(npcSafety.SpawnWaitReason, threatPlayer)

@@ -17399,7 +17399,7 @@ function configStore.AutoMaze.Update()
 	local keys = {U = "W", D = "S", L = "A", R = "D"}
 	if maze.Press(keys[move.Key]) then
 		session.Pending = {X = move.X, Y = move.Y, SentAt = now,
-			Until = now + math.clamp(move.Cells * 0.025, 0.04, 0.22) + 0.025}
+			Until = now + math.clamp(move.Cells * 0.025, 0.04, 0.22) + 0.075}
 		status(string.format("%s // MOVE %d/%d", keys[move.Key], session.Index, #session.Route))
 	else
 		session.Error = "KEYBOARD INPUT UNAVAILABLE"

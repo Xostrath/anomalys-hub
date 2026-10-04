@@ -10880,15 +10880,17 @@ end
 
 function npcSafety.IsDirectLightTargetAllowed(target)
 	if not target or not target:IsA("Model") or not target.Parent then
-		return false
+		return false, "target missing/removed"
 	end
 	if Players:GetPlayerFromCharacter(target) ~= nil then
-		return false
+		return false, "target is a player"
 	end
 	if target ~= activeNpcTarget or not npcTargetingEnabled or not selectedNpcType then
-		return false
+		return false, "target not active or farming disabled"
 	end
-	return isLivingNpcOfType(target, selectedNpcType) and npcSafety.IsNpcOutsidePlayerRange(target)
+	if not isLivingNpcOfType(target, selectedNpcType) then return false, "target dead or wrong NPC type" end
+	if not npcSafety.IsNpcOutsidePlayerRange(target) then return false, "player-range exclusion" end
+	return true
 end
 
 function npcSafety.UpdateSaibamanSpawnerUi(message, color)
@@ -11288,12 +11290,40 @@ function npcSafety.CanMeasureDirectLight()
 	local character = localPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	local targetRoot = target and getNpcRoot(target)
-	return diagnostic.Enabled and not unloaded and root and targetRoot
-		and npcSafety.IsDirectLightTargetAllowed(target) and not npcSafety.IsKnocked(target)
-		and npcApproachPhase == "Rise" and not npcSafety.AboveTransitionStage
-		and not npcSafety.LootMode and not npcSafety.GripMode and not npcSafety.RecoveryMode
-		and not npcSafety.HideMode and not npcSafety.PlayerEvadeMode
-		and (targetRoot.Position - root.Position).Magnitude <= 30
+	if not diagnostic.Enabled or unloaded then return false, "disabled/unloaded" end
+	if not root or not targetRoot then return false, "player/target root missing" end
+	local allowed, reason = npcSafety.IsDirectLightTargetAllowed(target)
+	if not allowed then return false, reason end
+	if npcSafety.IsKnocked(target) then return false, "target knocked" end
+	for _, flag in ipairs({"AboveTransitionStage", "LootMode", "GripMode", "RecoveryMode", "HideMode", "PlayerEvadeMode"}) do
+		if npcSafety[flag] then return false, flag end
+	end
+	-- Only approach/distance jitter may receive measurement grace. Attack
+	-- eligibility is still enforced independently on every send/delayed hit.
+	if npcApproachPhase ~= "Rise" then return false, "approach phase=" .. tostring(npcApproachPhase), true end
+	local distance = (targetRoot.Position - root.Position).Magnitude
+	if distance > 30 then return false, "distance > 30 studs", true end
+	return true
+end
+
+function npcSafety.GetDirectLightBenchmarkReadiness()
+	-- Check character states even when a soft approach/range gate also fails.
+	local character = localPlayer.Character
+	if character then
+		for _, state in ipairs({"Stunned", "Knocked", "TempKnock", "Grabbed", "GettingGripped", "GettingCarried"}) do
+			if character:FindFirstChild(state) then return false, "character state=" .. state end
+		end
+	end
+	return npcSafety.CanMeasureDirectLight()
+end
+
+function npcSafety.IsDirectLightBenchmarkCollecting()
+	local diagnostic = npcSafety.DirectLight
+	if not diagnostic.BenchmarkRunning or not diagnostic.BenchmarkCollecting or diagnostic.BenchmarkPauseDiscarded then return false end
+	local ready, _, brief = npcSafety.GetDirectLightBenchmarkReadiness()
+	-- Brief interruptions include BOTH elapsed time and observations. If they
+	-- exceed the grace budget the entire row is discarded, never ranked.
+	return ready or brief == true
 end
 
 function npcSafety.AdaptDirectLightDelay()
@@ -11398,7 +11428,7 @@ function npcSafety.SetDirectLightTarget(target)
 			diagnostic.HealthChangeEvents += 1
 			diagnostic.WindowDamage += 1
 			diagnostic.WindowLoss += loss
-			if diagnostic.BenchmarkRunning and diagnostic.BenchmarkCollecting and npcSafety.CanMeasureDirectLight() then
+			if npcSafety.IsDirectLightBenchmarkCollecting() then
 				diagnostic.BenchmarkLevelDamage += loss
 			end
 		end
@@ -11411,7 +11441,7 @@ end
 function npcSafety.ObserveDirectLightTiming(event, delay)
 	local diagnostic = npcSafety.DirectLight
 	local metrics = diagnostic.BenchmarkMetrics
-	if not diagnostic.BenchmarkRunning or not diagnostic.BenchmarkCollecting or not metrics then return end
+	if not npcSafety.IsDirectLightBenchmarkCollecting() or not metrics then return end
 	metrics[event] = (metrics[event] or 0) + 1
 	if event == "HitCalls" then
 		local now = os.clock()
@@ -11441,7 +11471,7 @@ function npcSafety.RecordDirectLightBenchmarkRow(status, reason)
 		Score = duration > 0 and diagnostic.BenchmarkLevelDamage / duration or 0,
 		StartHealth = diagnostic.BenchmarkSampleStartHealth, EndHealth = diagnostic.CurrentHealth,
 		Attempts = m.Attempts or 0, BusyTicks = m.BusyTicks or 0, SendErrors = m.SendErrors or 0,
-		CanceledHits = m.CanceledHits or 0,
+		CanceledHits = m.CanceledHits or 0, BriefSeconds = diagnostic.BenchmarkBriefSeconds or 0,
 		MeanCallbackDelay = (m.DelayCount or 0) > 0 and m.DelayTotal / m.DelayCount or nil,
 		MeanHitGap = (m.GapCount or 0) > 0 and m.GapTotal / m.GapCount or nil}
 	table.insert(diagnostic.BenchmarkRows, row)
@@ -11454,24 +11484,32 @@ function npcSafety.SaveDirectLightBenchmark(status, force)
 	local now = os.clock()
 	if not force and now - (diagnostic.BenchmarkSaveAt or -math.huge) < 2 then return end
 	diagnostic.BenchmarkSaveAt = now
-	local lines = {"FAST ATTACK SPEED TEST v2 // working swing-and-hit protocol",
+	local lines = {"FAST ATTACK SPEED TEST v3 // interruption-tolerant measurement; working swing-and-hit protocol",
 		"Observed client HP loss is not a server acknowledgement; health updates may batch multiple hits. Other damage/healing can confound results.",
 		"Only COMPLETE rows from the same target instance compete. DISCARDED rows are evidence, not scores.",
+		"Brief approach/range interruptions include time and HP loss: max 0.15s each / 0.30s per sample. Hard exclusions discard immediately.",
 		"status=" .. status .. " summary=" .. tostring(diagnostic.LastBenchmarkSummary),
 		"target=" .. tostring(diagnostic.BenchmarkTargetName) .. " mode=" .. tostring(diagnostic.BenchmarkMode)
 			.. " interval=" .. tostring(diagnostic.BenchmarkInterval),
 		"wall_seconds=" .. tostring(now - diagnostic.BenchmarkStartedAt)
-			.. " excluded_seconds=" .. tostring(diagnostic.BenchmarkExcludedTime or 0),
+			.. " hard_or_over_budget_pause_seconds=" .. tostring(diagnostic.BenchmarkExcludedTime or 0),
 		"current_level=" .. tostring(diagnostic.BenchmarkLevel) .. " collecting=" .. tostring(diagnostic.BenchmarkCollecting)
 			.. " pause=" .. tostring(diagnostic.BenchmarkPausedReason),
-		"current_active_seconds=" .. tostring(diagnostic.BenchmarkLevelElapsed) .. " current_HP_loss="
-			.. tostring(diagnostic.BenchmarkLevelDamage) .. " target_HP=" .. tostring(diagnostic.CurrentHealth),
-		"level,status,delay,pairs,interval,active_s,requests,HP_lost,DPS,start_HP,end_HP,attempts,busy_ticks,mean_callback_s,mean_hit_gap_s,send_errors,canceled_hits,reason"}
+		"current_sample_seconds=" .. tostring(diagnostic.BenchmarkLevelElapsed) .. " current_HP_loss="
+			.. tostring(diagnostic.BenchmarkLevelDamage) .. " target_HP=" .. tostring(diagnostic.CurrentHealth)}
+	local reasons = {}
+	for reason in pairs(diagnostic.BenchmarkInterruptions or {}) do table.insert(reasons, reason) end
+	table.sort(reasons)
+	for _, reason in ipairs(reasons) do
+		local entry = diagnostic.BenchmarkInterruptions[reason]
+		table.insert(lines, string.format("interruption=%s episodes=%d seconds=%.6f", reason, entry.Count, entry.Seconds))
+	end
+	table.insert(lines, "level,status,delay,pairs,interval,sample_s,requests,HP_lost,DPS,start_HP,end_HP,attempts,busy_ticks,mean_callback_s,mean_hit_gap_s,send_errors,canceled_hits,brief_s,reason")
 	for _, row in ipairs(diagnostic.BenchmarkRows or {}) do
 		local values = {row.Level, row.Status, row.SwingDelay, row.Pairs, row.Interval, row.Duration,
 			row.Requests, row.Damage, row.Score, row.StartHealth or "unknown", row.EndHealth or "unknown",
 			row.Attempts, row.BusyTicks, row.MeanCallbackDelay or "unknown", row.MeanHitGap or "unknown",
-			row.SendErrors, row.CanceledHits, row.Reason}
+			row.SendErrors, row.CanceledHits, row.BriefSeconds, row.Reason}
 		for index, value in ipairs(values) do values[index] = tostring(value):gsub('[\r\n,]', ' ') end
 		table.insert(lines, table.concat(values, ","))
 	end
@@ -11493,6 +11531,7 @@ function npcSafety.ResetDirectLightBenchmarkLevel(level)
 	diagnostic.BenchmarkCollecting = false
 	diagnostic.BenchmarkMetrics = {}
 	diagnostic.BenchmarkSampleStartHealth = nil
+	diagnostic.BenchmarkBriefSeconds = 0
 	diagnostic.WindowHits = 0
 	diagnostic.WindowDamage = 0
 	diagnostic.WindowLoss = 0
@@ -11568,6 +11607,9 @@ function npcSafety.StartDirectLightBenchmark()
 	diagnostic.BenchmarkStartedAt = os.clock()
 	diagnostic.BenchmarkExcludedTime = 0
 	diagnostic.BenchmarkPausedReason = nil
+	diagnostic.BenchmarkPauseElapsed = 0
+	diagnostic.BenchmarkPauseDiscarded = false
+	diagnostic.BenchmarkInterruptions = {}
 	diagnostic.BenchmarkReportFile = configStore.Root .. "/fast_attack_speed_test_" .. tostring(os.time())
 		.. "_" .. tostring(math.floor(os.clock() * 1000)) .. ".txt"
 	diagnostic.BenchmarkBestLevel = nil
@@ -11606,25 +11648,46 @@ function npcSafety.UpdateDirectLightBenchmark(deltaTime)
 		npcSafety.FinishDirectLightBenchmark(true, "INCONCLUSIVE: too many interruptions")
 		return
 	end
-	local ready = npcSafety.CanMeasureDirectLight()
-	local reason = "approach/safety/range (phase " .. tostring(npcApproachPhase) .. ")"
-	local character = localPlayer.Character
-	if ready and character then
-		for _, state in ipairs({"Stunned", "Knocked", "TempKnock", "Grabbed", "GettingGripped", "GettingCarried"}) do
-			if character:FindFirstChild(state) then ready = false; reason = state; break end
-		end
-	end
+	local ready, reason, brief = npcSafety.GetDirectLightBenchmarkReadiness()
 	if not ready then
-		diagnostic.BenchmarkExcludedTime = (diagnostic.BenchmarkExcludedTime or 0) + deltaTime
-		if not diagnostic.BenchmarkPausedReason then
-			npcSafety.RecordDirectLightBenchmarkRow("DISCARDED", reason)
-			npcSafety.ResetDirectLightBenchmarkLevel(diagnostic.BenchmarkLevel)
-		end
+		diagnostic.BenchmarkInterruptions = diagnostic.BenchmarkInterruptions or {}
+		local entry = diagnostic.BenchmarkInterruptions[reason] or {Count = 0, Seconds = 0}
+		if diagnostic.BenchmarkPausedReason ~= reason then entry.Count += 1 end
+		entry.Seconds += deltaTime
+		diagnostic.BenchmarkInterruptions[reason] = entry
 		diagnostic.BenchmarkPausedReason = reason
+		diagnostic.BenchmarkPauseElapsed = (diagnostic.BenchmarkPauseElapsed or 0) + deltaTime
+		local previousBrief = diagnostic.BenchmarkBriefSeconds or 0
+		if brief and not diagnostic.BenchmarkPauseDiscarded then diagnostic.BenchmarkBriefSeconds = previousBrief + deltaTime end
+		if brief and not diagnostic.BenchmarkPauseDiscarded
+			and diagnostic.BenchmarkPauseElapsed <= 0.15 and diagnostic.BenchmarkBriefSeconds <= 0.30 then
+			if diagnostic.BenchmarkCollecting then
+				diagnostic.BenchmarkLevelElapsed += deltaTime
+			else
+				diagnostic.BenchmarkWarmupRemaining = math.max(diagnostic.BenchmarkWarmupRemaining - deltaTime, 0)
+			end
+		else
+			diagnostic.BenchmarkExcludedTime = (diagnostic.BenchmarkExcludedTime or 0) + deltaTime
+			if not diagnostic.BenchmarkPauseDiscarded then
+				-- Earlier grace observations cannot survive a long or unsafe pause.
+				npcSafety.RecordDirectLightBenchmarkRow("DISCARDED", reason .. (brief and " (grace budget exceeded)" or ""))
+				npcSafety.ResetDirectLightBenchmarkLevel(diagnostic.BenchmarkLevel)
+				diagnostic.BenchmarkPauseDiscarded = true
+			end
+		end
 		npcSafety.SaveDirectLightBenchmark("PAUSED", false)
 		return
 	end
+	-- Also account for a long frame on return; do not silently bridge a long
+	-- unobserved interruption just because the current readiness check passed.
+	if diagnostic.BenchmarkPausedReason and not diagnostic.BenchmarkPauseDiscarded
+		and (diagnostic.BenchmarkPauseElapsed or 0) + deltaTime > 0.15 then
+		npcSafety.RecordDirectLightBenchmarkRow("DISCARDED", diagnostic.BenchmarkPausedReason .. " (recovery gap exceeded grace)")
+		npcSafety.ResetDirectLightBenchmarkLevel(diagnostic.BenchmarkLevel)
+	end
 	diagnostic.BenchmarkPausedReason = nil
+	diagnostic.BenchmarkPauseElapsed = 0
+	diagnostic.BenchmarkPauseDiscarded = false
 	npcSafety.SaveDirectLightBenchmark("RUNNING", false)
 	if not diagnostic.BenchmarkCollecting then
 		diagnostic.BenchmarkWarmupRemaining = math.max(diagnostic.BenchmarkWarmupRemaining - deltaTime, 0)
@@ -11636,6 +11699,7 @@ function npcSafety.UpdateDirectLightBenchmark(deltaTime)
 		diagnostic.BenchmarkLevelStartRequests = diagnostic.RequestsSent
 		diagnostic.BenchmarkMetrics = {}
 		diagnostic.BenchmarkSampleStartHealth = diagnostic.CurrentHealth
+		diagnostic.BenchmarkBriefSeconds = 0
 		return
 	end
 	diagnostic.BenchmarkLevelElapsed += deltaTime

@@ -11,9 +11,8 @@ if game.PlaceId == 89366025586253 then
   Does not load the full hub. Run via dev/loader_menu.lua (gohan_menu in Volt).
 ]]
 
--- Match the world hub's settling delay, including automatic menu-place loads.
+-- Manual injection is immediate; the queued travel loader owns its 10s delay.
 if not game:IsLoaded() then game.Loaded:Wait() end
-task.wait(10)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -2265,10 +2264,9 @@ end
 -- Anomaly's Hub (executor fork)
 -- Character utilities, NPC automation, Doctor stats, and persistent executor configs.
 
--- Delay initialization itself, not just visibility: restored automation must not
--- start behind a hidden HUD. This also covers executor auto-execute on travel.
+-- Manual injection has no artificial delay. Automatic travel reloads wait in
+-- QueueSelfForTeleport's queued loader, before either UI or automation starts.
 if not game:IsLoaded() then game.Loaded:Wait() end
-task.wait(10)
 
 local HUB_DISPLAY_NAME = "Anomaly's Hub"
 local HUB_VERSION = "v1.9"
@@ -13942,8 +13940,10 @@ function qolState.ServerNavigation.QueueSelfForTeleport()
 	if qolState.ServerNavigation.TeleportQueueArmed then return true end
 	local queueFunction = qolState.ServerNavigation.GetQueueFunction()
 	local loaderUrl = environment.__GohanHubLoaderUrl
+	-- Runs in the destination only; never sleeps during injection or queuing.
+	local reloadDelay = "if not game:IsLoaded() then game.Loaded:Wait() end;task.wait(10);"
 	if queueFunction and type(loaderUrl) == "string" and string.match(loaderUrl, "^https://") then
-		local ok = pcall(queueFunction, "loadstring(game:HttpGet(" .. string.format("%q", loaderUrl) .. "))()")
+		local ok = pcall(queueFunction, reloadDelay .. "loadstring(game:HttpGet(" .. string.format("%q", loaderUrl) .. "))()")
 		if ok then qolState.ServerNavigation.TeleportQueueArmed = true end
 		if ok then
 			return true
@@ -13954,7 +13954,7 @@ function qolState.ServerNavigation.QueueSelfForTeleport()
 	if not queueFunction or type(source) ~= "string" or #source < 1000 then
 		return false, "The executor teleport queue or self-source is unavailable."
 	end
-	local queuedSource = "local e=(getgenv and getgenv()) or shared;local s="
+	local queuedSource = reloadDelay .. "local e=(getgenv and getgenv()) or shared;local s="
 		.. string.format("%q", source)
 		.. ";e.__GohanHubSource=s;local f,er=loadstring(s);if f then f() else warn('[GohanHub Queue] '..tostring(er)) end"
 	local ok = pcall(queueFunction, queuedSource)

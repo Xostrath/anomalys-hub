@@ -3038,7 +3038,6 @@ local function create(className, properties, parent)
 	end
 	object.Parent = parent
 	if className == "TextButton" and configStore.StyleButton then configStore.StyleButton(object) end
-	if configStore.StyleTypography then configStore.StyleTypography(object) end
 	return object
 end
 
@@ -3158,46 +3157,34 @@ configStore.WindowShadow = create("Frame", {
 	Name = "WindowShadow",
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.new(0.5, 8, 0.5, 10),
-	Size = UDim2.fromOffset(1024, 600 * 1024 / 780),
+	Size = UDim2.fromOffset(780, 600),
 	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
 	BackgroundTransparency = 0.42,
 	BorderSizePixel = 0,
 }, screenGui)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, configStore.WindowShadow)
-configStore.ShadowScale = create("UIScale", {Scale = 780 / 1024}, configStore.WindowShadow)
+configStore.ShadowScale = create("UIScale", {Scale = 1}, configStore.WindowShadow)
 
 local window = create("Frame", {
 	Name = "Window",
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0.5, 0.5),
-	Size = UDim2.fromOffset(1024, 600 * 1024 / 780),
+	Size = UDim2.fromOffset(780, 600),
 	BackgroundColor3 = colors.Background,
 	BorderSizePixel = 0,
 	ClipsDescendants = true,
 	Active = true,
 }, screenGui)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, window)
-create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.05}, window)
-configStore.WindowScale = create("UIScale", {Scale = 780 / 1024}, window)
+create("UIStroke", {Color = colors.AccentSoft, Thickness = 2, Transparency = 0.12}, window)
+-- Flat theme colors preserve the approved light-purple appearance.
+configStore.WindowScale = create("UIScale", {Scale = 1}, window)
 function configStore.UpdateWindowScale()
 	local camera = workspace.CurrentCamera
-	local viewport = camera and camera.ViewportSize or Vector2.new(804, 624)
-	-- Keep the new cards' logical width but restore the original 780 x 600 footprint.
-	local fit = math.clamp(math.min((viewport.X - 24) / 780, (viewport.Y - 24) / 600), 0.01, 1)
-	local scale = (780 / 1024) * fit
+	local viewport = camera and camera.ViewportSize or Vector2.new(780, 600)
+	local scale = math.clamp(math.min((viewport.X - 24) / 780, (viewport.Y - 24) / 600), 0.62, 1)
 	configStore.WindowScale.Scale = scale
 	configStore.ShadowScale.Scale = scale
-	-- A position saved on another viewport must not leave the hub off-screen.
-	local p = window.Position
-	local x = p.X.Scale * viewport.X + p.X.Offset
-	local y = p.Y.Scale * viewport.Y + p.Y.Offset
-	local halfWidth, halfHeight = 390 * fit, 300 * fit
-	if x ~= x or y ~= y or x - halfWidth < 0 or x + halfWidth > viewport.X
-		or y - halfHeight < 0 or y + halfHeight > viewport.Y then
-		window.Position = UDim2.fromScale(0.5, 0.5)
-	end
-	p = window.Position
-	configStore.WindowShadow.Position = UDim2.new(p.X.Scale, p.X.Offset + 8, p.Y.Scale, p.Y.Offset + 10)
 end
 configStore.UpdateWindowScale()
 if workspace.CurrentCamera then
@@ -3206,7 +3193,7 @@ end
 
 configStore.Sidebar = create("Frame", {
 	Name = "Sidebar",
-	Size = UDim2.new(0, 188, 1, 0),
+	Size = UDim2.new(0, 168, 1, 0),
 	BackgroundColor3 = colors.Surface,
 	BorderSizePixel = 0,
 }, window)
@@ -3223,20 +3210,20 @@ create("UICorner", {CornerRadius = UDim.new(0, 8)}, configStore.Sidebar.Mark)
 create("TextLabel", {
 	Name = "Brand", Position = UDim2.fromOffset(62, 15), Size = UDim2.new(1, -76, 0, 22),
 	BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
-	Text = HUB_DISPLAY_NAME,
-	TextColor3 = colors.Text, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+	Text = HUB_DISPLAY_NAME .. " " .. HUB_VERSION .. (isBetaEnvironment and " BETA" or ""),
+	TextColor3 = colors.Text, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
 }, configStore.Sidebar)
 create("TextLabel", {
 	Name = "Version", Position = UDim2.fromOffset(62, 36), Size = UDim2.new(1, -76, 0, 15),
 	BackgroundTransparency = 1, Font = Enum.Font.Code,
-	Text = isBetaEnvironment and "BETA BUILD" or "FREE // PUBLIC",
+	Text = "RELEASE " .. HUB_VERSION .. (isBetaEnvironment and " // BETA" or ""),
 	TextColor3 = colors.Muted, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left,
 }, configStore.Sidebar)
 
 local topBar = create("Frame", {
 	Name = "TopBar",
-	Position = UDim2.fromOffset(188, 0),
-	Size = UDim2.new(1, -188, 0, 72),
+	Position = UDim2.fromOffset(168, 0),
+	Size = UDim2.new(1, -168, 0, 72),
 	BackgroundColor3 = colors.Surface,
 	BorderSizePixel = 0,
 	Active = true,
@@ -3255,20 +3242,19 @@ local windowDragHandle = create("TextButton", {
 
 create("Frame", {
 	Name = "AccentLine",
-	Position = UDim2.new(0, 0, 1, -1),
-	Size = UDim2.new(1, 0, 0, 1),
-	BackgroundColor3 = colors.Stroke,
+	Position = UDim2.new(0, 0, 1, -2),
+	Size = UDim2.new(1, 0, 0, 2),
+	BackgroundColor3 = colors.Accent,
 	BorderSizePixel = 0,
 }, topBar)
-
 configStore.PageTitle = create("TextLabel", {
 	Name = "Title",
 	Position = UDim2.fromOffset(22, 12),
-	Size = UDim2.new(1, -198, 0, 24),
+	Size = UDim2.new(1, -36, 0, 24),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamBold,
 	Text = "FIELD DASHBOARD",
-	TextColor3 = colors.Text,
+	TextColor3 = colors.Accent,
 	TextSize = 17,
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, topBar)
@@ -3294,7 +3280,7 @@ configStore.SignalLabel = create("TextLabel", {
 	Font = Enum.Font.Code,
 	Text = (isBetaEnvironment and "[" .. HUB_VERSION .. " BETA] LINK ACTIVE\n" or "[" .. HUB_VERSION .. "] LINK ACTIVE\n")
 		.. string.upper(currentPlanet),
-	TextColor3 = colors.Accent,
+	TextColor3 = colors.Success,
 	TextSize = 10,
 	TextXAlignment = Enum.TextXAlignment.Right,
 	TextYAlignment = Enum.TextYAlignment.Top,
@@ -3339,8 +3325,8 @@ create("UIListLayout", {
 
 local content = create("Frame", {
 	Name = "Content",
-	Position = UDim2.fromOffset(188, 72),
-	Size = UDim2.new(1, -188, 1, -72),
+	Position = UDim2.fromOffset(168, 72),
+	Size = UDim2.new(1, -168, 1, -72),
 	BackgroundTransparency = 1,
 }, window)
 
@@ -3383,8 +3369,6 @@ function configStore.ApplyTheme(themeName)
 end
 
 function configStore.ResolveSavedTheme(data)
-	-- Migrate the old default; preserve explicit alternative themes and newly
-	-- saved Scouter selections. No existing profile files are rewritten.
 	if data.Theme == "Scouter" and data.AppearanceRevision == nil then return "Lavender" end
 	return type(data.Theme) == "string" and data.Theme or "Lavender"
 end
@@ -7081,7 +7065,7 @@ npcSafety.DirectLight.Card = create("Frame", {
 	BorderSizePixel = 0,
 }, npcPage)
 create("UICorner", {CornerRadius = UDim.new(0, 9)}, npcSafety.DirectLight.Card)
-create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.2}, npcSafety.DirectLight.Card)
+create("UIStroke", {Color = colors.DangerHover, Thickness = 1, Transparency = 0.2}, npcSafety.DirectLight.Card)
 
 create("TextLabel", {
 	Name = "Title",
@@ -7090,7 +7074,7 @@ create("TextLabel", {
 	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamBold,
 	Text = "FAST ATTACK",
-	TextColor3 = colors.Text,
+	TextColor3 = colors.DangerHover,
 	TextSize = 10,
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, npcSafety.DirectLight.Card)
@@ -7130,7 +7114,7 @@ npcSafety.DirectLight.IntervalBox = create("TextBox", {
 	BorderSizePixel = 0,
 	ClearTextOnFocus = false,
 	Font = Enum.Font.GothamSemibold,
-	Text = "0.100",
+	Text = "0.10",
 	TextColor3 = colors.Text,
 	TextSize = 11,
 }, npcSafety.DirectLight.Card)
@@ -11015,28 +10999,8 @@ function npcSafety.GetDirectLightDiagnosticTelemetry()
 	}
 end
 
-function npcSafety.UpdateDirectLightPresentation()
-	local d = npcSafety.DirectLight
-	if not d.PresentationStatus then return end
-	d.PresentationStatus.Text = d.Enabled and (d.Target and ("Target: " .. d.Target.Name) or "Waiting for a safe NPC") or "Fast Attack disabled"
-	d.PresentationPattern.Text = string.format("%d pairs  /  %.3fs swing delay", d.Pairs, d.SwingDelay)
-	d.PresentationResult.Text = d.LastBenchmarkSummary or (d.Score and string.format("Current sample: %.1f damage/sec", d.Score) or "No completed measurement yet")
-	if d.BenchmarkRunning then
-		local index = d.BenchmarkPlan and d.BenchmarkStep or d.BenchmarkLevel
-		local total = d.BenchmarkPlan and #d.BenchmarkPlan or #d.Levels
-		local part = d.BenchmarkCollecting and math.clamp(d.BenchmarkLevelElapsed / d.BenchmarkLevelDuration, 0, 1) or 0
-		d.PresentationProgress.Size = UDim2.fromScale(math.clamp((index - 1 + part) / total, 0, 1), 1)
-		d.PresentationTest.Text = string.format("Sample %d / %d  |  %.3fs interval\n%s", index, total, d.Interval,
-			d.BenchmarkPausedReason or (d.BenchmarkCollecting and "Measuring damage" or "Warming up"))
-	else
-		d.PresentationProgress.Size = UDim2.fromScale(0, 1)
-		d.PresentationTest.Text = "0.100 / 0.075 / 0.050s\n3 rounds | about 41 seconds"
-	end
-end
-
 function npcSafety.UpdateDirectLightTelemetry()
 	local diagnostic = npcSafety.DirectLight
-	npcSafety.UpdateDirectLightPresentation()
 	if not diagnostic.TelemetryLabel then
 		return
 	end
@@ -11907,8 +11871,8 @@ function npcSafety.StartDirectLightDiagnostic()
 	diagnostic.LastHealth = nil
 	diagnostic.LastStopReason = "WAITING FOR NPC"
 	diagnostic.ToggleButton.Text = "Fast Attack: ON"
-	diagnostic.ToggleButton.BackgroundColor3 = colors.Accent
-	diagnostic.ToggleButton.TextColor3 = colors.Background
+	diagnostic.ToggleButton.BackgroundColor3 = colors.DangerHover
+	diagnostic.ToggleButton.TextColor3 = colors.Text
 
 	diagnostic.Connection = RunService.Heartbeat:Connect(function(deltaTime)
 		if not diagnostic.Enabled then
@@ -20212,7 +20176,7 @@ configStore.TabLabels = {
 }
 configStore.PageMeta = {
 	Home={Title="FIELD DASHBOARD",Subtitle="Live server, planet, and connection telemetry"},
-	NPCs={Title="AUTO FARM & COMBAT",Subtitle="Farming, attack timing, safety, selling, and transformations"},
+	NPCs={Title="AUTOMATED FARMING",Subtitle="Target selection, combat safety, selling, and transformations"},
 	TP={Title="TRAVEL NETWORK",Subtitle="Fast routing to stops, landmarks, story NPCs, and players"},
 	Doctor={Title="CHARACTER TELEMETRY",Subtitle="Authoritative combat statistics and condition report"},
 	Otherworld={Title="OTHERWORLD SERVICES",Subtitle="Spirit-world recovery and location services"},
@@ -20489,7 +20453,7 @@ function configStore.Apply(data)
 		local p = data.WindowPosition
 		if type(p.XScale)=="number" and type(p.XOffset)=="number" and type(p.YScale)=="number" and type(p.YOffset)=="number" then
 			window.Position = UDim2.new(p.XScale, p.XOffset, p.YScale, p.YOffset)
-			configStore.UpdateWindowScale()
+			configStore.WindowShadow.Position = UDim2.new(p.XScale, p.XOffset + 8, p.YScale, p.YOffset + 10)
 		end
 	end
 	if type(data.FlightSpeed) == "number" then
@@ -21332,138 +21296,22 @@ end
 
 connect(unloadButton.Activated, controller.Unload)
 
--- Presentation-only reflow. Reuse every existing control and connection;
--- both cards and all their dropdowns remain within the NPCs / Auto Farm page.
-function configStore.InstallFarmPresentation()
-	local function place(object, parent, position, _, size)
-		object.Parent = parent
-		object.AnchorPoint = Vector2.new(0, 0)
-		object.Position = position
-		object.Size = size
-	end
-	local function label(parent, name, text, y, height, size, color)
-		return create("TextLabel", {Name=name, Position=UDim2.fromOffset(16,y), Size=UDim2.new(1,-32,0,height),
-			BackgroundTransparency=1, Font=Enum.Font.Gotham, Text=text, TextColor3=color or colors.Text,
-			TextSize=size or 12, TextWrapped=true, TextXAlignment=Enum.TextXAlignment.Left,
-			TextYAlignment=Enum.TextYAlignment.Top}, parent)
-	end
-	local farm = create("Frame", {Name="FarmingControls", Position=UDim2.fromOffset(16,66),
-		Size=UDim2.new(0.5,-24,0,500), BackgroundColor3=colors.SurfaceRaised, BorderSizePixel=0}, npcPage)
-	create("UICorner", {CornerRadius=UDim.new(0,10)}, farm)
-	create("UIStroke", {Color=colors.Stroke, Thickness=1}, farm)
-	label(farm,"Title","NPC farming",16,24,14).Size = UDim2.new(1,-178,0,24)
-	place(npcToggleButton,farm,UDim2.new(1,-160,0,12),nil,UDim2.fromOffset(144,32))
-	place(npcSelectorCard,farm,UDim2.fromOffset(14,56),nil,UDim2.new(1,-28,0,82))
-	npcSelectorCard.BackgroundTransparency = 1
-	npcSelectorCard:FindFirstChildOfClass("UIStroke").Transparency = 1
-	npcSelectorCard.Label.Position = UDim2.fromOffset(0,0)
-	npcSelectorButton.Position = UDim2.fromOffset(0,25)
-	npcSelectorButton.Size = UDim2.new(1,-86,0,36)
-	npcRefreshButton.Position = UDim2.new(1,0,0,25)
-	npcRefreshButton.Size = UDim2.fromOffset(78,36)
-	npcRefreshButton.Text = "Refresh"
-	place(npcSafety.BelowModeButton,farm,UDim2.fromOffset(14,152),nil,UDim2.new(0.333,-13,0,36))
-	place(npcSafety.AboveModeButton,farm,UDim2.new(0.333,5,0,152),nil,UDim2.new(0.333,-13,0,36))
-	place(npcSafety.FrontBehindModeButton,farm,UDim2.new(0.666,-4,0,152),nil,UDim2.new(0.334,-10,0,36))
-	place(npcSafety.SellItemsButton,farm,UDim2.fromOffset(14,206),nil,UDim2.fromOffset(88,32))
-	place(autoTransformState.SelectorButton,farm,UDim2.fromOffset(112,206),nil,UDim2.new(1,-126,0,32))
-	place(autoTransformState.ToggleButton,farm,UDim2.fromOffset(14,246),nil,UDim2.new(1,-28,0,32))
-	place(npcStatusLabel,farm,UDim2.fromOffset(14,450),nil,UDim2.new(1,-28,0,38))
-	place(npcSafety.Card,farm,UDim2.fromOffset(14,292),nil,UDim2.new(1,-28,0,142))
-	npcSafety.DetailsLabel.TextWrapped = true
-	npcSafety.DetailsLabel.Size = UDim2.new(1,-28,0,28)
-	npcSafety.Card.PlayerRangeLabel.Position = UDim2.fromOffset(12,36)
-	npcSafety.Card.PlayerRangeLabel.Size = UDim2.new(0.5,-18,0,18)
-	npcSafety.Card.PlayerRangeLabel.Text = "Player range (studs)"
-	npcSafety.PlayerRangeBox.Position = UDim2.fromOffset(12,56)
-	npcSafety.PlayerRangeBox.Size = UDim2.new(0.5,-18,0,28)
-	npcSafety.Card.PanicHealthLabel.Position = UDim2.new(0.5,6,0,36)
-	npcSafety.Card.PanicHealthLabel.Size = UDim2.new(0.5,-18,0,18)
-	npcSafety.PanicHealthBox.Position = UDim2.new(0.5,6,0,56)
-	npcSafety.PanicHealthBox.Size = UDim2.new(0.5,-18,0,28)
-	npcSafety.ServerHopButton.Position = UDim2.fromOffset(12,102)
-	npcSafety.ServerHopButton.Size = UDim2.new(0.5,-18,0,28)
-	npcSafety.ChestLootButton.Position = UDim2.new(0.5,6,0,102)
-	npcSafety.ChestLootButton.Size = UDim2.new(0.5,-18,0,28)
-	-- Dropdowns are kept above sibling cards, and all positions are local.
-	place(npcDropdownList,farm,UDim2.fromOffset(14,120),nil,UDim2.new(1,-114,0,182))
-	place(autoTransformState.Dropdown,farm,UDim2.fromOffset(112,242),nil,UDim2.new(1,-126,0,184))
-	local d = npcSafety.DirectLight
-	d.Card.Position = UDim2.new(0.5,8,0,66)
-	d.Card.Size = UDim2.new(0.5,-24,0,500)
-	d.Card.Title.Position = UDim2.fromOffset(16,16)
-	d.Card.Title.Size = UDim2.new(1,-178,0,24)
-	d.Card.Title.Text = "Fast Attack"
-	d.Card.Title.TextSize = 14
-	place(d.ToggleButton,d.Card,UDim2.new(1,-160,0,12),nil,UDim2.fromOffset(144,32))
-	d.Card.IntervalLabel.Position = UDim2.fromOffset(16,68)
-	d.Card.IntervalLabel.Size = UDim2.new(1,-32,0,18)
-	d.IntervalBox.Position = UDim2.fromOffset(16,94)
-	d.IntervalBox.Size = UDim2.new(0.5,-24,0,36)
-	d.PresentationPattern = label(d.Card,"Pattern","",141,22,11,colors.Muted)
-	label(d.Card,"TestHeading","Interval test",186,22,13)
-	d.PresentationTest = label(d.Card,"TestStatus","",215,46,11,colors.Muted)
-	place(d.BenchmarkButton,d.Card,UDim2.new(0.5,6,0,94),nil,UDim2.new(0.5,-22,0,36))
-	d.BenchmarkButton.TextSize = 11
-	local track = create("Frame", {Name="TestProgress", Position=UDim2.fromOffset(16,274),
-		Size=UDim2.new(1,-32,0,4), BackgroundColor3=colors.Surface, BorderSizePixel=0}, d.Card)
-	d.PresentationProgress = create("Frame", {Name="Fill", Size=UDim2.fromScale(0,1), BackgroundColor3=colors.Accent, BorderSizePixel=0}, track)
-	label(d.Card,"ResultHeading","MEASURED RESULT",299,18,10,colors.Muted)
-	d.PresentationResult = label(d.Card,"Result","",324,66,13)
-	d.PresentationStatus = label(d.Card,"Activity","Fast Attack disabled",470,20,10,colors.Muted)
-	d.DiagnosticsOpen = false
-	d.DiagnosticsButton = create("TextButton", {Name="Diagnostics", Position=UDim2.fromOffset(16,412),
-		Size=UDim2.new(0.5,-24,0,30), BackgroundColor3=colors.Surface, BorderSizePixel=0, AutoButtonColor=false,
-		Font=Enum.Font.GothamMedium, Text="Diagnostics +", TextColor3=colors.Muted, TextSize=11}, d.Card)
-	place(d.RecordButton,d.Card,UDim2.new(0.5,6,0,412),nil,UDim2.new(0.5,-22,0,30))
-	d.TelemetryLabel.Position = UDim2.fromOffset(16,454)
-	d.TelemetryLabel.Size = UDim2.new(1,-32,0,116)
-	d.TelemetryLabel.TextSize = 10
-	d.TelemetryLabel.Visible = false
-	npcSafety.SaibamanSpawner.Card.Position = UDim2.fromOffset(16,582)
-	connect(d.DiagnosticsButton.Activated,function()
-		d.DiagnosticsOpen = not d.DiagnosticsOpen
-		d.TelemetryLabel.Visible = d.DiagnosticsOpen
-		d.DiagnosticsButton.Text = d.DiagnosticsOpen and "Diagnostics -" or "Diagnostics +"
-		d.Card.Size = UDim2.new(0.5,-24,0,d.DiagnosticsOpen and 618 or 500)
-		d.PresentationStatus.Position = UDim2.fromOffset(16,d.DiagnosticsOpen and 588 or 470)
-		npcSafety.SaibamanSpawner.Card.Position = UDim2.fromOffset(16,d.DiagnosticsOpen and 700 or 582)
-	end)
-	npcPage.Heading.Text = "AUTO FARM & COMBAT"
-	npcPage.Subtitle.Text = "Farming and combat controls stay together. Each card keeps its own status and settings."
-	npcSafety.UpdateDirectLightPresentation()
-end
-configStore.InstallFarmPresentation()
-
-function configStore.StyleTypography(object)
-	if not (object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox"))
-		or not object:IsDescendantOf(screenGui) then return end
-	local font = object.Font
-	local heading = object.Name == "Heading" or object.Name == "Title" or object.Name == "Brand"
-	local bold = heading or font == Enum.Font.GothamBold or font == Enum.Font.GothamBlack
-		or font == Enum.Font.BuilderSansBold or font == Enum.Font.BuilderSansExtraBold
-	object.Font = bold and Enum.Font.BuilderSansBold or Enum.Font.BuilderSansMedium
-	-- Idempotent sizing: preserve compact rows and do not enlarge the window/cards.
-	local originalSize = object:GetAttribute("HubOriginalTextSize") or object.TextSize
-	object:SetAttribute("HubOriginalTextSize", originalSize)
-	local targetSize = math.max(originalSize, heading and 16 or 14)
-	if object.Size.Y.Scale == 0 and object.Size.Y.Offset > 0 then
-		targetSize = math.max(originalSize, math.min(targetSize, object.Size.Y.Offset - 2))
-	end
-	object.TextSize = targetSize
-end
-
 function configStore.PolishInterface()
 	for _, object in ipairs(screenGui:GetDescendants()) do
-		configStore.StyleTypography(object)
 		if object:IsA("Frame") and object ~= window and object ~= configStore.Sidebar and object ~= topBar then
-			local stroke = object:FindFirstChildOfClass("UIStroke")
-			if stroke and stroke.Transparency < 1 then stroke.Transparency = 0.2 end
+			-- Keep the classic accent rails without tinting the lavender surfaces.
+			local title = object:FindFirstChild("Title")
+			if title and title:IsA("TextLabel") and not object:FindFirstChild("AccentRail") then
+				create("Frame", {
+					Name = "AccentRail", Position = UDim2.fromOffset(0, 10), Size = UDim2.fromOffset(3, 24),
+					BackgroundColor3 = colors.Accent, BorderSizePixel = 0,
+				}, object)
+			end
 		elseif object:IsA("TextButton") and not object:FindFirstChildOfClass("UIStroke") then
 			create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.45}, object)
 		end
 		if object:IsA("TextLabel") and object.Name == "Heading" then
-			object.Font = Enum.Font.BuilderSansBold
+			object.Font = Enum.Font.Code
 			object.TextColor3 = colors.Accent
 		end
 	end

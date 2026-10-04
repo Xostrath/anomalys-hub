@@ -8364,9 +8364,60 @@ qolState.ServerNavigation.AutoBlockButton=create("TextButton",{
 create("UICorner",{CornerRadius=UDim.new(0,6)},qolState.ServerNavigation.AutoBlockButton)
 create("UIStroke",{Color=colors.AccentSoft,Thickness=1,Transparency=0.2},qolState.ServerNavigation.AutoBlockButton)
 
+configStore.RemoteInspector = {Active = false, Watching = false, Entries = {}, ByObject = {}, Incoming = {},
+	Stats = {}, Samples = {}, Count = 0, MaxRemotes = 2000, MaxCalls = 10000, MaxSamples = 1000}
+do
+	local inspector = configStore.RemoteInspector
+	inspector.Card = create("Frame", {
+		Name = "RemoteInspector", LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 308),
+		BackgroundColor3 = colors.SurfaceRaised, BorderSizePixel = 0,
+	}, configStore.List)
+	create("UICorner", {CornerRadius = UDim.new(0, 9)}, inspector.Card)
+	create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.35}, inspector.Card)
+	create("TextLabel", {
+		Position = UDim2.fromOffset(14, 8), Size = UDim2.new(1, -28, 0, 20), BackgroundTransparency = 1,
+		Font = Enum.Font.GothamSemibold, Text = "DEVELOPER // REMOTE INSPECTOR", TextColor3 = colors.Accent,
+		TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+	}, inspector.Card)
+	create("TextLabel", {
+		Position = UDim2.fromOffset(14, 30), Size = UDim2.new(1, -28, 0, 30), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, Text = "Observe only; no replay. Turn automations off, record ONE normal action. Local reports may contain game data.",
+		TextColor3 = colors.Muted, TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+	}, inspector.Card)
+	inspector.LabelBox = create("TextBox", {
+		Position = UDim2.fromOffset(14, 64), Size = UDim2.new(1, -28, 0, 28), BackgroundColor3 = colors.Surface,
+		BorderSizePixel = 0, Font = Enum.Font.Gotham, Text = "", PlaceholderText = "Action label, e.g. equip skill / accept quest",
+		PlaceholderColor3 = colors.Muted, TextColor3 = colors.Text, TextSize = 11, ClearTextOnFocus = false,
+	}, inspector.Card)
+	create("UICorner", {CornerRadius = UDim.new(0, 5)}, inspector.LabelBox)
+	for index, definition in ipairs({{"ScanButton", "SCAN REMOTES"}, {"RecordButton", "RECORD ACTION"}, {"CopyButton", "COPY REPORT"}}) do
+		local button = create("TextButton", {
+			Position = UDim2.new((index - 1) / 3, 14 - (index - 1) * 3, 0, 100), Size = UDim2.new(1 / 3, -12, 0, 30),
+			BackgroundColor3 = colors.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+			Font = Enum.Font.GothamSemibold, Text = definition[2], TextColor3 = colors.Text, TextSize = 10,
+		}, inspector.Card)
+		create("UICorner", {CornerRadius = UDim.new(0, 5)}, button)
+		inspector[definition[1]] = button
+	end
+	inspector.StatusLabel = create("TextLabel", {
+		Position = UDim2.fromOffset(14, 136), Size = UDim2.new(1, -28, 0, 36), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, Text = "OFF // Scan to inventory client-visible remotes. Record stops after 60s.",
+		TextColor3 = colors.Muted, TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+	}, inspector.Card)
+	inspector.Scroll = create("ScrollingFrame", {
+		Position = UDim2.fromOffset(14, 178), Size = UDim2.new(1, -28, 0, 116), BackgroundColor3 = colors.Surface,
+		BorderSizePixel = 0, ScrollBarThickness = 4, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	}, inspector.Card)
+	inspector.Preview = create("TextLabel", {
+		Position = UDim2.fromOffset(6, 4), Size = UDim2.new(1, -16, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1, Font = Enum.Font.Code, Text = "No scan yet.", TextColor3 = colors.Muted,
+		TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+	}, inspector.Scroll)
+end
+
 local unloadButton = create("TextButton", {
 	Name = "Unload",
-	LayoutOrder = 5,
+	LayoutOrder = 6,
 	Size = UDim2.new(1, 0, 0, 44),
 	AutoButtonColor = false,
 	BackgroundColor3 = colors.Danger,
@@ -11386,6 +11437,276 @@ function npcSafety.StartDirectLightDiagnostic()
 	return true
 end
 
+-- Observation-only inspector. Never invokes remotes or replaces game callbacks.
+function configStore.RemoteInspector.Status(message)
+	configStore.RemoteInspector.StatusLabel.Text = message
+end
+
+function configStore.RemoteInspector.Text(value, limit)
+	return (tostring(value):sub(1, limit or 160):gsub("[%c]", " "))
+end
+
+function configStore.RemoteInspector.Sample(value, depth, seen, budget, key)
+	local inspector = configStore.RemoteInspector
+	depth, seen, budget = depth or 0, seen or {}, budget or {Left = 60}
+	if type(key) == "string" then
+		local lower = key:sub(1, 100):lower()
+		for _, secret in ipairs({"token", "password", "secret", "authorization", "cookie", "webhook", "api_key", "apikey"}) do
+			if lower:find(secret, 1, true) then return "<redacted>" end
+		end
+		if lower == "auth" then return "<redacted>" end
+	end
+	budget.Left -= 1
+	if budget.Left < 0 then return "<budget>" end
+	local kind = typeof(value)
+	if kind == "table" then
+		if seen[value] then return "table(<cycle>)" end
+		if depth >= 3 then return "table(<depth limit>)" end
+		seen[value] = true
+		local parts, count = {}, 0
+		for field, item in next, value do
+			count += 1
+			if count > 12 or budget.Left <= 0 then table.insert(parts, "..."); break end
+			table.insert(parts, inspector.Sample(field, depth + 1, seen, budget) .. "="
+				.. inspector.Sample(item, depth + 1, seen, budget, field))
+		end
+		seen[value] = nil
+		return "table{" .. table.concat(parts, ", ") .. "}"
+	elseif kind == "Instance" then
+		return "Instance(" .. inspector.Text(value:GetFullName(), 160) .. " [" .. value.ClassName .. "])"
+	elseif kind == "string" then
+		local text = value:sub(1, 256)
+		if text:lower():find("https?://") then return "string(<URL redacted>)" end
+		return "string(" .. string.format("%q", inspector.Text(text, 96)) .. (#value > 96 and "..." or "") .. ")"
+	elseif kind == "function" or kind == "thread" or kind == "userdata" then
+		return "<" .. kind .. ">"
+	end
+	return kind .. "(" .. inspector.Text(value, 160) .. ")"
+end
+
+function configStore.RemoteInspector.Listen(remote)
+	local inspector = configStore.RemoteInspector
+	if not inspector.Active or inspector.Incoming[remote] or remote:IsA("RemoteFunction") then return end
+	local ok, connection = pcall(function()
+		return remote.OnClientEvent:Connect(function(...)
+			pcall(inspector.Observe, remote, "IN OnClientEvent", table.pack(...))
+		end)
+	end)
+	if ok then inspector.Incoming[remote] = connection end
+end
+
+function configStore.RemoteInspector.Add(remote)
+	local inspector = configStore.RemoteInspector
+	if inspector.ByObject[remote] then return inspector.ByObject[remote] end
+	if not (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") or remote:IsA("UnreliableRemoteEvent")) then return end
+	if #inspector.Entries >= inspector.MaxRemotes then inspector.InventoryCapped = true; return end
+	local entry = {Id = #inspector.Entries + 1, Path = inspector.Text(remote:GetFullName(), 256),
+		Class = remote.ClassName, Present = true}
+	inspector.ByObject[remote] = entry
+	table.insert(inspector.Entries, entry)
+	inspector.InventoryDirty = true
+	inspector.Listen(remote)
+	return entry
+end
+
+function configStore.RemoteInspector.Remove(remote)
+	local inspector = configStore.RemoteInspector
+	local entry = inspector.ByObject[remote]
+	if entry then entry.Present = false; inspector.ByObject[remote] = nil; inspector.InventoryDirty = true end
+	local connection = inspector.Incoming[remote]
+	if connection then connection:Disconnect(); inspector.Incoming[remote] = nil end
+end
+
+function configStore.RemoteInspector.Inventory()
+	local inspector = configStore.RemoteInspector
+	local lines = {"CLIENT-VISIBLE REMOTE INVENTORY // place=" .. tostring(game.PlaceId),
+		"IDs distinguish duplicate paths. [removed] entries remain as history. Paths are bounded to 256 characters.",
+		"Not a server-wide inventory; no remotes are called by scanning."}
+	for _, entry in ipairs(inspector.Entries) do
+		table.insert(lines, string.format("#%d [%s] %s%s", entry.Id, entry.Class, entry.Path, entry.Present and "" or " [removed]"))
+	end
+	if inspector.InventoryCapped then table.insert(lines, "TRUNCATED: 2000 remote entries reached; scan again when idle for a fresh snapshot.") end
+	return table.concat(lines, "\n")
+end
+
+function configStore.RemoteInspector.Write(path, body)
+	local inspector = configStore.RemoteInspector
+	local writer = environment.writefile or (type(writefile) == "function" and writefile)
+	if type(writer) ~= "function" then inspector.SaveError = "No file support; use COPY REPORT"; return false end
+	local ok = pcall(function()
+		if not configStore.EnsureFolders() then error("folder support missing") end
+		writer(path, body)
+	end)
+	inspector.SaveError = not ok and "File save failed; use COPY REPORT" or nil
+	return ok
+end
+
+function configStore.RemoteInspector.RefreshInventory()
+	local inspector = configStore.RemoteInspector
+	local preview = {}
+	for index, entry in ipairs(inspector.Entries) do
+		if index > 100 then table.insert(preview, "... full inventory in report"); break end
+		table.insert(preview, string.format("#%d [%s] %s%s", entry.Id, entry.Class, entry.Path, entry.Present and "" or " [removed]"))
+	end
+	inspector.Preview.Text = #preview > 0 and table.concat(preview, "\n") or "No client-visible remotes found."
+	inspector.Write(configStore.Root .. "/remote_inventory.txt", inspector.Inventory())
+	inspector.InventoryDirty = false
+end
+
+function configStore.RemoteInspector.Scan()
+	local inspector = configStore.RemoteInspector
+	if inspector.Active or inspector.Scanning then inspector.Status("Stop the recording before rescanning."); return false end
+	inspector.Scanning = true
+	inspector.Status("Scanning client-visible objects...")
+	table.clear(inspector.ByObject); table.clear(inspector.Entries)
+	inspector.InventoryCapped, inspector.LastReport = false, nil
+	if not inspector.Watching then
+		inspector.Watching = true
+		inspector.AddedConnection = game.DescendantAdded:Connect(function(object)
+			if not unloaded then pcall(inspector.Add, object) end
+		end)
+		inspector.RemovedConnection = game.DescendantRemoving:Connect(function(object) inspector.Remove(object) end)
+	end
+	local ok = pcall(function()
+		for index, object in ipairs(game:GetDescendants()) do
+			if unloaded or not inspector.Watching then return end
+			if object:IsDescendantOf(game) then inspector.Add(object) end
+			if index % 500 == 0 then task.wait() end
+		end
+	end)
+	inspector.Scanning = false
+	if unloaded or not inspector.Watching then return false end
+	inspector.RefreshInventory()
+	inspector.Status((ok and "WATCHING // " or "PARTIAL SCAN // ") .. #inspector.Entries
+		.. " remotes. " .. (inspector.SaveError or "Inventory saved in GohanHub/remote_inventory.txt"))
+	return ok
+end
+
+function configStore.RemoteInspector.Observe(remote, method, args)
+	local inspector = configStore.RemoteInspector
+	if not inspector.Active or unloaded or os.clock() >= inspector.Until then return end
+	if inspector.Count >= inspector.MaxCalls then inspector.LimitReached = true; return end
+	inspector.Count += 1
+	if inspector.Count >= inspector.MaxCalls then inspector.LimitReached = true end
+	local entry = inspector.ByObject[remote] or inspector.Add(remote)
+	if not entry then inspector.Skipped += 1; return end
+	local key = entry.Id .. " " .. method
+	local stat = inspector.Stats[key]
+	if not stat then stat = {Entry = entry, Method = method, Count = 0, Samples = 0}; inspector.Stats[key] = stat end
+	stat.Count += 1
+	if stat.Samples >= 5 or #inspector.Samples >= inspector.MaxSamples then return end
+	stat.Samples += 1
+	local parts, budget = {}, {Left = 60}
+	for index = 1, math.min(args.n, 12) do
+		parts[index] = inspector.Sample(args[index], 0, {}, budget)
+	end
+	if args.n > 12 then table.insert(parts, "<remaining arguments omitted>") end
+	table.insert(inspector.Samples, string.format("[+%.3fs] #%d %s argc=%d (%s)",
+		os.clock() - inspector.StartedAt, entry.Id, method, args.n, table.concat(parts, ", ")):sub(1, 2048))
+end
+
+function configStore.RemoteInspector.Report(reason)
+	local inspector = configStore.RemoteInspector
+	local lines = {"REMOTE ACTION REPORT v1 // " .. inspector.Label,
+		"place=" .. tostring(game.PlaceId) .. " session=" .. inspector.SessionId,
+		string.format("duration=%.2fs status=%s observed=%d skipped=%d", (inspector.StoppedAt or os.clock()) - inspector.StartedAt,
+			reason or "recording", inspector.Count, inspector.Skipped),
+		"Outgoing: " .. inspector.OutgoingStatus,
+		"Incoming: RemoteEvent/UnreliableRemoteEvent only. RemoteFunction callbacks and return values are NOT intercepted.",
+		"Namecall capture may miss direct method calls. Counts are observations, NOT proof of server acceptance.",
+		"Samples: first 5 per remote/direction/method; max 1000 total, 12 args, depth 3, 2048 bytes/line.",
+		"Common secret fields and URLs redacted; review game data before sharing. No calls replayed or altered.",
+		"", "CALL COUNTS:"}
+	local keys = {}; for key in pairs(inspector.Stats) do table.insert(keys, key) end; table.sort(keys)
+	for _, key in ipairs(keys) do
+		local stat = inspector.Stats[key]
+		table.insert(lines, string.format("#%d %s count=%d sampled=%d %s", stat.Entry.Id, stat.Method, stat.Count, stat.Samples, stat.Entry.Path))
+	end
+	table.insert(lines, "\nTIMESTAMPED SAMPLES:")
+	for _, sample in ipairs(inspector.Samples) do table.insert(lines, sample) end
+	table.insert(lines, "\n" .. inspector.Inventory())
+	return table.concat(lines, "\n")
+end
+
+function configStore.RemoteInspector.Save(reason)
+	local inspector = configStore.RemoteInspector
+	inspector.LastReport = inspector.Report(reason)
+	local archived = inspector.Write(inspector.SessionFile, inspector.LastReport)
+	local latest = inspector.Write(configStore.Root .. "/remote_action_latest.txt", inspector.LastReport)
+	if not archived or not latest then inspector.SaveError = "Some reports could not be saved; use COPY REPORT" end
+end
+
+function configStore.RemoteInspector.Stop(reason)
+	local inspector = configStore.RemoteInspector
+	if not inspector.Active then return end
+	inspector.Active, inspector.StoppedAt = false, os.clock()
+	for remote, connection in pairs(inspector.Incoming) do connection:Disconnect(); inspector.Incoming[remote] = nil end
+	inspector.Save(reason or "stopped manually")
+	inspector.RecordButton.Text = "RECORD ACTION"
+	inspector.Status("STOPPED // " .. inspector.Count .. " calls. " .. (inspector.SaveError or inspector.SessionFile))
+end
+
+function configStore.RemoteInspector.Start()
+	local inspector = configStore.RemoteInspector
+	if inspector.Active then inspector.Stop(); return end
+	if inspector.Scanning then inspector.Status("Wait for the scan to finish."); return end
+	if not inspector.Watching and not inspector.Scan() then return end
+	if unloaded then return end
+	local ok, installed = pcall(npcSafety.RemoteSpy.Install)
+	local hasCaller = type(environment.checkcaller) == "function" or type(checkcaller) == "function"
+	inspector.OutgoingStatus = ok and installed and (hasCaller and "game namecalls; executor calls excluded"
+		or "namecalls; checkcaller unavailable, may include hub/executor calls") or "UNAVAILABLE: executor hook support missing/failed"
+	inspector.Label = inspector.Text(inspector.LabelBox.Text ~= "" and inspector.LabelBox.Text or "unlabeled action", 80)
+	inspector.SessionId = tostring(os.time()) .. "_" .. HttpService:GenerateGUID(false):gsub("[^%w]", ""):sub(1, 12)
+	inspector.SessionFile = configStore.Root .. "/remote_action_" .. inspector.SessionId .. ".txt"
+	inspector.Stats, inspector.Samples = {}, {}
+	inspector.Count, inspector.Skipped, inspector.LimitReached = 0, 0, false
+	inspector.StartedAt, inspector.StoppedAt, inspector.LastSaveAt = os.clock(), nil, os.clock()
+	inspector.Until, inspector.Active = inspector.StartedAt + 60, true
+	for remote in pairs(inspector.ByObject) do inspector.Listen(remote) end
+	inspector.RecordButton.Text = "STOP + SAVE"
+	inspector.Save("recording")
+	inspector.Status("RECORDING // " .. inspector.OutgoingStatus .. ". Do one normal action, then STOP + SAVE.")
+end
+
+function configStore.RemoteInspector.Update()
+	local inspector = configStore.RemoteInspector
+	if unloaded or inspector.Scanning or not inspector.Watching then return end
+	local now = os.clock()
+	if now - (inspector.LastUpdateAt or 0) < 1 then return end
+	inspector.LastUpdateAt = now
+	if inspector.InventoryDirty then inspector.RefreshInventory() end
+	if inspector.Active then
+		if now >= inspector.Until or inspector.LimitReached then
+			inspector.Stop(inspector.LimitReached and "10000 call limit reached" or "60 second time limit")
+		else
+			inspector.Status(string.format("REC %ds // %d calls // %s%s", math.ceil(inspector.Until - now), inspector.Count,
+				inspector.OutgoingStatus, inspector.SaveError and " // " .. inspector.SaveError or ""))
+			if now - inspector.LastSaveAt >= 2 then inspector.LastSaveAt = now; inspector.Save("recording") end
+		end
+	end
+end
+
+function configStore.RemoteInspector.Cleanup()
+	local inspector = configStore.RemoteInspector
+	inspector.Stop("hub unloaded")
+	inspector.Watching = false
+	if inspector.AddedConnection then inspector.AddedConnection:Disconnect() end
+	if inspector.RemovedConnection then inspector.RemovedConnection:Disconnect() end
+	table.clear(inspector.ByObject)
+end
+
+connect(configStore.RemoteInspector.ScanButton.Activated, configStore.RemoteInspector.Scan)
+connect(configStore.RemoteInspector.RecordButton.Activated, configStore.RemoteInspector.Start)
+connect(configStore.RemoteInspector.CopyButton.Activated, function()
+	local inspector = configStore.RemoteInspector
+	local copy = environment.setclipboard or (type(setclipboard) == "function" and setclipboard)
+	local body = inspector.Active and inspector.Report("recording snapshot") or inspector.LastReport or inspector.Inventory()
+	if type(copy) == "function" and pcall(copy, body) then inspector.Status("Report copied. Review it before sharing.")
+	else inspector.Status("Clipboard unavailable; reports are in the executor workspace's GohanHub folder.") end
+end)
+connect(RunService.Heartbeat, configStore.RemoteInspector.Update)
+
 -- Records the game's own outgoing remote calls for a short window so the Fast
 -- Attack payload can be matched to whatever the current client sends on M1.
 npcSafety.RemoteSpy = {Active = false, Until = 0, Lines = {}, File = configStore.Root .. "/remote_log.txt", Count = 0}
@@ -11443,12 +11764,19 @@ function npcSafety.RemoteSpy.Install()
 	end
 	local original
 	original = hook(game, "__namecall", wrap(function(self, ...)
-		if spy.Active and not unloaded then
-			local method = getMethod()
-			if (method == "FireServer" or method == "InvokeServer") and typeof(self) == "Instance"
-				and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction") or self:IsA("UnreliableRemoteEvent"))
-				and not (type(isExecutor) == "function" and isExecutor()) then
-				pcall(spy.Record, self, method, table.pack(...))
+		local inspector = configStore.RemoteInspector
+		if (spy.Active or inspector.Active) and not unloaded then
+			-- Instrumentation must never prevent the original call or change its returns.
+			local methodOk, method = pcall(getMethod)
+			if methodOk and (method == "FireServer" or method == "InvokeServer") and typeof(self) == "Instance" then
+				local args = table.pack(...)
+				pcall(function()
+					if (self:IsA("RemoteEvent") or self:IsA("RemoteFunction") or self:IsA("UnreliableRemoteEvent"))
+						and not (type(isExecutor) == "function" and isExecutor()) then
+						if spy.Active then pcall(spy.Record, self, method, args) end
+						if inspector.Active then pcall(inspector.Observe, self, "OUT " .. method, args) end
+					end
+				end)
 			end
 		end
 		return original(self, ...)
@@ -19122,6 +19450,7 @@ function controller.Unload()
 		configStore.Session.StopWatchingTarget()
 		configStore.Session.Save()
 	end)
+	step("remote inspector", configStore.RemoteInspector.Cleanup)
 	step("remote spy", npcSafety.RemoteSpy.Uninstall)
 	step("nearby alert", function()
 		configStore.NearbyAlert.Enabled = false

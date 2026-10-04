@@ -8366,10 +8366,11 @@ create("UIStroke",{Color=colors.AccentSoft,Thickness=1,Transparency=0.2},qolStat
 
 configStore.RemoteInspector = {Active = false, Watching = false, Entries = {}, ByObject = {}, Incoming = {},
 	Stats = {}, Samples = {}, Count = 0, MaxRemotes = 2000, MaxCalls = 10000, MaxSamples = 1000}
+configStore.SkillProbe = {Busy = false, Serial = 0, Target = "Behind you"}
 do
 	local inspector = configStore.RemoteInspector
 	inspector.Card = create("Frame", {
-		Name = "RemoteInspector", LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 308),
+		Name = "RemoteInspector", LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 386),
 		BackgroundColor3 = colors.SurfaceRaised, BorderSizePixel = 0,
 	}, configStore.List)
 	create("UICorner", {CornerRadius = UDim.new(0, 9)}, inspector.Card)
@@ -8414,6 +8415,17 @@ do
 		BackgroundTransparency = 1, Font = Enum.Font.Code, Text = "No scan yet.", TextColor3 = colors.Muted,
 		TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
 	}, inspector.Scroll)
+	configStore.SkillProbe.Button = create("TextButton", {
+		Name = "BehindYouProbe", Position = UDim2.fromOffset(14, 306), Size = UDim2.new(1, -28, 0, 30),
+		BackgroundColor3 = colors.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+		Font = Enum.Font.GothamSemibold, Text = "TEST EQUIP: BEHIND YOU (ONCE)", TextColor3 = colors.Text, TextSize = 11,
+	}, inspector.Card)
+	create("UICorner", {CornerRadius = UDim.new(0, 5)}, configStore.SkillProbe.Button)
+	configStore.SkillProbe.Status = create("TextLabel", {
+		Position = UDim2.fromOffset(14, 340), Size = UDim2.new(1, -28, 0, 36), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, Text = "One selection request only. May change selected tool; no hotbar edits, style changes, purchases or casting.",
+		TextColor3 = colors.Muted, TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+	}, inspector.Card)
 end
 
 local unloadButton = create("TextButton", {
@@ -11931,6 +11943,211 @@ function configStore.RemoteInspector.StopMission()
 	table.clear(mission.Nodes); table.clear(mission.Roots); table.clear(mission.Npcs)
 end
 
+-- One explicitly requested skill-selection experiment, not an unlock-all action.
+function configStore.SkillProbe.Matches(name)
+	return type(name) == "string" and name:lower():gsub("[^%w]", "") == "behindyou"
+end
+
+function configStore.SkillProbe.Log(text)
+	local probe = configStore.SkillProbe
+	if #probe.Lines < 180 then table.insert(probe.Lines, text:sub(1, 2048)) end
+end
+
+function configStore.SkillProbe.Save()
+	local probe, inspector = configStore.SkillProbe, configStore.RemoteInspector
+	probe.Report = table.concat(probe.Lines, "\n")
+	inspector.LastReport = probe.Report
+	local archived = inspector.Write(probe.File, probe.Report)
+	local latest = inspector.Write(configStore.Root .. "/skill_probe_latest.txt", probe.Report)
+	return archived and latest
+end
+
+function configStore.SkillProbe.Alive(serial)
+	local probe = configStore.SkillProbe
+	return not unloaded and probe.Busy and probe.Serial == serial
+end
+
+function configStore.SkillProbe.ReadStat(serial, ...)
+	local probe = configStore.SkillProbe
+	local args, result = table.pack(...), nil
+	local worker = task.spawn(function() result = table.pack(pcall(statRetrieveRemote.InvokeServer, statRetrieveRemote, table.unpack(args, 1, args.n))) end)
+	table.insert(probe.Workers, worker)
+	local deadline = os.clock() + 4
+	while not result and probe.Alive(serial) and os.clock() < deadline do task.wait(0.05) end
+	if not result then pcall(task.cancel, worker); return false, "read timed out or canceled" end
+	return result[1], result[2]
+end
+
+function configStore.SkillProbe.Ownership(serial, name, phase)
+	local probe = configStore.SkillProbe
+	for _, category in ipairs({"SkillStat", "Skill Stat"}) do
+		if not probe.Alive(serial) then return "unknown" end
+		local ok, value = probe.ReadStat(serial, name, category)
+		if not probe.Alive(serial) then return "unknown" end
+		probe.Log(phase .. " " .. category .. " ok=" .. tostring(ok) .. " value=" .. configStore.RemoteInspector.Sample(value))
+		if ok and type(value) == "table" and type(value.Unlocked) == "boolean" then return tostring(value.Unlocked) end
+	end
+	return "unknown"
+end
+
+function configStore.SkillProbe.Equipped()
+	local character = localPlayer.Character
+	for _, object in ipairs(character and character:GetChildren() or {}) do
+		if object:IsA("Tool") and configStore.SkillProbe.Matches(object.Name) then return object end
+	end
+	return nil
+end
+
+function configStore.SkillProbe.Snapshot(phase)
+	local probe, inspector = configStore.SkillProbe, configStore.RemoteInspector
+	for _, name in ipairs({"Backpack", "Character"}) do
+		local root = name == "Character" and localPlayer.Character or localPlayer:FindFirstChild(name)
+		for _, object in ipairs(root and root:GetChildren() or {}) do
+			if object:IsA("Tool") then
+				probe.Log(phase .. " " .. name .. " TOOL " .. inspector.Text(object.Name) .. " attrs=" .. inspector.MissionAttributes(object))
+			end
+		end
+	end
+	local stats = localPlayer:FindFirstChild("PlayerStats")
+	local count = 0
+	for _, object in ipairs(stats and stats:GetDescendants() or {}) do
+		local lower = object.Name:lower()
+		if object:IsA("ValueBase") and (lower:find("skill", 1, true) or lower:find("style", 1, true)
+			or lower:find("equip", 1, true) or lower:find("tool", 1, true) or lower:find("combat", 1, true)) then
+			probe.Log(phase .. " LOCAL STAT " .. inspector.Text(object:GetFullName(), 256) .. "=" .. inspector.Sample(object.Value))
+			count += 1; if count >= 40 then break end
+		end
+	end
+end
+
+function configStore.SkillProbe.FindName(serial)
+	local probe, inspector = configStore.SkillProbe, configStore.RemoteInspector
+	local names, scripts = {}, {}
+	local function add(name, rank, path)
+		if not probe.Matches(name) then return end
+		names[name] = math.min(names[name] or 100, rank)
+		probe.Log("NAME CANDIDATE " .. inspector.Sample(name) .. " rank=" .. rank .. " path=" .. inspector.Text(path, 256))
+	end
+	local backpack = localPlayer:FindFirstChild("Backpack")
+	for _, root in pairs({localPlayer.Character, backpack}) do
+		for _, object in ipairs(root:GetChildren()) do if object:IsA("Tool") then add(object.Name, 1, object:GetFullName()) end end
+	end
+	for _, object in ipairs(playerGui:GetDescendants()) do
+		if (object:IsA("TextLabel") or object:IsA("TextButton")) and not object:IsDescendantOf(screenGui) then
+			local text = object.Text:match("^%s*(.-)%s*$")
+			add(text, 2, object:GetFullName())
+		end
+	end
+	local modules = ReplicatedStorage:FindFirstChild("Modules")
+	for index, object in ipairs(modules and modules:GetDescendants() or {}) do
+		if not probe.Alive(serial) then return nil, nil, "canceled" end
+		if object:IsA("ModuleScript") and probe.Matches(object.Name) then
+			add(object.Name, 3, object:GetFullName()); table.insert(scripts, object)
+		end
+		if index % 500 == 0 then task.wait() end
+	end
+	local best, rank, ambiguous = nil, 100, false
+	for name, priority in pairs(names) do
+		if priority < rank then best, rank, ambiguous = name, priority, false
+		elseif priority == rank and name ~= best then ambiguous = true end
+	end
+	if ambiguous then return nil, scripts, "conflicting names found; no equip request sent" end
+	-- Don't cycle guessed spellings against the server; inspect a real named object first.
+	if not best then return nil, scripts, "no matching skill object found; no equip request sent" end
+	return best, scripts
+end
+
+function configStore.SkillProbe.Run(serial)
+	local probe, inspector = configStore.SkillProbe, configStore.RemoteInspector
+	local name, scripts, reason = probe.FindName(serial)
+	if not probe.Alive(serial) then return end
+	if not name then probe.Log(reason); probe.Status.Text = reason; probe.Save(); return end
+	probe.Log("SELECTED NAME " .. inspector.Sample(name) .. "; client names alone do not prove server ownership")
+	probe.Snapshot("BEFORE")
+	local styleOk, style = probe.ReadStat(serial, "CombatType")
+	if not probe.Alive(serial) then return end
+	probe.Log("BEFORE CombatType ok=" .. tostring(styleOk) .. " value=" .. inspector.Sample(style))
+	local before = probe.Ownership(serial, name, "BEFORE")
+	if not probe.Alive(serial) then return end
+	probe.Status.Text = "Checking one equip request; ownership before: " .. before
+	if not probe.Save() then probe.Status.Text = "Could not save baseline; no equip request sent. Use COPY REPORT."; return end
+	if not probe.Alive(serial) then return end
+	if probe.Equipped() then
+		probe.Log("ALREADY EQUIPPED: no equip request needed")
+	else
+		local remote = remotes:FindFirstChild("InventoryRemote")
+		if not remote or not remote:IsA("RemoteEvent") then
+			probe.Log("InventoryRemote missing; no request sent"); probe.Status.Text = "InventoryRemote missing; no request sent."; probe.Save(); return
+		end
+		-- This is the observed selection payload. No Set/slot, purchase, unlock, style, or activation request.
+		probe.Sent = true
+		local ok, err = pcall(remote.FireServer, remote, {Action = "Equip", ToolName = name})
+		probe.Log("ONE EQUIP REQUEST sent=" .. tostring(ok) .. " error=" .. (ok and "none" or inspector.Sample(err)))
+		local untilTime = os.clock() + 3
+		while probe.Alive(serial) and os.clock() < untilTime and not probe.Equipped() do task.wait(0.1) end
+	end
+	if not probe.Alive(serial) then return end
+	local after = probe.Ownership(serial, name, "AFTER")
+	if not probe.Alive(serial) then return end
+	local afterStyleOk, afterStyle = probe.ReadStat(serial, "CombatType")
+	if not probe.Alive(serial) then return end
+	probe.Log("AFTER CombatType ok=" .. tostring(afterStyleOk) .. " value=" .. inspector.Sample(afterStyle))
+	probe.Snapshot("AFTER")
+	local equipped = probe.Equipped() ~= nil
+	probe.Log("RESULT ownership_before=" .. before .. " ownership_after=" .. after .. " Tool_in_character=" .. tostring(equipped))
+	probe.Log("Casting NOT tested. Tool presence is not proof of usable or permanent unlock; absence may mean a custom non-Tool inventory.")
+	probe.Status.Text = (equipped and "Behind you Tool observed. " or "No equipped Tool observed (inconclusive). ")
+		.. "Ownership: " .. before .. " -> " .. after .. ". Casting not tested."
+	probe.Save()
+	-- Save the exact matching client skill module if supported; never require or execute it.
+	local decompiler = environment.decompile or (type(decompile) == "function" and decompile)
+	if scripts and scripts[1] and type(decompiler) == "function" then
+		local ok, source = pcall(decompiler, scripts[1])
+		if not probe.Alive(serial) then return end
+		if ok and type(source) == "string" and #source <= 300000 then
+			local file = configStore.Root .. "/skill_probe_" .. probe.Id .. "_source.lua"
+			if inspector.Write(file, source) then probe.Log("CLIENT SOURCE " .. inspector.Text(scripts[1]:GetFullName(), 256) .. " -> " .. file) end
+		else probe.Log("Matching client source unavailable or over 300KB limit") end
+		probe.Save()
+	end
+end
+
+function configStore.SkillProbe.Cancel()
+	local probe = configStore.SkillProbe
+	if not probe.Busy then return end
+	probe.Serial += 1; probe.Busy = false
+	if probe.Thread then pcall(task.cancel, probe.Thread) end
+	for _, worker in ipairs(probe.Workers or {}) do pcall(task.cancel, worker) end
+	probe.Log("CANCELED; an equip request already sent is not undone")
+	probe.Save()
+	probe.Button.Text = "TEST EQUIP: BEHIND YOU (ONCE)"
+	probe.Status.Text = "Stopped. Any already-sent equip request is not undone."
+end
+
+function configStore.SkillProbe.Start()
+	local probe = configStore.SkillProbe
+	if probe.Busy then probe.Cancel(); return end
+	if configStore.RemoteInspector.Active then probe.Status.Text = "Stop the active recording before running this separate test."; return end
+	probe.Serial += 1; probe.Busy = true; probe.Sent = false; probe.Workers = {}
+	local serial = probe.Serial
+	probe.Id = tostring(os.time()) .. "_" .. HttpService:GenerateGUID(false):gsub("[^%w]", ""):sub(1, 12)
+	probe.File = configStore.Root .. "/skill_probe_" .. probe.Id .. ".txt"
+	probe.Lines = {"BEHIND YOU // ONE-SHOT EQUIP PROBE v1", "place=" .. tostring(game.PlaceId),
+		"Observed InventoryRemote Equip payload only. No hotbar changes, purchases, style edits, unlock-all or casting."}
+	probe.Button.Text = "CANCEL BEHIND YOU TEST"
+	probe.Status.Text = "Locating the skill and reading ownership/style..."
+	probe.Thread = task.spawn(function()
+		local ok, err = pcall(probe.Run, serial)
+		if not probe.Alive(serial) then return end
+		if not ok then probe.Log("ERROR " .. configStore.RemoteInspector.Text(err, 500)); probe.Status.Text = "Test interrupted; see COPY REPORT." end
+		probe.Save()
+		probe.Busy = false
+		probe.Button.Text = "TEST EQUIP: BEHIND YOU (ONCE)"
+	end)
+	table.insert(scheduledThreads, probe.Thread)
+end
+
+connect(configStore.SkillProbe.Button.Activated, configStore.SkillProbe.Start)
 connect(configStore.RemoteInspector.ScanButton.Activated, configStore.RemoteInspector.Scan)
 connect(configStore.RemoteInspector.RecordButton.Activated, configStore.RemoteInspector.Start)
 connect(configStore.RemoteInspector.MissionButton.Activated, function() configStore.RemoteInspector.Start("mission") end)
@@ -19736,6 +19953,7 @@ function controller.Unload()
 		configStore.Session.StopWatchingTarget()
 		configStore.Session.Save()
 	end)
+	step("skill probe", configStore.SkillProbe.Cancel)
 	step("remote inspector", configStore.RemoteInspector.Cleanup)
 	step("remote spy", npcSafety.RemoteSpy.Uninstall)
 	step("nearby alert", function()

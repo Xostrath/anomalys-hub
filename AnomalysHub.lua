@@ -8442,12 +8442,12 @@ do
 	configStore.SkillDiscovery.Button = create("TextButton", {
 		Name = "SkillDiscovery", Position = UDim2.fromOffset(14, 386), Size = UDim2.new(1, -28, 0, 30),
 		BackgroundColor3 = colors.Surface, BorderSizePixel = 0, AutoButtonColor = false,
-		Font = Enum.Font.GothamSemibold, Text = "SCAN SKILL DATA (READ ONLY)", TextColor3 = colors.Text, TextSize = 11,
+		Font = Enum.Font.GothamSemibold, Text = "CAPTURE 3 SKILL SCRIPTS (READ ONLY)", TextColor3 = colors.Text, TextSize = 11,
 	}, inspector.Card)
 	create("UICorner", {CornerRadius = UDim.new(0, 5)}, configStore.SkillDiscovery.Button)
 	configStore.SkillDiscovery.Status = create("TextLabel", {
 		Position = UDim2.fromOffset(14, 420), Size = UDim2.new(1, -28, 0, 42), BackgroundTransparency = 1,
-		Font = Enum.Font.Gotham, Text = "Open the skill menu first. Finds Behind You / Hidden Power references; no equip or unlock requests.",
+		Font = Enum.Font.Gotham, Text = "Captures only SkillController, Inventory and SkillData. No equip, cast or unlock requests.",
 		TextColor3 = colors.Muted, TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
 	}, inspector.Card)
 end
@@ -12240,12 +12240,22 @@ function configStore.SkillDiscovery.Save()
 	inspector.LastReport = scan.Report
 	inspector.Preview.Text = scan.Report:sub(1, 6000)
 	local archived = inspector.Write(scan.File, scan.Report)
-	local latest = inspector.Write(configStore.Root .. "/skill_discovery_latest.txt", scan.Report)
+	local latestName = scan.Mode == "capture" and "/skill_capture_latest.txt" or "/skill_discovery_latest.txt"
+	local latest = inspector.Write(configStore.Root .. latestName, scan.Report)
+	if scan.Mode == "capture" and (not archived or not latest or scan.CaptureSaved < scan.CaptureRead) then
+		-- If disk writes fail, COPY REPORT retains every returned source in memory.
+		local copy = {scan.Report, "\nFULL CLIENT SOURCES // copy fallback; do not execute"}
+		for _, entry in ipairs(scan.CaptureSources or {}) do
+			table.insert(copy, "\n--- " .. entry.Path .. " ---\n" .. entry.Source)
+		end
+		inspector.LastReport = table.concat(copy, "\n")
+	end
 	return archived and latest
 end
 
-function configStore.SkillDiscovery.ReadSource(object, serial)
+function configStore.SkillDiscovery.ReadSource(object, serial, options)
 	local scan = configStore.SkillDiscovery
+	options = options or {}
 	local result
 	scan.Worker = task.spawn(function()
 		local ok, source = pcall(function() return object.Source end)
@@ -12254,13 +12264,13 @@ function configStore.SkillDiscovery.ReadSource(object, serial)
 		if type(decompiler) ~= "function" then result = {false, "source/decompiler unavailable"}; return end
 		result = table.pack(pcall(decompiler, object))
 	end)
-	local deadline = math.min(scan.Deadline, os.clock() + 2)
+	local deadline = math.min(scan.Deadline, os.clock() + (options.Timeout or 2))
 	while not result and scan.Alive(serial) and os.clock() < deadline do task.wait(0.05) end
 	if not result then pcall(task.cancel, scan.Worker) end
 	scan.Worker = nil
 	if not result then return nil, "source read timed out or canceled" end
 	if not result[1] or type(result[2]) ~= "string" then return nil, "source unavailable" end
-	if #result[2] > 512000 then return nil, "source exceeds 512KB scan limit" end
+	if #result[2] > (options.MaxBytes or 512000) then return nil, "source exceeds " .. tostring(options.MaxBytes or 512000) .. " byte limit (not truncated)" end
 	local lower = result[2]:lower()
 	if lower:match("^%s*$") or lower:find("failed to decompile", 1, true)
 		or lower:find("decompilation failed", 1, true) then return nil, "empty/failed decompiler output" end
@@ -12419,9 +12429,9 @@ function configStore.SkillDiscovery.Cancel()
 	if scan.Worker then pcall(task.cancel, scan.Worker); scan.Worker = nil end
 	if scan.Thread then pcall(task.cancel, scan.Thread); scan.Thread = nil end
 	scan.Log("CANCELED: partial read-only report")
-	scan.Summary = "CANCELED: partial read-only scan; source-page coverage incomplete."
+	scan.Summary = "CANCELED: partial read-only capture/scan; already saved files are retained."
 	local saved = scan.Save()
-	scan.Button.Text = "SCAN SKILL DATA (READ ONLY)"
+	scan.Button.Text = "CAPTURE 3 SKILL SCRIPTS (READ ONLY)"
 	scan.Status.Text = saved and "Stopped; partial report saved." or "Stopped; file save failed. Use COPY REPORT."
 end
 
@@ -12432,6 +12442,7 @@ function configStore.SkillDiscovery.Start()
 		scan.Status.Text = "Stop the equip test / recording before starting this separate scan."; return
 	end
 	scan.Serial += 1; scan.Busy = true; scan.Matches = 0; scan.Objects = 0; scan.Sources = 0; scan.ReadErrors = 0
+	scan.Mode = "scan"; scan.CaptureSources = nil
 	scan.TargetObjectRefs = 0; scan.TargetSourceRefs = 0; scan.HandlerExcerpts = 0; scan.HasMoreSources = false
 	scan.Summary = nil
 	scan.ObjectLimited = false; scan.SourceLimited = false; scan.ReportLimited = false
@@ -12451,7 +12462,7 @@ function configStore.SkillDiscovery.Start()
 		if not scan.Alive(serial) then return end
 		if not ok then scan.Log("ERROR " .. tostring(err)) end
 		local saved = scan.Save()
-		scan.Busy = false; scan.Button.Text = "SCAN SKILL DATA (READ ONLY)"
+		scan.Busy = false; scan.Button.Text = "CAPTURE 3 SKILL SCRIPTS (READ ONLY)"
 		scan.Status.Text = (ok and ("Scan finished: " .. scan.Matches .. " references. ") or "Scan interrupted. ")
 			.. (saved and "Saved skill_discovery_latest.txt." or "File save failed; use COPY REPORT.")
 			.. (scan.HasMoreSources and " Run again for the next source page." or "")
@@ -12459,7 +12470,94 @@ function configStore.SkillDiscovery.Start()
 	table.insert(scheduledThreads, scan.Thread)
 end
 
-connect(configStore.SkillDiscovery.Button.Activated, configStore.SkillDiscovery.Start)
+function configStore.SkillDiscovery.ResolveCapturePath(root, segments)
+	local object = root
+	for _, name in ipairs(segments) do
+		if not object then return nil, "missing parent for " .. name end
+		local match
+		for _, child in ipairs(object:GetChildren()) do
+			if child.Name == name then
+				if match then return nil, "ambiguous duplicate child " .. name end
+				match = child
+			end
+		end
+		if not match then return nil, "missing child " .. name end
+		object = match
+	end
+	if not object or not (object:IsA("ModuleScript") or object:IsA("LocalScript")) then
+		return nil, "expected a client ModuleScript or LocalScript"
+	end
+	return object
+end
+
+function configStore.SkillDiscovery.RunCapture(serial)
+	local scan = configStore.SkillDiscovery
+	-- Exact paths observed in the user's report; no recursive fallback, guessed
+	-- module execution, or unrelated admin/source-tree enumeration.
+	local targets = {
+		{Key="SkillController", Root=localPlayer, Segments={"PlayerScripts", "Client", "SkillController"}},
+		{Key="Inventory", Root=playerGui, Segments={"HUD", "Inventory", "Inventory"}},
+		{Key="SkillData", Root=ReplicatedStorage, Segments={"Modules", "Metadata", "SkillData", "SkillData"}},
+	}
+	for _, target in ipairs(targets) do
+		if not scan.Alive(serial) then return end
+		scan.Status.Text = "Reading " .. target.Key .. " only; no game requests sent..."
+		local object, reason = scan.ResolveCapturePath(target.Root, target.Segments)
+		if not object then scan.Log("MISSING " .. target.Key .. " // " .. tostring(reason))
+		elseif os.clock() >= scan.Deadline then scan.Log("SKIPPED " .. target.Key .. " // capture deadline reached")
+		else
+			local source, readError = scan.ReadSource(object, serial, {Timeout=5, MaxBytes=2000000})
+			if not scan.Alive(serial) then return end
+			if not source then scan.Log("UNAVAILABLE " .. target.Key .. " // " .. tostring(readError))
+			else
+				local path = object:GetFullName()
+				local file = scan.File:gsub("%.txt$", "_" .. target.Key .. ".lua")
+				scan.CaptureRead += 1
+				table.insert(scan.CaptureSources, {Path=path, Source=source, File=file})
+				-- Save the complete returned source verbatim, never just excerpts.
+				local saved = configStore.RemoteInspector.Write(file, source)
+				if saved then scan.CaptureSaved += 1 end
+				scan.Log((saved and "SAVED " or "SAVE FAILED ") .. target.Key .. " bytes=" .. #source .. " path=" .. path)
+				scan.Log("  FILE " .. file)
+			end
+		end
+		scan.Save()
+	end
+	scan.Summary = string.format("RESULT readable=%d/3 saved=%d/3. Full returned client sources only; decompilation may be imperfect. Server validation is not captured.",
+		scan.CaptureRead, scan.CaptureSaved)
+end
+
+function configStore.SkillDiscovery.StartCapture()
+	local scan = configStore.SkillDiscovery
+	if scan.Busy then scan.Cancel(); return end
+	if configStore.SkillProbe.Busy or configStore.RemoteInspector.Active then
+		scan.Status.Text = "Stop the equip test / recording before capturing these scripts."; return
+	end
+	scan.Serial += 1; scan.Busy = true; scan.Mode = "capture"; scan.ReportLimited = false; scan.Summary = nil
+	scan.CaptureRead = 0; scan.CaptureSaved = 0; scan.CaptureSources = {}; scan.HasMoreSources = false
+	scan.Deadline = os.clock() + 20
+	scan.File = configStore.Root .. "/skill_capture_" .. tostring(os.time()) .. "_"
+		.. HttpService:GenerateGUID(false):gsub("[^%w]", ""):sub(1, 12) .. ".txt"
+	scan.Lines = {"SKILL CAPTURE // READ ONLY v3 EXACT", "place=" .. tostring(game.PlaceId),
+		"Exactly three observed client paths: SkillController, HUD.Inventory.Inventory, Metadata.SkillData.SkillData.",
+		"No remotes, equip/cast/purchase/unlock requests, require, execution, or recursive/admin scans.",
+		"Full returned source, not excerpts. Max 2MB per file and 5s per source (20s total); oversized/unavailable files are reported, not silently truncated.",
+		"A decompiler can omit or misrepresent code. Client checks cannot establish server ownership/style validation."}
+	scan.Button.Text = "CANCEL SCRIPT CAPTURE"
+	local serial = scan.Serial
+	scan.Thread = task.spawn(function()
+		local ok, err = pcall(scan.RunCapture, serial)
+		if not scan.Alive(serial) then return end
+		if not ok then scan.Log("ERROR " .. tostring(err)); scan.Summary = "Capture interrupted; results are partial." end
+		local saved = scan.Save()
+		scan.Busy = false; scan.Button.Text = "CAPTURE 3 SKILL SCRIPTS (READ ONLY)"
+		scan.Status.Text = string.format("Captured %d/3; saved %d/3. ", scan.CaptureRead, scan.CaptureSaved)
+			.. ((saved and scan.CaptureSaved == scan.CaptureRead) and "See skill_capture_latest.txt." or "Save failed; COPY REPORT includes available sources.")
+	end)
+	table.insert(scheduledThreads, scan.Thread)
+end
+
+connect(configStore.SkillDiscovery.Button.Activated, configStore.SkillDiscovery.StartCapture)
 connect(configStore.RemoteInspector.ScanButton.Activated, configStore.RemoteInspector.Scan)
 connect(configStore.RemoteInspector.RecordButton.Activated, configStore.RemoteInspector.Start)
 connect(configStore.RemoteInspector.MissionButton.Activated, function() configStore.RemoteInspector.Start("mission") end)

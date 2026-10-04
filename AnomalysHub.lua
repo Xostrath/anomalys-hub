@@ -18323,9 +18323,33 @@ function configStore.BodyRing.Release()
 	end
 end
 
+-- Own these short-lived connections separately from the hub's permanent ones.
+function configStore.BodyRing.WatchSpin(spin)
+	local body = configStore.BodyRing
+	if body.WatchedSpin == spin then return end
+	if body.RotationConnection then body.RotationConnection:Disconnect() end
+	if body.VisibilityConnection then body.VisibilityConnection:Disconnect() end
+	body.RotationConnection, body.VisibilityConnection = nil, nil
+	body.WatchedSpin, body.Sample, body.State = spin, nil, nil
+	body.Release()
+	if not spin then return end
+	body.RotationConnection = spin:GetPropertyChangedSignal("Rotation"):Connect(function()
+		if body.Enabled and not unloaded and body.WatchedSpin == spin then body.Update() end
+	end)
+	body.VisibilityConnection = spin:GetPropertyChangedSignal("Visible"):Connect(function()
+		-- A check can reuse the same arc. Observe its hidden phase even when it
+		-- falls between two render polls; don't read stale rotation on showing.
+		if body.WatchedSpin == spin and not spin.Visible then
+			body.State, body.Sample = nil, nil
+			body.Release()
+		end
+	end)
+end
+
 function configStore.BodyRing.SetEnabled(enabled)
 	local body = configStore.BodyRing
 	body.Release()
+	body.WatchSpin(nil)
 	body.Enabled = enabled == true
 	body.State = nil
 	body.Button.Text = body.Enabled and "Auto Body Ring: ON" or "Auto Body Ring: OFF"
@@ -18343,6 +18367,7 @@ function configStore.BodyRing.Update()
 	local card = root and root:FindFirstChild("Card")
 	local ring = card and card:FindFirstChild("Ring")
 	if card and card:FindFirstChild("Board") then
+		body.WatchSpin(nil)
 		body.State = nil
 		body.Release()
 		return
@@ -18351,21 +18376,23 @@ function configStore.BodyRing.Update()
 	local arc = ring and ring:FindFirstChild("Arc")
 	local note = card and card:FindFirstChild("Note")
 	if not card or not card:IsA("GuiObject") or not isGuiVisible(card) then
+		body.WatchSpin(nil)
 		body.State = nil
 		body.Release()
 		return
 	end
+	body.WatchSpin(spin and spin:IsA("GuiObject") and spin or nil)
 	local status = note and note:IsA("TextLabel") and string.upper(note.Text) or ""
 	if not spin or not spin:IsA("GuiObject") or not isGuiVisible(spin) or not arc
 		or string.find(status, "GET READY", 1, true) or string.find(status, "WON", 1, true)
-		or string.find(status, "LOST", 1, true) then
-		body.State = nil
+		or string.find(status, "LOST", 1, true) or status == "HIT" or status == "MISSED" then
+		body.State, body.Sample = nil, nil
 		body.Release()
 		configStore.AutoClash.SetStatus("BODY RING // " .. (status ~= "" and status or "WAITING FOR NEEDLE"), colors.Muted)
 		return
 	end
 	if activeTrainingButton or UserInputService:GetFocusedTextBox() then
-		body.State = nil
+		body.State, body.Sample = nil, nil
 		body.Release()
 		configStore.AutoClash.SetStatus("BODY RING // PAUSED FOR TRAINING OR TEXT INPUT", colors.Muted)
 		return
@@ -18378,6 +18405,8 @@ function configStore.BodyRing.Update()
 	end
 	local center, width = body.ArcWindow(angles)
 	if not center then
+		body.State, body.Sample = nil, nil
+		body.Release()
 		configStore.AutoClash.SetStatus("BODY RING // WAITING FOR TARGET ARC", colors.Muted)
 		return
 	end
@@ -18388,18 +18417,22 @@ function configStore.BodyRing.Update()
 		body.State = state
 	end
 	local angle = spin.Rotation % 360
-	local elapsed = state.SampleAt and now - state.SampleAt or 0
-	local speed = elapsed > 0 and elapsed <= 0.12 and body.AngleDelta(angle, state.Angle) / elapsed or nil
-	state.Angle, state.SampleAt = angle, now
-	-- Press on the first sampled arc boundary, with no inward padding.
-	-- No reaction timer: both the observed and projected angles must be inside,
-	-- so prediction cannot fire early or queue an input after the window closes.
+	local sample = body.Sample
+	local elapsed = sample and now - sample.At or 0
+	local moved = sample and body.AngleDelta(angle, sample.Angle) ~= 0
+	local speed = moved and elapsed > 0 and elapsed <= 0.12
+		and body.AngleDelta(angle, sample.Angle) / elapsed or nil
+	-- Render polling must not replace an unchanged movement sample just before
+	-- the game's rotation signal arrives (which would inflate measured speed).
+	if not sample or moved then body.Sample = {Angle = angle, At = now} end
+	-- React to the actual rotation update, not the following render poll. No
+	-- speculative pre-boundary input or projected-angle veto of a valid hit.
 	local halfWindow = width / 2
-	local predicted = angle + (speed or 0) * math.min(elapsed * 0.5, 0.016)
 	local inside = math.abs(body.AngleDelta(angle, center)) <= halfWindow
-		and math.abs(body.AngleDelta(predicted, center)) <= halfWindow
 	if not state.Pressed and not body.KeyHeld and speed
 		and math.abs(speed) >= 1 and math.abs(speed) <= 1440 and inside then
+		-- Reserve before dispatch so synchronous input side effects cannot send twice.
+		state.Pressed = true
 		local ok = pcall(VirtualInputManager.SendKeyEvent, VirtualInputManager, true, Enum.KeyCode.Space, false, game)
 		if ok then
 			state.Pressed = true

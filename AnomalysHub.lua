@@ -8379,10 +8379,11 @@ create("UIStroke",{Color=colors.AccentSoft,Thickness=1,Transparency=0.2},qolStat
 configStore.RemoteInspector = {Active = false, Watching = false, Entries = {}, ByObject = {}, Incoming = {},
 	Stats = {}, Samples = {}, Count = 0, MaxRemotes = 2000, MaxCalls = 10000, MaxSamples = 1000}
 configStore.SkillProbe = {Busy = false, Serial = 0, Target = "Behind you"}
+configStore.SkillDiscovery = {Busy = false, Serial = 0}
 do
 	local inspector = configStore.RemoteInspector
 	inspector.Card = create("Frame", {
-		Name = "RemoteInspector", LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 386),
+		Name = "RemoteInspector", LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 472),
 		BackgroundColor3 = colors.SurfaceRaised, BorderSizePixel = 0,
 	}, configStore.List)
 	create("UICorner", {CornerRadius = UDim.new(0, 9)}, inspector.Card)
@@ -8436,6 +8437,17 @@ do
 	configStore.SkillProbe.Status = create("TextLabel", {
 		Position = UDim2.fromOffset(14, 340), Size = UDim2.new(1, -28, 0, 36), BackgroundTransparency = 1,
 		Font = Enum.Font.Gotham, Text = "One selection request only. May change selected tool; no hotbar edits, style changes, purchases or casting.",
+		TextColor3 = colors.Muted, TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+	}, inspector.Card)
+	configStore.SkillDiscovery.Button = create("TextButton", {
+		Name = "SkillDiscovery", Position = UDim2.fromOffset(14, 386), Size = UDim2.new(1, -28, 0, 30),
+		BackgroundColor3 = colors.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+		Font = Enum.Font.GothamSemibold, Text = "SCAN SKILL DATA (READ ONLY)", TextColor3 = colors.Text, TextSize = 11,
+	}, inspector.Card)
+	create("UICorner", {CornerRadius = UDim.new(0, 5)}, configStore.SkillDiscovery.Button)
+	configStore.SkillDiscovery.Status = create("TextLabel", {
+		Position = UDim2.fromOffset(14, 420), Size = UDim2.new(1, -28, 0, 42), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, Text = "Open the skill menu first. Finds Behind You / Hidden Power references; no equip or unlock requests.",
 		TextColor3 = colors.Muted, TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
 	}, inspector.Card)
 end
@@ -12144,6 +12156,7 @@ end
 function configStore.SkillProbe.Start()
 	local probe = configStore.SkillProbe
 	if probe.Busy then probe.Cancel(); return end
+	if configStore.SkillDiscovery and configStore.SkillDiscovery.Busy then probe.Status.Text = "Wait for the read-only scan to finish."; return end
 	if configStore.RemoteInspector.Active then probe.Status.Text = "Stop the active recording before running this separate test."; return end
 	probe.Serial += 1; probe.Busy = true; probe.Sent = false; probe.Workers = {}
 	local serial = probe.Serial
@@ -12165,6 +12178,194 @@ function configStore.SkillProbe.Start()
 end
 
 connect(configStore.SkillProbe.Button.Activated, configStore.SkillProbe.Start)
+
+-- Read-only discovery. Never require a module, inspect arbitrary runtime memory,
+-- invoke remotes, or pass a discovered string into the separate equip probe.
+function configStore.SkillDiscovery.Match(value)
+	if type(value) ~= "string" then return nil end
+	local plain = value:gsub("<[^>]*>", ""):lower():gsub("[^%w]", "")
+	if plain:find("behindyou", 1, true) then return "TARGET" end
+	if plain:find("hiddenpower", 1, true) then return "REFERENCE" end
+	if plain:find("behind", 1, true) then return "RELATED" end
+	return nil
+end
+
+function configStore.SkillDiscovery.Alive(serial)
+	local scan = configStore.SkillDiscovery
+	return not unloaded and scan.Busy and scan.Serial == serial
+end
+
+function configStore.SkillDiscovery.Log(text)
+	local scan = configStore.SkillDiscovery
+	if #scan.Lines < 320 then
+		table.insert(scan.Lines, configStore.RemoteInspector.Text(text, 900))
+	else scan.ReportLimited = true end
+end
+
+function configStore.SkillDiscovery.Save()
+	local scan, inspector = configStore.SkillDiscovery, configStore.RemoteInspector
+	scan.Report = table.concat(scan.Lines, "\n")
+	if scan.ReportLimited then scan.Report ..= "\nREPORT LIMIT REACHED: additional observations omitted." end
+	inspector.LastReport = scan.Report
+	inspector.Preview.Text = scan.Report:sub(1, 6000)
+	local archived = inspector.Write(scan.File, scan.Report)
+	local latest = inspector.Write(configStore.Root .. "/skill_discovery_latest.txt", scan.Report)
+	return archived and latest
+end
+
+function configStore.SkillDiscovery.ReadSource(object, serial)
+	local scan = configStore.SkillDiscovery
+	local result
+	scan.Worker = task.spawn(function()
+		local ok, source = pcall(function() return object.Source end)
+		if ok and type(source) == "string" and source ~= "" then result = {true, source}; return end
+		local decompiler = environment.decompile or (type(decompile) == "function" and decompile)
+		if type(decompiler) ~= "function" then result = {false, "source/decompiler unavailable"}; return end
+		result = table.pack(pcall(decompiler, object))
+	end)
+	local deadline = math.min(scan.Deadline, os.clock() + 2)
+	while not result and scan.Alive(serial) and os.clock() < deadline do task.wait(0.05) end
+	if not result then pcall(task.cancel, scan.Worker) end
+	scan.Worker = nil
+	if not result then return nil, "source read timed out or canceled" end
+	if not result[1] or type(result[2]) ~= "string" then return nil, "source unavailable" end
+	if #result[2] > 512000 then return nil, "source exceeds 512KB scan limit" end
+	return result[2]
+end
+
+function configStore.SkillDiscovery.Run(serial)
+	local scan = configStore.SkillDiscovery
+	local queue, seen, modules = {}, {}, {}
+	local function add(object)
+		if not object or seen[object] then return end
+		if #queue >= 25000 then scan.ObjectLimited = true; return end
+		seen[object] = true; table.insert(queue, object)
+	end
+	add(localPlayer); add(playerGui); add(localPlayer.Character); add(ReplicatedStorage)
+	local cursor = 1
+	while cursor <= #queue and scan.Alive(serial) and os.clock() < scan.Deadline do
+		local object = queue[cursor]; cursor += 1
+		local ok = pcall(function()
+			if object == screenGui or object:IsDescendantOf(screenGui) then return end
+			local path = object:GetFullName()
+			local matched = false
+			local function inspect(label, value)
+				local kind = scan.Match(value)
+				if kind then
+					scan.Matches += 1; matched = true
+					scan.Log(kind .. " " .. path .. " [" .. object.ClassName .. "] " .. label .. "=" .. tostring(value))
+				end
+			end
+			inspect("Name", object.Name)
+			if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then inspect("Text", object.Text) end
+			if object:IsA("StringValue") then inspect("Value", object.Value) end
+			local attributes = object:GetAttributes()
+			for key, value in pairs(attributes) do inspect("attribute-key", key); inspect("attribute:" .. key, value) end
+			if matched then
+				local count = 0
+				for key, value in pairs(attributes) do
+					count += 1; if count > 12 then scan.Log("Attribute context truncated"); break end
+					scan.Log("  CONTEXT " .. tostring(key) .. "=" .. tostring(value))
+				end
+				-- Sibling values often hold an internal ID beside a display name.
+				local parent = object.Parent
+				for index, sibling in ipairs(parent and parent:GetChildren() or {}) do
+					if index > 30 then scan.Log("Sibling context truncated"); break end
+					if sibling:IsA("StringValue") or sibling:IsA("IntValue") or sibling:IsA("NumberValue") then
+						scan.Log("  SIBLING " .. sibling.Name .. "=" .. tostring(sibling.Value))
+					end
+				end
+			end
+			if object:IsA("ModuleScript") then
+				local lower = path:lower()
+				local rank = scan.Match(object.Name) and 0
+					or ((lower:find("skill") or lower:find("style") or lower:find("abilit") or lower:find("moves")) and 1)
+					or ((lower:find("combat") or lower:find("data") or lower:find("inventory")) and 2)
+				if rank then table.insert(modules, {Object=object, Path=path, Rank=rank}) end
+			end
+			for _, child in ipairs(object:GetChildren()) do add(child) end
+		end)
+		if not ok then scan.ReadErrors += 1 end
+		scan.Objects += 1
+		if cursor % 100 == 0 then task.wait() end
+	end
+	if not scan.Alive(serial) then return end
+	scan.ObjectLimited = scan.ObjectLimited or cursor <= #queue
+	table.sort(modules, function(a,b) return a.Rank < b.Rank or (a.Rank == b.Rank and a.Path < b.Path) end)
+	scan.Log(string.format("OBJECTS scanned=%d capped=%s read_errors=%d source_candidates=%d", scan.Objects,
+		tostring(scan.ObjectLimited), scan.ReadErrors, #modules))
+	for index, entry in ipairs(modules) do
+		if not scan.Alive(serial) then return end
+		if index > 24 or os.clock() >= scan.Deadline then scan.SourceLimited = true; break end
+		scan.Sources += 1
+		local source, reason = scan.ReadSource(entry.Object, serial)
+		if not scan.Alive(serial) then return end
+		if not source then scan.Log("SOURCE SKIPPED " .. entry.Path .. " // " .. tostring(reason))
+		else
+			local lines, hits = {}, {}
+			for line in (source .. "\n"):gmatch("(.-)\n") do
+				table.insert(lines, line)
+				if scan.Match(line) then table.insert(hits, #lines) end
+			end
+			scan.Log("SOURCE " .. entry.Path .. " references=" .. #hits)
+			local written = {}
+			for hitIndex, lineNumber in ipairs(hits) do
+				if hitIndex > 8 then scan.Log("Source excerpt limit reached"); break end
+				scan.Matches += 1
+				for n = math.max(1, lineNumber-2), math.min(#lines, lineNumber+2) do
+					if not written[n] then scan.Log("  L" .. n .. " " .. lines[n]); written[n] = true end
+				end
+			end
+		end
+		task.wait()
+	end
+	scan.Log(string.format("RESULT references=%d sources_attempted=%d sources_capped=%s", scan.Matches, scan.Sources, tostring(scan.SourceLimited)))
+	scan.Log("Names and excerpts are evidence only, NOT verified equip identifiers or proof of ownership/access. Missing results are inconclusive.")
+end
+
+function configStore.SkillDiscovery.Cancel()
+	local scan = configStore.SkillDiscovery
+	if not scan.Busy then return end
+	scan.Serial += 1; scan.Busy = false
+	if scan.Worker then pcall(task.cancel, scan.Worker); scan.Worker = nil end
+	if scan.Thread then pcall(task.cancel, scan.Thread); scan.Thread = nil end
+	scan.Log("CANCELED: partial read-only report")
+	local saved = scan.Save()
+	scan.Button.Text = "SCAN SKILL DATA (READ ONLY)"
+	scan.Status.Text = saved and "Stopped; partial report saved." or "Stopped; file save failed. Use COPY REPORT."
+end
+
+function configStore.SkillDiscovery.Start()
+	local scan = configStore.SkillDiscovery
+	if scan.Busy then scan.Cancel(); return end
+	if configStore.SkillProbe.Busy or configStore.RemoteInspector.Active then
+		scan.Status.Text = "Stop the equip test / recording before starting this separate scan."; return
+	end
+	scan.Serial += 1; scan.Busy = true; scan.Matches = 0; scan.Objects = 0; scan.Sources = 0; scan.ReadErrors = 0
+	scan.ObjectLimited = false; scan.SourceLimited = false; scan.ReportLimited = false
+	scan.Deadline = os.clock() + 30
+	scan.File = configStore.Root .. "/skill_discovery_" .. tostring(os.time()) .. "_"
+		.. HttpService:GenerateGUID(false):gsub("[^%w]", ""):sub(1, 12) .. ".txt"
+	scan.Lines = {"SKILL DISCOVERY // READ ONLY v1", "place=" .. tostring(game.PlaceId),
+		"Search: Behind You (target), Hidden Power (reference), behind (related). Names, UI, attributes, values and bounded client source excerpts.",
+		"No remotes invoked. No equip/cast/purchase/unlock. No require or execution of discovered code. No arbitrary runtime-memory scan.",
+		"Limits: 30s, 25000 objects, 24 relevant modules, 2s/source, 512KB/source, 320 report lines. Local-only output; no-match is inconclusive."}
+	scan.Button.Text = "CANCEL READ-ONLY SCAN"
+	scan.Status.Text = "Scanning client-visible skill data (up to 30s); no requests sent..."
+	local serial = scan.Serial
+	scan.Thread = task.spawn(function()
+		local ok, err = pcall(scan.Run, serial)
+		if not scan.Alive(serial) then return end
+		if not ok then scan.Log("ERROR " .. tostring(err)) end
+		local saved = scan.Save()
+		scan.Busy = false; scan.Button.Text = "SCAN SKILL DATA (READ ONLY)"
+		scan.Status.Text = (ok and ("Scan finished: " .. scan.Matches .. " references. ") or "Scan interrupted. ")
+			.. (saved and "Saved skill_discovery_latest.txt." or "File save failed; use COPY REPORT.")
+	end)
+	table.insert(scheduledThreads, scan.Thread)
+end
+
+connect(configStore.SkillDiscovery.Button.Activated, configStore.SkillDiscovery.Start)
 connect(configStore.RemoteInspector.ScanButton.Activated, configStore.RemoteInspector.Scan)
 connect(configStore.RemoteInspector.RecordButton.Activated, configStore.RemoteInspector.Start)
 connect(configStore.RemoteInspector.MissionButton.Activated, function() configStore.RemoteInspector.Start("mission") end)
@@ -19998,6 +20199,7 @@ function controller.Unload()
 		configStore.Session.Save()
 	end)
 	step("skill probe", configStore.SkillProbe.Cancel)
+	step("skill discovery", configStore.SkillDiscovery.Cancel)
 	step("remote inspector", configStore.RemoteInspector.Cleanup)
 	step("remote spy", npcSafety.RemoteSpy.Uninstall)
 	step("nearby alert", function()

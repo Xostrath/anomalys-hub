@@ -12186,6 +12186,7 @@ function configStore.SkillDiscovery.Match(value)
 	local plain = value:gsub("<[^>]*>", ""):lower():gsub("[^%w]", "")
 	if plain:find("behindyou", 1, true) then return "TARGET" end
 	if plain:find("hiddenpower", 1, true) then return "REFERENCE" end
+	if plain:find("turtle", 1, true) then return "STYLE" end
 	if plain:find("behind", 1, true) then return "RELATED" end
 	return nil
 end
@@ -12195,9 +12196,38 @@ function configStore.SkillDiscovery.Alive(serial)
 	return not unloaded and scan.Busy and scan.Serial == serial
 end
 
+function configStore.SkillDiscovery.SourceRank(object, path)
+	if not (object:IsA("ModuleScript") or object:IsA("LocalScript")) then return nil end
+	local scan = configStore.SkillDiscovery
+	local name = object.Name:lower():gsub("[^%w]", "")
+	local lower = path:lower()
+	local match = scan.Match(object.Name)
+	if match == "TARGET" or match == "REFERENCE" then return 0 end
+	if lower:find("turtle", 1, true) then return 1 end
+	if name:find("inventory", 1, true) or name == "combat" or name:find("skillhandler", 1, true)
+		or name:find("skillmanager", 1, true) then return 2 end
+	if name:find("skill", 1, true) or name:find("style", 1, true) or name:find("abilit", 1, true)
+		or name:find("moves", 1, true) then return 3 end
+	if lower:find("inventory", 1, true) or lower:find("combat", 1, true)
+		or lower:find("skill", 1, true) or lower:find("style", 1, true) then return 4 end
+	if lower:find("data", 1, true) or lower:find("shared", 1, true) then return 5 end
+	-- Generic names in the actual client-module tree remain searchable on later pages.
+	if lower:find("modules", 1, true) or lower:find("playerscripts", 1, true) then return 6 end
+	return nil
+end
+
+function configStore.SkillDiscovery.HandlerCue(line)
+	local lower = line:lower()
+	for _, cue in ipairs({"inventoryremote", "skillremote", "toolname", "skillname", "combattype",
+		"fightingstyle", "requiredstyle", "requiresstyle", "unlocked", "tool_slot", "attacktype"}) do
+		if lower:find(cue, 1, true) then return cue end
+	end
+	return nil
+end
+
 function configStore.SkillDiscovery.Log(text)
 	local scan = configStore.SkillDiscovery
-	if #scan.Lines < 320 then
+	if #scan.Lines < 520 then
 		table.insert(scan.Lines, configStore.RemoteInspector.Text(text, 900))
 	else scan.ReportLimited = true end
 end
@@ -12206,6 +12236,7 @@ function configStore.SkillDiscovery.Save()
 	local scan, inspector = configStore.SkillDiscovery, configStore.RemoteInspector
 	scan.Report = table.concat(scan.Lines, "\n")
 	if scan.ReportLimited then scan.Report ..= "\nREPORT LIMIT REACHED: additional observations omitted." end
+	if scan.Summary then scan.Report ..= "\n" .. scan.Summary end
 	inspector.LastReport = scan.Report
 	inspector.Preview.Text = scan.Report:sub(1, 6000)
 	local archived = inspector.Write(scan.File, scan.Report)
@@ -12230,20 +12261,43 @@ function configStore.SkillDiscovery.ReadSource(object, serial)
 	if not result then return nil, "source read timed out or canceled" end
 	if not result[1] or type(result[2]) ~= "string" then return nil, "source unavailable" end
 	if #result[2] > 512000 then return nil, "source exceeds 512KB scan limit" end
+	local lower = result[2]:lower()
+	if lower:match("^%s*$") or lower:find("failed to decompile", 1, true)
+		or lower:find("decompilation failed", 1, true) then return nil, "empty/failed decompiler output" end
 	return result[2]
 end
 
 function configStore.SkillDiscovery.Run(serial)
 	local scan = configStore.SkillDiscovery
 	local queue, seen, modules = {}, {}, {}
+	local dialogue = playerGui:FindFirstChild("Dialogue")
+	local assets = ReplicatedStorage:FindFirstChild("Assets")
 	local function add(object)
 		if not object or seen[object] then return end
+		-- Prune before enqueueing: a giant dialogue/asset tree must not consume
+		-- either the object budget or the source-read slots.
+		if object == screenGui or object:IsDescendantOf(screenGui) or object == assets
+			or (dialogue and (object == dialogue or object:IsDescendantOf(dialogue))) then return end
 		if #queue >= 25000 then scan.ObjectLimited = true; return end
 		seen[object] = true; table.insert(queue, object)
 	end
-	add(localPlayer); add(playerGui); add(localPlayer.Character); add(ReplicatedStorage)
+	add(ReplicatedStorage:FindFirstChild("Modules")); add(localPlayer:FindFirstChild("PlayerScripts"))
+	add(ReplicatedStorage:FindFirstChild("Data")); add(ReplicatedStorage:FindFirstChild("Shared"))
+	add(localPlayer:FindFirstChild("PlayerStats")); add(localPlayer:FindFirstChild("Backpack"))
+	add(ReplicatedStorage); add(localPlayer); add(playerGui); add(localPlayer.Character)
+	-- Keep skill-tree metadata and the two known animation references, not the
+	-- entire asset library. An animation remains explicitly asset-only evidence.
+	add(assets and assets:FindFirstChild("SkillTrees"))
+	for _, segments in ipairs({{"Animations", "Skills", "Melee", "Behind You"},
+		{"Animations", "Skills", "Race", "Hidden Power"}}) do
+		local object = assets
+		for _, name in ipairs(segments) do object = object and object:FindFirstChild(name) end
+		add(object)
+	end
+	scan.Log("SCOPE: client Modules/PlayerScripts/data/inventory first; PlayerGui.Dialogue and bulk Assets pruned. SkillTrees retained. Animation names are NOT equip IDs.")
+	local indexDeadline = math.min(scan.Deadline, os.clock() + 10)
 	local cursor = 1
-	while cursor <= #queue and scan.Alive(serial) and os.clock() < scan.Deadline do
+	while cursor <= #queue and scan.Alive(serial) and os.clock() < indexDeadline do
 		local object = queue[cursor]; cursor += 1
 		local ok = pcall(function()
 			if object == screenGui or object:IsDescendantOf(screenGui) then return end
@@ -12251,8 +12305,9 @@ function configStore.SkillDiscovery.Run(serial)
 			local matched = false
 			local function inspect(label, value)
 				local kind = scan.Match(value)
-				if kind then
+				if kind == "TARGET" or kind == "REFERENCE" or kind == "STYLE" then
 					scan.Matches += 1; matched = true
+					if kind == "TARGET" then scan.TargetObjectRefs += 1 end
 					scan.Log(kind .. " " .. path .. " [" .. object.ClassName .. "] " .. label .. "=" .. tostring(value))
 				end
 			end
@@ -12262,6 +12317,7 @@ function configStore.SkillDiscovery.Run(serial)
 			local attributes = object:GetAttributes()
 			for key, value in pairs(attributes) do inspect("attribute-key", key); inspect("attribute:" .. key, value) end
 			if matched then
+				if object:IsA("Animation") then scan.Log("  ASSET ONLY AnimationId=" .. tostring(object.AnimationId)) end
 				local count = 0
 				for key, value in pairs(attributes) do
 					count += 1; if count > 12 then scan.Log("Attribute context truncated"); break end
@@ -12276,13 +12332,8 @@ function configStore.SkillDiscovery.Run(serial)
 					end
 				end
 			end
-			if object:IsA("ModuleScript") then
-				local lower = path:lower()
-				local rank = scan.Match(object.Name) and 0
-					or ((lower:find("skill") or lower:find("style") or lower:find("abilit") or lower:find("moves")) and 1)
-					or ((lower:find("combat") or lower:find("data") or lower:find("inventory")) and 2)
-				if rank then table.insert(modules, {Object=object, Path=path, Rank=rank}) end
-			end
+			local rank = scan.SourceRank(object, path)
+			if rank then table.insert(modules, {Object=object, Path=path, Rank=rank}) end
 			for _, child in ipairs(object:GetChildren()) do add(child) end
 		end)
 		if not ok then scan.ReadErrors += 1 end
@@ -12294,20 +12345,32 @@ function configStore.SkillDiscovery.Run(serial)
 	table.sort(modules, function(a,b) return a.Rank < b.Rank or (a.Rank == b.Rank and a.Path < b.Path) end)
 	scan.Log(string.format("OBJECTS scanned=%d capped=%s read_errors=%d source_candidates=%d", scan.Objects,
 		tostring(scan.ObjectLimited), scan.ReadErrors, #modules))
-	for index, entry in ipairs(modules) do
+	local signature = {}
+	for _, entry in ipairs(modules) do table.insert(signature, tostring(entry.Rank) .. ":" .. entry.Path) end
+	signature = table.concat(signature, "\n")
+	local pageStart = scan.SourceSignature == signature and (scan.NextSourceIndex or 1) or 1
+	scan.SourceSignature = signature
+	local lastIndex = pageStart - 1
+	for index = pageStart, #modules do
+		local entry = modules[index]
 		if not scan.Alive(serial) then return end
-		if index > 24 or os.clock() >= scan.Deadline then scan.SourceLimited = true; break end
+		if scan.Sources >= 48 or os.clock() >= scan.Deadline then break end
+		lastIndex = index
 		scan.Sources += 1
 		local source, reason = scan.ReadSource(entry.Object, serial)
 		if not scan.Alive(serial) then return end
 		if not source then scan.Log("SOURCE SKIPPED " .. entry.Path .. " // " .. tostring(reason))
 		else
-			local lines, hits = {}, {}
+			local lines, hits, cues = {}, {}, {}
 			for line in (source .. "\n"):gmatch("(.-)\n") do
 				table.insert(lines, line)
-				if scan.Match(line) then table.insert(hits, #lines) end
+				local kind = scan.Match(line)
+				if kind == "TARGET" or kind == "REFERENCE" or kind == "STYLE" then
+					table.insert(hits, #lines)
+					if kind == "TARGET" then scan.TargetSourceRefs += 1 end
+				elseif scan.HandlerCue(line) then table.insert(cues, #lines) end
 			end
-			scan.Log("SOURCE " .. entry.Path .. " references=" .. #hits)
+			scan.Log("SOURCE " .. entry.Path .. " rank=" .. entry.Rank .. " references=" .. #hits .. " handler_cues=" .. #cues)
 			local written = {}
 			for hitIndex, lineNumber in ipairs(hits) do
 				if hitIndex > 8 then scan.Log("Source excerpt limit reached"); break end
@@ -12316,11 +12379,37 @@ function configStore.SkillDiscovery.Run(serial)
 					if not written[n] then scan.Log("  L" .. n .. " " .. lines[n]); written[n] = true end
 				end
 			end
+			-- Show the client's name/style/ownership checks even when the target
+			-- name is stored elsewhere. These excerpts are not server validation.
+			for cueIndex, lineNumber in ipairs(cues) do
+				if cueIndex > 4 or scan.HandlerExcerpts >= 24 then break end
+				if not written[lineNumber] then
+					scan.HandlerExcerpts += 1
+					scan.Log("  CLIENT HANDLER CONTEXT (not server proof)")
+					for n = math.max(1, lineNumber-2), math.min(#lines, lineNumber+2) do
+						if not written[n] then scan.Log("  L" .. n .. " " .. lines[n]); written[n] = true end
+					end
+				end
+			end
 		end
 		task.wait()
 	end
+	scan.HasMoreSources = lastIndex < #modules
+	scan.SourceLimited = pageStart > 1 or scan.HasMoreSources
+	scan.NextSourceIndex = scan.HasMoreSources and lastIndex + 1 or 1
+	scan.Log(string.format("SOURCE PAGE first=%d last=%d candidates=%d more=%s", pageStart, lastIndex, #modules, tostring(scan.HasMoreSources)))
+	if scan.HasMoreSources then
+		scan.Log("Run SCAN again to continue remaining source candidates; changed candidate lists restart at page 1.")
+		for index = lastIndex + 1, math.min(#modules, lastIndex + 12) do scan.Log("NEXT " .. modules[index].Path) end
+	end
+	scan.Log(string.format("TARGET EVIDENCE object_references=%d source_references=%d client_handler_excerpts=%d",
+		scan.TargetObjectRefs, scan.TargetSourceRefs, scan.HandlerExcerpts))
 	scan.Log(string.format("RESULT references=%d sources_attempted=%d sources_capped=%s", scan.Matches, scan.Sources, tostring(scan.SourceLimited)))
 	scan.Log("Names and excerpts are evidence only, NOT verified equip identifiers or proof of ownership/access. Missing results are inconclusive.")
+	-- Keep coverage information readable even if excerpts exhaust the log cap.
+	scan.Summary = string.format("SUMMARY v2: target_object_refs=%d target_source_refs=%d objects_capped=%s source_page=%d-%d/%d. %s",
+		scan.TargetObjectRefs, scan.TargetSourceRefs, tostring(scan.ObjectLimited), pageStart, lastIndex, #modules,
+		scan.HasMoreSources and "More sources remain: run SCAN again without reloading the hub." or "End of candidate list; missing results remain inconclusive.")
 end
 
 function configStore.SkillDiscovery.Cancel()
@@ -12330,6 +12419,7 @@ function configStore.SkillDiscovery.Cancel()
 	if scan.Worker then pcall(task.cancel, scan.Worker); scan.Worker = nil end
 	if scan.Thread then pcall(task.cancel, scan.Thread); scan.Thread = nil end
 	scan.Log("CANCELED: partial read-only report")
+	scan.Summary = "CANCELED: partial read-only scan; source-page coverage incomplete."
 	local saved = scan.Save()
 	scan.Button.Text = "SCAN SKILL DATA (READ ONLY)"
 	scan.Status.Text = saved and "Stopped; partial report saved." or "Stopped; file save failed. Use COPY REPORT."
@@ -12342,16 +12432,19 @@ function configStore.SkillDiscovery.Start()
 		scan.Status.Text = "Stop the equip test / recording before starting this separate scan."; return
 	end
 	scan.Serial += 1; scan.Busy = true; scan.Matches = 0; scan.Objects = 0; scan.Sources = 0; scan.ReadErrors = 0
+	scan.TargetObjectRefs = 0; scan.TargetSourceRefs = 0; scan.HandlerExcerpts = 0; scan.HasMoreSources = false
+	scan.Summary = nil
 	scan.ObjectLimited = false; scan.SourceLimited = false; scan.ReportLimited = false
-	scan.Deadline = os.clock() + 30
+	scan.Deadline = os.clock() + 45
 	scan.File = configStore.Root .. "/skill_discovery_" .. tostring(os.time()) .. "_"
 		.. HttpService:GenerateGUID(false):gsub("[^%w]", ""):sub(1, 12) .. ".txt"
-	scan.Lines = {"SKILL DISCOVERY // READ ONLY v1", "place=" .. tostring(game.PlaceId),
-		"Search: Behind You (target), Hidden Power (reference), behind (related). Names, UI, attributes, values and bounded client source excerpts.",
+	scan.Lines = {"SKILL DISCOVERY // READ ONLY v2 TARGETED", "place=" .. tostring(game.PlaceId),
+		"Search: Behind You (target), Hidden Power (reference), Turtle (user-reported style). Client skill definitions and inventory/combat handlers; unrelated 'behind' dialogue excluded.",
 		"No remotes invoked. No equip/cast/purchase/unlock. No require or execution of discovered code. No arbitrary runtime-memory scan.",
-		"Limits: 30s, 25000 objects, 24 relevant modules, 2s/source, 512KB/source, 320 report lines. Local-only output; no-match is inconclusive."}
+		"Limits: 45s total, 10s/25000-object index, 48 prioritized sources/page, 2s/source, 512KB/source, 520 report lines. Repeat scan to continue source pages.",
+		"Client data only: server-side definitions/validation may be unavailable. No-match and client-only conditions are inconclusive."}
 	scan.Button.Text = "CANCEL READ-ONLY SCAN"
-	scan.Status.Text = "Scanning client-visible skill data (up to 30s); no requests sent..."
+	scan.Status.Text = "Targeted skill/handler scan v2 (up to 45s); no requests sent..."
 	local serial = scan.Serial
 	scan.Thread = task.spawn(function()
 		local ok, err = pcall(scan.Run, serial)
@@ -12361,6 +12454,7 @@ function configStore.SkillDiscovery.Start()
 		scan.Busy = false; scan.Button.Text = "SCAN SKILL DATA (READ ONLY)"
 		scan.Status.Text = (ok and ("Scan finished: " .. scan.Matches .. " references. ") or "Scan interrupted. ")
 			.. (saved and "Saved skill_discovery_latest.txt." or "File save failed; use COPY REPORT.")
+			.. (scan.HasMoreSources and " Run again for the next source page." or "")
 	end)
 	table.insert(scheduledThreads, scan.Thread)
 end

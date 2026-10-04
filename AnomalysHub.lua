@@ -3157,19 +3157,19 @@ configStore.WindowShadow = create("Frame", {
 	Name = "WindowShadow",
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.new(0.5, 8, 0.5, 10),
-	Size = UDim2.fromOffset(1024, 720),
+	Size = UDim2.fromOffset(1024, 600 * 1024 / 780),
 	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
 	BackgroundTransparency = 0.42,
 	BorderSizePixel = 0,
 }, screenGui)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, configStore.WindowShadow)
-configStore.ShadowScale = create("UIScale", {Scale = 0.5}, configStore.WindowShadow)
+configStore.ShadowScale = create("UIScale", {Scale = 780 / 1024}, configStore.WindowShadow)
 
 local window = create("Frame", {
 	Name = "Window",
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0.5, 0.5),
-	Size = UDim2.fromOffset(1024, 720),
+	Size = UDim2.fromOffset(1024, 600 * 1024 / 780),
 	BackgroundColor3 = colors.Background,
 	BorderSizePixel = 0,
 	ClipsDescendants = true,
@@ -3177,14 +3177,26 @@ local window = create("Frame", {
 }, screenGui)
 create("UICorner", {CornerRadius = UDim.new(0, 10)}, window)
 create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.05}, window)
-configStore.WindowScale = create("UIScale", {Scale = 0.5}, window)
+configStore.WindowScale = create("UIScale", {Scale = 780 / 1024}, window)
 function configStore.UpdateWindowScale()
 	local camera = workspace.CurrentCamera
-	local viewport = camera and camera.ViewportSize or Vector2.new(1024, 720)
-	-- Scale the entire layout together, at half the previous rendered size.
-	local scale = 0.5 * math.clamp(math.min((viewport.X - 24) / 1024, (viewport.Y - 24) / 720), 0.2, 1)
+	local viewport = camera and camera.ViewportSize or Vector2.new(804, 624)
+	-- Keep the new cards' logical width but restore the original 780 x 600 footprint.
+	local fit = math.clamp(math.min((viewport.X - 24) / 780, (viewport.Y - 24) / 600), 0.01, 1)
+	local scale = (780 / 1024) * fit
 	configStore.WindowScale.Scale = scale
 	configStore.ShadowScale.Scale = scale
+	-- A position saved on another viewport must not leave the hub off-screen.
+	local p = window.Position
+	local x = p.X.Scale * viewport.X + p.X.Offset
+	local y = p.Y.Scale * viewport.Y + p.Y.Offset
+	local halfWidth, halfHeight = 390 * fit, 300 * fit
+	if x ~= x or y ~= y or x - halfWidth < 0 or x + halfWidth > viewport.X
+		or y - halfHeight < 0 or y + halfHeight > viewport.Y then
+		window.Position = UDim2.fromScale(0.5, 0.5)
+	end
+	p = window.Position
+	configStore.WindowShadow.Position = UDim2.new(p.X.Scale, p.X.Offset + 8, p.Y.Scale, p.Y.Offset + 10)
 end
 configStore.UpdateWindowScale()
 if workspace.CurrentCamera then
@@ -20476,7 +20488,7 @@ function configStore.Apply(data)
 		local p = data.WindowPosition
 		if type(p.XScale)=="number" and type(p.XOffset)=="number" and type(p.YScale)=="number" and type(p.YOffset)=="number" then
 			window.Position = UDim2.new(p.XScale, p.XOffset, p.YScale, p.YOffset)
-			configStore.WindowShadow.Position = UDim2.new(p.XScale, p.XOffset + 8, p.YScale, p.YOffset + 10)
+			configStore.UpdateWindowScale()
 		end
 	end
 	if type(data.FlightSpeed) == "number" then

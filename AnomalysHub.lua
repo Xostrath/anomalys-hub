@@ -17092,11 +17092,10 @@ function configStore.BodyRing.Update()
 	local elapsed = state.SampleAt and now - state.SampleAt or 0
 	local speed = elapsed > 0 and elapsed <= 0.12 and body.AngleDelta(angle, state.Angle) / elapsed or nil
 	state.Angle, state.SampleAt = angle, now
-	-- Press on the first sampled entry, one degree inside the visible arc.
+	-- Press on the first sampled arc boundary, with no inward padding.
 	-- No reaction timer: both the observed and projected angles must be inside,
 	-- so prediction cannot fire early or queue an input after the window closes.
-	local margin = math.min(1, width * 0.1)
-	local halfWindow = width / 2 - margin
+	local halfWindow = width / 2
 	local predicted = angle + (speed or 0) * math.min(elapsed * 0.5, 0.016)
 	local inside = math.abs(body.AngleDelta(angle, center)) <= halfWindow
 		and math.abs(body.AngleDelta(predicted, center)) <= halfWindow

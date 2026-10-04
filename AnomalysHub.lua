@@ -6621,7 +6621,7 @@ configStore.AutoClash = {
 configStore.AutoClash.Card = create("Frame", {
 	Name = "AutoClash",
 	Position = UDim2.fromOffset(16, 136),
-	Size = UDim2.new(1, -32, 0, 150),
+	Size = UDim2.new(1, -32, 0, 184),
 	BackgroundColor3 = colors.SurfaceRaised,
 	BorderSizePixel = 0,
 }, mainPage)
@@ -6644,7 +6644,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -190, 0, 30),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
-	Text = "Presses the key shown during a clash, the same way Agility training answers its letter prompts.",
+	Text = "Clash prompts, ring timing, and a fresh route through each maze. Enable each helper separately.",
 	TextColor3 = colors.Muted,
 	TextSize = 9,
 	TextWrapped = true,
@@ -6672,15 +6672,18 @@ end
 configStore.AutoClash.ToggleButton = configStore.AutoClash.MakeButton("Toggle", "Auto Clash: OFF",
 	UDim2.new(1, -12, 0, 10), UDim2.fromOffset(160, 30))
 configStore.AutoClash.MashButton = configStore.AutoClash.MakeButton("Mash", "Mash mode: OFF",
-	UDim2.new(1, -12, 0, 72), UDim2.fromOffset(160, 28))
+	UDim2.new(1, -12, 0, 104), UDim2.fromOffset(160, 28))
 configStore.AutoClash.RecordButton = configStore.AutoClash.MakeButton("Record", "Record clash UI: OFF",
-	UDim2.new(1, -180, 0, 72), UDim2.fromOffset(160, 28))
+	UDim2.new(1, -180, 0, 104), UDim2.fromOffset(160, 28))
 configStore.BodyRing = {Enabled = false, Presses = 0, KeyHeld = false}
 configStore.BodyRing.Button = configStore.AutoClash.MakeButton("BodyRing", "Auto Body Ring: OFF",
-	UDim2.new(1, -12, 0, 42), UDim2.fromOffset(160, 26))
+	UDim2.new(1, -12, 0, 72), UDim2.fromOffset(160, 28))
+configStore.AutoMaze = {Enabled = false, Generation = 0, Presses = 0}
+configStore.AutoMaze.Button = configStore.AutoClash.MakeButton("AutoMaze", "Auto Maze: OFF",
+	UDim2.new(1, -180, 0, 72), UDim2.fromOffset(160, 28))
 configStore.AutoClash.StatusLabel = create("TextLabel", {
 	Name = "Status",
-	Position = UDim2.fromOffset(14, 110),
+	Position = UDim2.fromOffset(14, 142),
 	Size = UDim2.new(1, -28, 0, 30),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Code,
@@ -16922,7 +16925,11 @@ function configStore.AutoClash.Update()
 	local contest = playerGui:FindFirstChild("MindContest")
 	local contestRoot = contest and contest:FindFirstChild("Root")
 	if contestRoot and contestRoot:IsA("GuiObject") and isGuiVisible(contestRoot) then
-		if not configStore.BodyRing.Enabled then
+		if contestRoot:FindFirstChild("Board", true) then
+			if not configStore.AutoMaze.Enabled then
+				clash.SetStatus("MAZE // ENABLE AUTO MAZE TO SOLVE THIS BOARD", colors.Muted)
+			end
+		elseif not configStore.BodyRing.Enabled then
 			clash.SetStatus("BODY RING // ENABLE AUTO BODY RING TO TIME SPACE", colors.Muted)
 		end
 		return
@@ -17048,6 +17055,11 @@ function configStore.BodyRing.Update()
 	local root = contest and contest:FindFirstChild("Root")
 	local card = root and root:FindFirstChild("Card")
 	local ring = card and card:FindFirstChild("Ring")
+	if card and card:FindFirstChild("Board") then
+		body.State = nil
+		body.Release()
+		return
+	end
 	local spin = ring and ring:FindFirstChild("Spin")
 	local arc = ring and ring:FindFirstChild("Arc")
 	local note = card and card:FindFirstChild("Note")
@@ -17121,6 +17133,283 @@ connect(configStore.BodyRing.Button.Activated, function()
 	configStore.BodyRing.SetEnabled(not configStore.BodyRing.Enabled)
 end)
 connect(RunService.RenderStepped, configStore.BodyRing.Update)
+
+-- Read the circuit's current UI, then search private copies of the game's
+-- CircuitRouter state. Actual moves always go through ordinary WASD input.
+function configStore.AutoMaze.Clone(value, seen)
+	if type(value) ~= "table" then return value end
+	seen = seen or {}
+	if seen[value] then return seen[value] end
+	local copy = {}
+	seen[value] = copy
+	for key, item in pairs(value) do copy[key] = configStore.AutoMaze.Clone(item, seen) end
+	return copy
+end
+
+function configStore.AutoMaze.StateKey(state)
+	local parts = {tostring(state.X), tostring(state.Y)}
+	for _, cell in ipairs(state.Trail or {}) do
+		table.insert(parts, tostring(cell[1]) .. "," .. tostring(cell[2]))
+	end
+	return table.concat(parts, ";")
+end
+
+function configStore.AutoMaze.Search(router, initial, alive)
+	local maze = configStore.AutoMaze
+	local queue = {{State = initial, Parent = 0}}
+	local seen = {[maze.StateKey(initial)] = true}
+	local read, started = 1, os.clock()
+	while read <= #queue do
+		if not alive() then return nil, "canceled" end
+		if read > 4000 or #queue > 12000 or os.clock() - started > 3 then return nil, "search limit reached" end
+		local node = queue[read]
+		for _, key in ipairs({"U", "R", "D", "L"}) do
+			local trial = maze.Clone(node.State)
+			local ok, result = pcall(router.Step, trial, key)
+			if not ok or type(result) ~= "table" then return nil, "maze rules unavailable" end
+			if result.Event ~= "Burn" and result.Event ~= "Buzz" and result.Event ~= "Reset"
+				and (trial.X ~= node.State.X or trial.Y ~= node.State.Y) then
+				local stamp = maze.StateKey(trial)
+				if not seen[stamp] then
+					seen[stamp] = true
+					local child = {State = trial, Parent = read, Key = key,
+						Cells = type(result.Path) == "table" and #result.Path or 1}
+					table.insert(queue, child)
+					if result.Event == "Goal" then
+						local route, cursor = {}, #queue
+						while queue[cursor].Parent ~= 0 do
+							local move = queue[cursor]
+							table.insert(route, 1, {Key = move.Key, X = move.State.X, Y = move.State.Y, Cells = move.Cells})
+							cursor = move.Parent
+						end
+						return route
+					end
+				end
+			end
+		end
+		read += 1
+		if read % 32 == 0 then task.wait() end
+	end
+	return nil, "no safe route from this position"
+end
+
+function configStore.AutoMaze.Cell(model, object)
+	local x = (object.Position.X.Offset - model.Offset) / model.Step + 1
+	local y = (object.Position.Y.Offset - model.Offset) / model.Step + 1
+	local ix, iy = math.round(x), math.round(y)
+	if math.abs(x - ix) > 0.025 or math.abs(y - iy) > 0.025
+		or ix < 1 or iy < 1 or ix > model.W or iy > model.H then return nil end
+	return ix, iy
+end
+
+function configStore.AutoMaze.ReadBoard(grid)
+	local maze = configStore.AutoMaze
+	local head, core = grid:FindFirstChild("Head"), grid:FindFirstChild("Core")
+	if not head or not core or not head:IsA("GuiObject") or not core:IsA("GuiObject") then return nil end
+	local pixels, cell = grid.Size.X.Offset, head.Size.X.Offset
+	if pixels <= 0 or cell <= 0 or grid.Size.Y.Offset ~= pixels then return nil end
+	-- Match the renderer's cell/gap formula, independent of screen UIScale.
+	for _, gap in ipairs({2, 1}) do
+		local n = math.floor((pixels + gap) / (cell + gap))
+		if n >= 2 and n <= 40 and (n >= 14 and gap == 1 or n < 14 and gap == 2)
+			and math.floor((pixels + gap) / n) - gap == cell then
+			local model = {W = n, H = n, Step = cell + gap, Cell = cell,
+				Offset = math.floor((pixels - (n * (cell + gap) - gap)) / 2), Head = head, Grid = grid}
+			local sx, sy = maze.Cell(model, head)
+			local gx, gy = maze.Cell(model, core)
+			if not sx or not gx then continue end
+			local rows, valid = {}, true
+			for y = 1, n do rows[y] = table.create(n, "0") end
+			for _, wall in ipairs(grid:GetChildren()) do
+				if wall.Name == "W" and wall:IsA("GuiObject") then
+					local x, y = maze.Cell(model, wall)
+					if not x then valid = false; break end
+					rows[y][x] = "1"
+				end
+			end
+			if not valid or rows[sy][sx] == "1" or rows[gy][gx] == "1" then continue end
+			for y = 1, n do rows[y] = table.concat(rows[y]) end
+			model.Layout = {W = n, H = n, Rows = rows, Start = {sx, sy}, Goal = {gx, gy}}
+			model.Signature = table.concat(rows, "/") .. ":" .. gx .. "," .. gy
+			return model
+		end
+	end
+	return nil
+end
+
+function configStore.AutoMaze.Release()
+	local maze = configStore.AutoMaze
+	if maze.HeldKey then
+		pcall(VirtualInputManager.SendKeyEvent, VirtualInputManager, false, maze.HeldKey, false, game)
+		maze.HeldKey = nil
+	end
+end
+
+function configStore.AutoMaze.SetEnabled(enabled)
+	local maze = configStore.AutoMaze
+	maze.Release()
+	maze.Generation += 1
+	maze.Session = nil
+	maze.Enabled = enabled == true
+	maze.Button.Text = maze.Enabled and "Auto Maze: ON" or "Auto Maze: OFF"
+	maze.Button.BackgroundColor3 = maze.Enabled and colors.Accent or colors.Surface
+	maze.Button.TextColor3 = maze.Enabled and colors.Background or colors.Muted
+end
+
+function configStore.AutoMaze.Press(key)
+	local maze = configStore.AutoMaze
+	if maze.HeldKey then return false end
+	local code = Enum.KeyCode[key]
+	if not code then return false end
+	local ok = pcall(VirtualInputManager.SendKeyEvent, VirtualInputManager, true, code, false, game)
+	if ok then
+		maze.HeldKey, maze.ReleaseAt = code, os.clock() + 0.035
+		maze.Presses += 1
+	end
+	return ok
+end
+
+function configStore.AutoMaze.Plan(session, model)
+	local maze = configStore.AutoMaze
+	session.Planning = true
+	local generation = maze.Generation
+	task.spawn(function()
+		local function alive()
+			return not unloaded and maze.Enabled and maze.Generation == generation and maze.Session == session
+				and model.Head.Parent == model.Grid and model.Grid:IsDescendantOf(playerGui)
+		end
+		local ok, route, reason = pcall(function()
+			local modules = ReplicatedStorage:FindFirstChild("Modules")
+			local sharedModules = modules and modules:FindFirstChild("Shared")
+			local module = sharedModules and sharedModules:FindFirstChild("CircuitRouter")
+			if not module then return nil, "CircuitRouter not found" end
+			local router = require(module)
+			if not alive() then return nil, "canceled" end
+			if type(router) ~= "table" or type(router.NewState) ~= "function" or type(router.Step) ~= "function" then
+				return nil, "maze rules unavailable"
+			end
+			local initial = router.NewState(model.Layout)
+			if type(initial) ~= "table" or type(initial.Trail) ~= "table" then return nil, "unsupported maze state" end
+			return maze.Search(router, initial, alive)
+		end)
+		if not alive() then return end
+		session.Planning = false
+		if not ok then
+			session.Error = "could not read maze rules"
+			warn("[Anomaly's Hub] Auto Maze: " .. tostring(route))
+		elseif not route then
+			session.Error = reason
+		else
+			session.Route, session.Index = route, 1
+		end
+	end)
+end
+
+function configStore.AutoMaze.Update()
+	local maze = configStore.AutoMaze
+	if not maze.Enabled or unloaded then return end
+	local now = os.clock()
+	if maze.HeldKey and now >= maze.ReleaseAt then maze.Release() end
+	local contest = playerGui:FindFirstChild("MindContest")
+	local root = contest and contest:FindFirstChild("Root")
+	local card = root and root:FindFirstChild("Card")
+	local board = card and card:FindFirstChild("Board")
+	local grid = board and board:FindFirstChild("Grid")
+	if not grid or not grid:IsA("GuiObject") or not isGuiVisible(grid) then
+		maze.Release()
+		maze.Session = nil
+		return
+	end
+	local function status(text) configStore.AutoClash.SetStatus("MAZE // " .. text, colors.Accent) end
+	local note, lock = card:FindFirstChild("Note"), card:FindFirstChild("Lock")
+	local text = note and note:IsA("TextLabel") and string.upper(note.Text) or ""
+	if text ~= "GO" then maze.Release(); status(text ~= "" and text or "WAITING FOR START"); return end
+	if activeTrainingButton or UserInputService:GetFocusedTextBox() then
+		maze.Release(); status("PAUSED FOR TRAINING OR TEXT INPUT"); return
+	end
+	if lock and lock:IsA("TextLabel") and lock.Text ~= "" then maze.Release(); status(lock.Text); return end
+	local head = grid:FindFirstChild("Head")
+	if not head then return end
+	local session = maze.Session
+	if not session or session.Grid ~= grid or session.Head ~= head then
+		maze.Generation += 1
+		maze.Release()
+		session = {Grid = grid, Head = head, ResetCount = 0}
+		maze.Session = session
+	end
+	if session.Planning then status("CALCULATING ROUTE"); return end
+	if session.Error then status(session.Error); return end
+	local model = maze.ReadBoard(grid)
+	if not model then status("WAITING FOR MOVEMENT TO SETTLE"); return end
+	if session.Signature and session.Signature ~= model.Signature then
+		maze.Generation += 1
+		maze.Release()
+		session.Route, session.Pending, session.ResetCount = nil, nil, 0
+	end
+	session.Signature = model.Signature
+	local x, y = model.Layout.Start[1], model.Layout.Start[2]
+	if x == model.Layout.Goal[1] and y == model.Layout.Goal[2] then maze.Release(); status("CORE REACHED"); return end
+	local trail = grid:FindFirstChild("Trail")
+	local hasTrail = trail and #trail:GetChildren() > 0
+	if session.ResetAt then
+		if not hasTrail and now - session.ResetAt >= 0.12 then
+			session.ResetAt = nil
+		elseif now - session.ResetAt > 1.5 then
+			session.Error = "RESET NOT CONFIRMED; TOGGLE AUTO MAZE TO RETRY"
+			return
+		else status("RESETTING PARTIAL TRAIL"); return end
+	end
+	if not session.Route then
+		if hasTrail then
+			if session.ResetCount >= 2 then session.Error = "POSITION CHANGED REPEATEDLY; TOGGLE AUTO MAZE TO RETRY"; return end
+			if maze.Press("R") then session.ResetCount += 1; session.ResetAt = now end
+			status("RESETTING PARTIAL TRAIL")
+		else
+			session.StartX, session.StartY = x, y
+			maze.Plan(session, model)
+			status("CALCULATING ROUTE")
+		end
+		return
+	end
+	local pending = session.Pending
+	if pending then
+		if now < pending.Until then return end
+		if x == pending.X and y == pending.Y then
+			session.Index += 1
+			session.Pending = nil
+			session.Unconfirmed = 0
+		elseif now - pending.SentAt > 0.8 then
+			session.Unconfirmed = (session.Unconfirmed or 0) + 1
+			if session.Unconfirmed >= 3 then
+				session.Error = "MOVES NOT REGISTERING; TOGGLE AUTO MAZE TO RETRY"
+				maze.Release()
+				return
+			end
+			session.Route, session.Pending = nil, nil
+			status("POSITION CHANGED; REPLANNING")
+			return
+		else status("WAITING FOR MOVE CONFIRMATION"); return end
+	end
+	if maze.HeldKey then return end
+	local previous = session.Route[session.Index - 1]
+	local expectedX, expectedY = previous and previous.X or session.StartX, previous and previous.Y or session.StartY
+	if x ~= expectedX or y ~= expectedY then session.Route = nil; status("POSITION CHANGED; REPLANNING"); return end
+	local move = session.Route[session.Index]
+	if not move then status("WAITING FOR RESULT"); return end
+	local keys = {U = "W", D = "S", L = "A", R = "D"}
+	if maze.Press(keys[move.Key]) then
+		session.Pending = {X = move.X, Y = move.Y, SentAt = now,
+			Until = now + math.clamp(move.Cells * 0.025, 0.04, 0.22) + 0.025}
+		status(string.format("%s // MOVE %d/%d", keys[move.Key], session.Index, #session.Route))
+	else
+		session.Error = "KEYBOARD INPUT UNAVAILABLE"
+	end
+end
+
+connect(configStore.AutoMaze.Button.Activated, function()
+	configStore.AutoMaze.SetEnabled(not configStore.AutoMaze.Enabled)
+end)
+connect(RunService.RenderStepped, configStore.AutoMaze.Update)
 
 function configStore.AutoClash.CountCandidates()
 	local count = 0
@@ -17540,7 +17829,7 @@ function configStore.MinigameTrace.Dump(layer)
 					or string.find(lowerName, "resist", 1, true) or string.find(lowerName, "minigame", 1, true)
 					or string.find(lowerName, "possess", 1, true) or string.find(lowerName, "grab", 1, true)
 					or string.find(lowerName, "contest", 1, true) or string.find(lowerName, "maze", 1, true)
-					or string.find(lowerName, "labyrinth", 1, true)) then
+					or string.find(lowerName, "labyrinth", 1, true) or lowerName == "circuitrouter") then
 				table.insert(scripts, descendant)
 			end
 		end
@@ -18371,6 +18660,7 @@ function configStore.Capture()
 		AutoClashEnabled = configStore.AutoClash.Enabled,
 		AutoClashMash = configStore.AutoClash.Mash,
 		AutoBodyRingEnabled = configStore.BodyRing.Enabled,
+		AutoMazeEnabled = configStore.AutoMaze.Enabled,
 		DragonBallESPEnabled = configStore.DragonBallESP.Enabled,
 		DragonBallESPSettings = table.clone(configStore.DragonBallESP.Settings),
 		NpcESPMaxDistance = configStore.NpcESP.MaxDistance,
@@ -18510,6 +18800,7 @@ function configStore.Apply(data)
 		configStore.AutoClash.Mash = data.AutoClashMash
 	end
 	configStore.BodyRing.SetEnabled(data.AutoBodyRingEnabled == true)
+	configStore.AutoMaze.SetEnabled(data.AutoMazeEnabled == true)
 	if type(data.AutoClashEnabled) == "boolean" then
 		configStore.AutoClash.SetEnabled(data.AutoClashEnabled)
 	else
@@ -18816,6 +19107,7 @@ function controller.Unload()
 		configStore.AutoClash.Enabled = false
 		configStore.AutoClash.Recording = false
 		configStore.BodyRing.SetEnabled(false)
+		configStore.AutoMaze.SetEnabled(false)
 		configStore.MinigameTrace.Flush()
 		configStore.AutoClash.FlushLog()
 	end)

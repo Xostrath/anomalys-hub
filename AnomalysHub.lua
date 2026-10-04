@@ -11107,6 +11107,13 @@ function npcSafety.BuildDirectLightPayload(target, combo)
 	local location = offset.Magnitude > 0.05
 		and CFrame.lookAt(root.Position, targetRoot.Position) * CFrame.new(0, 0, -reach)
 		or root.CFrame * CFrame.new(0, 0, -3.5 * scale)
+	-- Below farming deliberately stays 15 studs beneath the NPC. The original
+	-- Fast Attack used the target pivot; the swing/hit rewrite accidentally
+	-- moved this box back beside the player, away from the requested victim.
+	-- Restore only that placement, not a larger box or a different attack rate.
+	if npcSafety.PositionMode == "Below" then
+		location = target:GetPivot()
+	end
 	return {
 		Uptilt = false,
 		Jumped = false,

@@ -11975,14 +11975,29 @@ function configStore.SkillProbe.Matches(name)
 	return type(name) == "string" and name:lower():gsub("[^%w]", "") == "behindyou"
 end
 
-function configStore.SkillProbe.Log(text)
+function configStore.SkillProbe.Log(text, detail)
 	local probe = configStore.SkillProbe
-	if #probe.Lines < 180 then table.insert(probe.Lines, text:sub(1, 2048)) end
+	if detail then
+		-- Inventory/stat detail has its own budget and cannot suppress outcomes.
+		if #probe.DetailLines < 120 then table.insert(probe.DetailLines, text:sub(1, 2048))
+		else probe.DetailOmitted += 1 end
+		return
+	end
+	if #probe.Lines >= 180 then
+		-- Preserve the four-line header and newest events, including final result.
+		table.remove(probe.Lines, 5)
+		probe.EventOmitted += 1
+	end
+	table.insert(probe.Lines, text:sub(1, 2048))
 end
 
 function configStore.SkillProbe.Save()
 	local probe, inspector = configStore.SkillProbe, configStore.RemoteInspector
 	probe.Report = table.concat(probe.Lines, "\n")
+	if probe.EventOmitted > 0 then probe.Report ..= "\nOlder event lines omitted=" .. probe.EventOmitted end
+	probe.Report ..= "\n\nSNAPSHOT DETAILS // duplicate Tools grouped by name; attributes shown separately for target Tools\n"
+		.. table.concat(probe.DetailLines, "\n")
+	if probe.DetailOmitted > 0 then probe.Report ..= "\nSnapshot detail lines omitted=" .. probe.DetailOmitted end
 	inspector.LastReport = probe.Report
 	local archived = inspector.Write(probe.File, probe.Report)
 	local latest = inspector.Write(configStore.Root .. "/skill_probe_latest.txt", probe.Report)
@@ -12034,11 +12049,30 @@ function configStore.SkillProbe.Snapshot(phase)
 	local probe, inspector = configStore.SkillProbe, configStore.RemoteInspector
 	for _, name in ipairs({"Backpack", "Character"}) do
 		local root = name == "Character" and localPlayer.Character or localPlayer:FindFirstChild(name)
+		local groups, names = {}, {}
+		local total, targets = 0, 0
 		for _, object in ipairs(root and root:GetChildren() or {}) do
 			if object:IsA("Tool") then
-				probe.Log(phase .. " " .. name .. " TOOL " .. inspector.Text(object.Name) .. " attrs=" .. inspector.MissionAttributes(object))
+				total += 1
+				if not groups[object.Name] then groups[object.Name] = 0; table.insert(names, object.Name) end
+				groups[object.Name] += 1
+				if probe.IsTargetTool(object) then
+					targets += 1
+					if targets <= 8 then
+						probe.Log(phase .. " " .. name .. " TARGET TOOL " .. inspector.Text(object.Name)
+							.. " attrs=" .. inspector.MissionAttributes(object))
+					end
+				end
 			end
 		end
+		probe.Log(string.format("%s %s SUMMARY total_tools=%d target_tools=%d distinct_names=%d", phase, name, total, targets, #names))
+		if targets > 8 then probe.Log(phase .. " " .. name .. " target attribute samples omitted=" .. (targets - 8)) end
+		table.sort(names)
+		for index, toolName in ipairs(names) do
+			if index > 20 then break end
+			probe.Log(phase .. " " .. name .. " TOOL GROUP " .. inspector.Text(toolName) .. " count=" .. groups[toolName], true)
+		end
+		if #names > 20 then probe.Log(phase .. " " .. name .. " additional name groups omitted=" .. (#names - 20), true) end
 	end
 	local stats = localPlayer:FindFirstChild("PlayerStats")
 	local count = 0
@@ -12046,10 +12080,13 @@ function configStore.SkillProbe.Snapshot(phase)
 		local lower = object.Name:lower()
 		if object:IsA("ValueBase") and (lower:find("skill", 1, true) or lower:find("style", 1, true)
 			or lower:find("equip", 1, true) or lower:find("tool", 1, true) or lower:find("combat", 1, true)) then
-			probe.Log(phase .. " LOCAL STAT " .. inspector.Text(object:GetFullName(), 256) .. "=" .. inspector.Sample(object.Value))
-			count += 1; if count >= 40 then break end
+			if count < 40 then
+				probe.Log(phase .. " LOCAL STAT " .. inspector.Text(object:GetFullName(), 256) .. "=" .. inspector.Sample(object.Value), true)
+			end
+			count += 1
 		end
 	end
+	if count > 40 then probe.Log(phase .. " additional local stat details omitted=" .. (count - 40), true) end
 end
 
 function configStore.SkillProbe.FindName(serial)
@@ -12137,10 +12174,11 @@ function configStore.SkillProbe.Start()
 	if configStore.SkillDiscovery and configStore.SkillDiscovery.Busy then probe.Status.Text = "Wait for the read-only scan to finish."; return end
 	if configStore.RemoteInspector.Active then probe.Status.Text = "Stop the active recording before running this separate test."; return end
 	probe.Serial += 1; probe.Busy = true; probe.Sent = false; probe.Workers = {}
+	probe.DetailLines = {}; probe.DetailOmitted = 0; probe.EventOmitted = 0
 	local serial = probe.Serial
 	probe.Id = tostring(os.time()) .. "_" .. HttpService:GenerateGUID(false):gsub("[^%w]", ""):sub(1, 12)
 	probe.File = configStore.Root .. "/skill_probe_" .. probe.Id .. ".txt"
-	probe.Lines = {"BEHIND YOU // ONE-SHOT EQUIP PROBE v2 CONFIRMED NAME", "place=" .. tostring(game.PlaceId),
+	probe.Lines = {"BEHIND YOU // ONE-SHOT EQUIP PROBE v3 RESERVED RESULTS", "place=" .. tostring(game.PlaceId),
 		"Exactly Behind You (Melee), confirmed in the captured SkillData. AutoFire must be confirmed OFF before sending.",
 		"Observed InventoryRemote Equip payload only. No hotbar changes, purchases, style edits, unlock-all or cast requests."}
 	probe.Button.Text = "CANCEL BEHIND YOU TEST"

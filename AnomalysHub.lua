@@ -2737,7 +2737,7 @@ local npcSafety = {
 	DirectLight = {
 		Authorized = configStore.FeatureAccess.FastAttack,
 		Enabled = false,
-		Interval = 0.10,
+		Interval = 0.075,
 		-- Keep one delayed swing in flight. Timing uses bounded comparisons of
 		-- observed HP loss, then holds; these observations are not server acks.
 		SwingDelay = 0.13,
@@ -7165,7 +7165,7 @@ npcSafety.DirectLight.IntervalBox = create("TextBox", {
 	BorderSizePixel = 0,
 	ClearTextOnFocus = false,
 	Font = Enum.Font.GothamSemibold,
-	Text = "0.10",
+	Text = "0.075",
 	TextColor3 = colors.Text,
 	TextSize = 11,
 }, npcSafety.DirectLight.Card)

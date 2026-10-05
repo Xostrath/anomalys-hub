@@ -11230,9 +11230,12 @@ function npcSafety.UpdateDirectLightTelemetry()
 	if diagnostic.LastBenchmarkSummary then
 		settingSummary = diagnostic.LastBenchmarkSummary .. (diagnostic.BenchmarkReportSaved and " | REPORT SAVED" or " | REPORT UNSAVED")
 	end
+	if diagnostic.Startup and diagnostic.Startup.OriginalLevel then
+		settingSummary = string.format("FIRST HIT RETRY | %.2fs swing delay x%d", diagnostic.SwingDelay, diagnostic.Pairs)
+	end
 	diagnostic.TelemetryLabel.Text = string.format(
 		"%s | %d req (%.1f/s) | %.3fs interval | %.1fs\nHP %s -> %s | loss %.1f | %d damage events (%.1f/s)\n%s",
-		telemetry.Enabled and (telemetry.Target and "RUNNING" or "WAITING") or diagnostic.LastStopReason,
+		diagnostic.LastStopReason or (telemetry.Enabled and "RUNNING" or "OFF"),
 		telemetry.RequestsSent,
 		telemetry.RequestsPerSecond,
 		telemetry.Interval,
@@ -11249,6 +11252,7 @@ end
 
 function npcSafety.SetDirectLightInterval(value)
 	local diagnostic = npcSafety.DirectLight
+	npcSafety.RestoreDirectLightStartup()
 	local parsed = tonumber(value)
 	if not parsed or parsed ~= parsed then
 		parsed = diagnostic.Interval
@@ -11271,6 +11275,7 @@ end
 
 function npcSafety.StopDirectLightDiagnostic(reason)
 	local diagnostic = npcSafety.DirectLight
+	npcSafety.RestoreDirectLightStartup()
 	if diagnostic.BenchmarkRunning then
 		npcSafety.RecordDirectLightBenchmarkRow("DISCARDED", reason or "Fast Attack disabled")
 		diagnostic.BenchmarkRunning = false
@@ -11359,7 +11364,8 @@ end
 function npcSafety.SendDirectLightRequest()
 	local diagnostic = npcSafety.DirectLight
 	local target = diagnostic.Target
-	if not diagnostic.Authorized or not diagnostic.Enabled or not npcSafety.IsDirectLightTargetAllowed(target) then
+	if not diagnostic.Authorized or not diagnostic.Enabled or not npcSafety.IsDirectLightTargetAllowed(target)
+		or not npcSafety.GetDirectLightAttackReadiness() then
 		return false
 	end
 	npcSafety.ObserveDirectLightTiming("Attempts")
@@ -11406,7 +11412,8 @@ function npcSafety.SendDirectLightRequest()
 	diagnostic.Pending += 1
 	task.delay(diagnostic.SwingDelay, function()
 		diagnostic.Pending = math.max(diagnostic.Pending - 1, 0)
-		if unloaded or not diagnostic.Enabled or not npcSafety.IsDirectLightTargetAllowed(target) then
+		if unloaded or not diagnostic.Enabled or not npcSafety.IsDirectLightTargetAllowed(target)
+			or not npcSafety.GetDirectLightAttackReadiness() then
 			npcSafety.ObserveDirectLightTiming("CanceledHits")
 			return
 		end
@@ -11474,8 +11481,18 @@ function npcSafety.HoldDirectLightLevel(level, score)
 		RetryAt = os.clock() + 20, Mode = npcSafety.PositionMode}
 end
 
+function npcSafety.RestoreDirectLightStartup()
+	local d = npcSafety.DirectLight
+	local startup = d.Startup
+	d.Startup = nil
+	if startup and startup.OriginalLevel and not d.BenchmarkRunning then
+		npcSafety.HoldDirectLightLevel(startup.OriginalLevel, nil)
+	end
+end
+
 function npcSafety.RebaseDirectLightTuning()
 	local diagnostic = npcSafety.DirectLight
+	npcSafety.RestoreDirectLightStartup()
 	local tuning = diagnostic.Tuning
 	if tuning and tuning.Mode ~= npcSafety.PositionMode and npcSafety.ApplySavedAttackPreset then
 		npcSafety.ApplySavedAttackPreset(npcSafety.PositionMode)
@@ -11510,7 +11527,8 @@ function npcSafety.CaptureAttackPresets()
 	end
 	local d = npcSafety.DirectLight
 	if not d.BenchmarkRunning and d.Tuning and d.Tuning.Phase == "HOLDING" then
-		result[npcSafety.PositionMode] = npcSafety.ValidateAttackPreset({Interval=d.Interval, Level=d.Level})
+		local level = d.Startup and d.Startup.OriginalLevel or d.Level
+		result[npcSafety.PositionMode] = npcSafety.ValidateAttackPreset({Interval=d.Interval, Level=level})
 	end
 	return result
 end
@@ -11528,6 +11546,7 @@ end
 function npcSafety.ApplySavedAttackPreset(mode)
 	local d = npcSafety.DirectLight
 	if d.BenchmarkRunning then return false end
+	npcSafety.RestoreDirectLightStartup()
 	npcSafety.ImportAttackPresets(nil)
 	local preset = d.Presets[mode] or {Interval=0.100, Level=4}
 	d.Interval, d.Accumulator = preset.Interval, 0
@@ -11589,6 +11608,10 @@ function npcSafety.CanMeasureDirectLight()
 end
 
 function npcSafety.GetDirectLightBenchmarkReadiness()
+	return npcSafety.GetDirectLightAttackReadiness()
+end
+
+function npcSafety.GetDirectLightAttackReadiness()
 	-- Check character states even when a soft approach/range gate also fails.
 	local character = localPlayer.Character
 	if character then
@@ -11596,7 +11619,21 @@ function npcSafety.GetDirectLightBenchmarkReadiness()
 			if character:FindFirstChild(state) then return false, "character state=" .. state end
 		end
 	end
-	return npcSafety.CanMeasureDirectLight()
+	local ready, reason, brief = npcSafety.CanMeasureDirectLight()
+	if not ready then return false, reason, brief end
+	if npcSafety.PositionMode == "FrontBehind" and npcSafety.FrontBehindPhase == "Behind" then
+		return false, "combo recovery"
+	end
+	if npcSafety.PositionMode == "Below" then
+		local root = localPlayer.Character:FindFirstChild("HumanoidRootPart")
+		local delta = getNpcRoot(npcSafety.DirectLight.Target).Position - root.Position
+		-- Rise starts while still travelling upward. Wait until close to the
+		-- normal 15-stud below position, not merely inside the 30-stud sample gate.
+		if delta.Y <= 0 or delta.Magnitude > 22 or delta.X * delta.X + delta.Z * delta.Z > 36 then
+			return false, "settling below target", true
+		end
+	end
+	return true
 end
 
 function npcSafety.IsDirectLightBenchmarkCollecting()
@@ -11611,7 +11648,7 @@ end
 function npcSafety.AdaptDirectLightDelay()
 	local diagnostic = npcSafety.DirectLight
 	if diagnostic.BenchmarkRunning then return end
-	if not npcSafety.CanMeasureDirectLight() then
+	if not npcSafety.GetDirectLightAttackReadiness() then
 		npcSafety.ResetDirectLightWindow()
 		if diagnostic.Tuning then diagnostic.Tuning.BadWindows = 0 end
 		return
@@ -11631,6 +11668,23 @@ function npcSafety.AdaptDirectLightDelay()
 		return
 	end
 	local elapsed = now - diagnostic.WindowStartedAt
+	local startup = diagnostic.Startup
+	if startup and not startup.Confirmed and npcSafety.PositionMode == "Below" then
+		if not startup.ProbeUsed and tuning.Phase == "HOLDING"
+			and elapsed >= 2 and diagnostic.WindowHits >= 4 and diagnostic.WindowLoss <= 0 then
+			-- A sustained-DPS cooldown must not leave a fresh NPC untouched for
+			-- 20 seconds. Try one delayed single-pair opener, then restore timing.
+			startup.ProbeUsed, startup.OriginalLevel = true, diagnostic.Level
+			npcSafety.ApplyDirectLightLevel(diagnostic.Level == 4 and 1 or 4)
+			return
+		elseif startup.OriginalLevel then
+			if elapsed >= 3 and diagnostic.WindowHits >= 4 then
+				npcSafety.RestoreDirectLightStartup()
+				npcSafety.BeginDirectLightSearch()
+			end
+			return
+		end
+	end
 	if elapsed < 3 or diagnostic.WindowHits < 4 then return end
 	diagnostic.LandRate = diagnostic.Pairs == 1 and math.min(diagnostic.WindowDamage / diagnostic.WindowHits, 1) or nil
 	local score = diagnostic.WindowLoss / elapsed
@@ -11697,11 +11751,13 @@ function npcSafety.SetDirectLightTarget(target)
 		return false
 	end
 	diagnostic.Target = target
+	diagnostic.Startup = not diagnostic.BenchmarkRunning and {Confirmed=false, ProbeUsed=false} or nil
 	diagnostic.StartHealth = humanoid.Health
 	diagnostic.CurrentHealth = humanoid.Health
 	diagnostic.LastHealth = humanoid.Health
 	diagnostic.LastStopReason = "RUNNING"
 	diagnostic.HealthConnection = humanoid.HealthChanged:Connect(function(health)
+		if diagnostic.Target ~= target or not diagnostic.Enabled or unloaded then return end
 		local previousHealth = diagnostic.LastHealth
 		diagnostic.CurrentHealth = health
 		if previousHealth and health < previousHealth - 0.01 then
@@ -11710,6 +11766,10 @@ function npcSafety.SetDirectLightTarget(target)
 			diagnostic.HealthChangeEvents += 1
 			diagnostic.WindowDamage += 1
 			diagnostic.WindowLoss += loss
+			if diagnostic.Startup then
+				diagnostic.Startup.Confirmed = true
+				if diagnostic.Startup.OriginalLevel then npcSafety.RestoreDirectLightStartup() end
+			end
 			if npcSafety.IsDirectLightBenchmarkCollecting() then
 				diagnostic.BenchmarkLevelDamage += loss
 			end
@@ -11933,6 +11993,7 @@ function npcSafety.StartDirectLightBenchmark(kind)
 		npcSafety.UpdateDirectLightTelemetry()
 		return false, "no_test_target"
 	end
+	npcSafety.RestoreDirectLightStartup()
 	diagnostic.BenchmarkWasEnabled = diagnostic.Enabled
 	diagnostic.BenchmarkOriginalLevel = diagnostic.Level
 	diagnostic.BenchmarkOriginalInterval = diagnostic.Interval
@@ -12139,14 +12200,20 @@ function npcSafety.StartDirectLightDiagnostic()
 		npcSafety.SetDirectLightTarget(activeNpcTarget)
 		if not diagnostic.Enabled then return end
 		npcSafety.UpdateDirectLightBenchmark(deltaTime)
+		diagnostic.Elapsed = math.max(os.clock() - diagnostic.StartedAt, 0)
 		-- Reset even when no request is sent (player exclusion, travel, loot,
 		-- etc.), so idle wall time cannot be scored as poor attack timing.
-		if not npcSafety.CanMeasureDirectLight() then
+		local ready, waitReason = npcSafety.GetDirectLightAttackReadiness()
+		if not ready then
 			npcSafety.ResetDirectLightWindow()
 			if diagnostic.Tuning then diagnostic.Tuning.BadWindows = 0 end
+			diagnostic.Accumulator = diagnostic.Interval
+			diagnostic.LastStopReason = "WAITING: " .. tostring(waitReason)
+			npcSafety.UpdateDirectLightTelemetry()
+			return
 		end
+		diagnostic.LastStopReason = "RUNNING"
 		if npcSafety.LootMode then return end
-		diagnostic.Elapsed = math.max(os.clock() - diagnostic.StartedAt, 0)
 		if not diagnostic.Target then
 			npcSafety.UpdateDirectLightTelemetry()
 			return

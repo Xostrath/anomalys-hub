@@ -3031,6 +3031,32 @@ local function schedule(delaySeconds, callback)
 	return thread
 end
 
+-- Bounded read-only stat requests. Cancellation never retries a mutation.
+configStore.PendingStatReads = {}
+function configStore.ReadStatBounded(timeout, isCurrent, ...)
+	if unloaded or (isCurrent and not isCurrent()) then return false, "canceled" end
+	local args, result, finished = table.pack(...), nil, false
+	local worker = task.spawn(function()
+		result = table.pack(pcall(statRetrieveRemote.InvokeServer, statRetrieveRemote, table.unpack(args, 1, args.n)))
+		finished = true
+	end)
+	configStore.PendingStatReads[worker] = true
+	local deadline = os.clock() + timeout
+	while not finished and not unloaded and (not isCurrent or isCurrent()) and os.clock() < deadline do
+		task.wait(0.05)
+	end
+	configStore.PendingStatReads[worker] = nil
+	if unloaded or (isCurrent and not isCurrent()) then
+		pcall(task.cancel, worker)
+		return false, "canceled"
+	end
+	if not finished then
+		pcall(task.cancel, worker)
+		return false, "timed out"
+	end
+	return table.unpack(result, 1, result.n)
+end
+
 local function create(className, properties, parent)
 	local object = Instance.new(className)
 	for property, value in pairs(properties or {}) do
@@ -9033,7 +9059,7 @@ function configStore.NpcESP.Update(deltaTime)
 		return
 	end
 	configStore.NpcESP.UpdateElapsed += deltaTime
-	if configStore.NpcESP.UpdateElapsed < 0.12 then
+	if configStore.NpcESP.UpdateElapsed < 0.24 then
 		return
 	end
 	configStore.NpcESP.UpdateElapsed = 0
@@ -9127,7 +9153,7 @@ function configStore.BuuDetector.Update(deltaTime)
 	local state = configStore.BuuDetector
 	if unloaded or not state.Enabled then return end
 	state.UpdateElapsed += deltaTime
-	if state.UpdateElapsed < 0.5 then return end
+	if state.UpdateElapsed < 1 then return end
 	state.UpdateElapsed = 0
 	local seen, count, newCount = {}, 0, 0
 	local character = localPlayer.Character
@@ -9187,7 +9213,7 @@ function configStore.BuuDetector.SetEnabled(enabled)
 	state.Button.Text = state.Enabled and "BUU DETECTOR: ON" or "BUU DETECTOR: OFF"
 	state.Button.BackgroundColor3 = state.Enabled and colors.Accent or colors.Surface
 	state.Button.TextColor3 = state.Enabled and colors.Background or colors.Muted
-	if state.Enabled then state.UpdateElapsed = 0.5; state.Update(0)
+	if state.Enabled then state.UpdateElapsed = 1; state.Update(0)
 	else state.Clear(); state.Status.Text = "Detector off" end
 end
 connect(configStore.BuuDetector.Button.Activated, function()
@@ -9693,6 +9719,7 @@ function npcSafety.SetPositionMode(mode)
 	end
 	npcSafety.SelectedPositionMode = mode
 	npcSafety.PositionMode = mode
+	if npcSafety.ApplySavedAttackPreset then npcSafety.ApplySavedAttackPreset(mode) end
 	npcSafety.PreferAbove = mode == "Above"
 	npcSafety.AdaptiveFallbackActive = false
 	npcSafety.BelowProbeActive = false
@@ -11450,6 +11477,10 @@ end
 function npcSafety.RebaseDirectLightTuning()
 	local diagnostic = npcSafety.DirectLight
 	local tuning = diagnostic.Tuning
+	if tuning and tuning.Mode ~= npcSafety.PositionMode and npcSafety.ApplySavedAttackPreset then
+		npcSafety.ApplySavedAttackPreset(npcSafety.PositionMode)
+		return
+	end
 	-- NPC health/defence, mode and interval changes make old DPS incomparable.
 	-- Retain a proven setting, but establish a fresh reference on this target.
 	if tuning and (tuning.Phase == "HOLDING" or tuning.BestLevel) then
@@ -11459,6 +11490,81 @@ function npcSafety.RebaseDirectLightTuning()
 	end
 	diagnostic.Score, diagnostic.LandRate = nil, nil
 end
+
+-- BEGIN ATTACK PRESETS
+function npcSafety.ValidateAttackPreset(preset)
+	if type(preset) ~= "table" then return nil end
+	local interval, level = preset.Interval, preset.Level
+	if type(interval) ~= "number" or interval ~= interval or interval < 0.01 or interval > 2 then return nil end
+	if type(level) ~= "number" or level ~= math.floor(level) or not npcSafety.DirectLight.Levels[level] then return nil end
+	local setting = npcSafety.DirectLight.Levels[level]
+	if preset.SwingDelay ~= nil and preset.SwingDelay ~= setting[1] then return nil end
+	if preset.Pairs ~= nil and preset.Pairs ~= setting[2] then return nil end
+	return {Interval=interval, Level=level, SwingDelay=setting[1], Pairs=setting[2]}
+end
+
+function npcSafety.CaptureAttackPresets()
+	local result = {}
+	for mode, preset in pairs(npcSafety.DirectLight.Presets or {}) do
+		result[mode] = npcSafety.ValidateAttackPreset(preset)
+	end
+	local d = npcSafety.DirectLight
+	if not d.BenchmarkRunning and d.Tuning and d.Tuning.Phase == "HOLDING" then
+		result[npcSafety.PositionMode] = npcSafety.ValidateAttackPreset({Interval=d.Interval, Level=d.Level})
+	end
+	return result
+end
+
+function npcSafety.ImportAttackPresets(saved)
+	local d = npcSafety.DirectLight
+	d.Presets = d.Presets or {Below={Interval=0.075, Level=8, SwingDelay=0, Pairs=2}}
+	if type(saved) ~= "table" then return end
+	for _, mode in ipairs({"Below", "Above", "FrontBehind"}) do
+		local preset = npcSafety.ValidateAttackPreset(saved[mode])
+		if preset then d.Presets[mode] = preset end
+	end
+end
+
+function npcSafety.ApplySavedAttackPreset(mode)
+	local d = npcSafety.DirectLight
+	if d.BenchmarkRunning then return false end
+	npcSafety.ImportAttackPresets(nil)
+	local preset = d.Presets[mode] or {Interval=0.075, Level=4}
+	d.Interval, d.Accumulator = preset.Interval, 0
+	npcSafety.HoldDirectLightLevel(preset.Level, nil)
+	if d.IntervalBox then d.IntervalBox.Text = string.format("%.3f", d.Interval) end
+	return true
+end
+
+function npcSafety.SaveAttackPreset()
+	local d = npcSafety.DirectLight
+	npcSafety.ImportAttackPresets(nil)
+	d.Presets[npcSafety.PositionMode] = npcSafety.ValidateAttackPreset({Interval=d.Interval, Level=d.Level})
+	local writer = configStore.GetFunction and configStore.GetFunction("writefile")
+	if not writer then return false end
+	local ok = pcall(function()
+		if not configStore.EnsureFolders() then error("workspace folder unavailable") end
+		writer(configStore.Root .. (isBetaEnvironment and "/fast_attack_presets-beta.json" or "/fast_attack_presets.json"),
+			HttpService:JSONEncode({Version=1, Presets=d.Presets}))
+	end)
+	if not ok then warn("[Anomaly's Hub] Attack preset kept in memory; file save failed.") end
+	return ok
+end
+
+function npcSafety.InitializeAttackPresets()
+	npcSafety.ImportAttackPresets(nil)
+	local reader = configStore.GetFunction("readfile")
+	local exists = configStore.GetFunction("isfile")
+	local path = configStore.Root .. (isBetaEnvironment and "/fast_attack_presets-beta.json" or "/fast_attack_presets.json")
+	pcall(function()
+		if reader and exists and exists(path) then
+			local saved = HttpService:JSONDecode(reader(path))
+			if type(saved) == "table" and saved.Version == 1 then npcSafety.ImportAttackPresets(saved.Presets) end
+		end
+	end)
+	npcSafety.ApplySavedAttackPreset(npcSafety.PositionMode)
+end
+-- END ATTACK PRESETS
 
 function npcSafety.CanMeasureDirectLight()
 	local diagnostic = npcSafety.DirectLight
@@ -11798,6 +11904,7 @@ function npcSafety.FinishDirectLightBenchmark(cancelled, reason)
 		if diagnostic.BenchmarkPlan then
 			diagnostic.LastBenchmarkSummary = string.format("SELECTED %.3fs x2: %.1f median dmg/s (3 rounds)", diagnostic.Interval, diagnostic.BenchmarkBestScore)
 		end
+		npcSafety.SaveAttackPreset()
 	end
 	if diagnostic.BenchmarkButton then
 		diagnostic.BenchmarkButton.Text = "Interval Test"
@@ -15442,11 +15549,11 @@ function qolState.StatAllocate.GetEnhancedValue(statName)
 
 	-- Boosters.*Boost values are temporary/runtime modifiers, not allocated stats.
 	-- StatRetrieveRemote exposes the persisted enhanced value used by stat allocation.
-	local ok, enhanced = pcall(
-		statRetrieveRemote.InvokeServer,
-		statRetrieveRemote,
-		definition.EnhancedKey
-	)
+	local serial = qolState.StatAllocate.RequestSerial
+	local ok, enhanced = configStore.ReadStatBounded(5, function()
+		return serial == qolState.StatAllocate.RequestSerial
+	end, definition.EnhancedKey)
+	if unloaded or serial ~= qolState.StatAllocate.RequestSerial then return nil end
 	if ok and tonumber(enhanced) then
 		return tonumber(enhanced)
 	end
@@ -15502,10 +15609,12 @@ function qolState.StatAllocate.GetPriorityOrder()
 end
 
 function qolState.StatAllocate.SelectNextBuildStat()
+	local serial = qolState.StatAllocate.RequestSerial
 	for _, statName in ipairs(qolState.StatAllocate.GetPriorityOrder()) do
 		local target = qolState.StatAllocate.BuildTargets[statName]
 		if type(target) == "number" then
 			local current = qolState.StatAllocate.GetEnhancedValue(statName)
+			if unloaded or serial ~= qolState.StatAllocate.RequestSerial then return nil end
 			if current == nil or current < target then
 				qolState.StatAllocate.Select(statName)
 				return statName, current, target
@@ -15516,16 +15625,19 @@ function qolState.StatAllocate.SelectNextBuildStat()
 end
 
 function qolState.StatAllocate.CheckTargetReached()
+	local serial = qolState.StatAllocate.RequestSerial
 	local target = qolState.StatAllocate.TargetEnhanced
 	if target == nil then
 		return false
 	end
 	local current = qolState.StatAllocate.GetEnhancedValue()
+	if unloaded or serial ~= qolState.StatAllocate.RequestSerial then return false end
 	if not current or current < target then
 		return false, current
 	end
 	local completedName = qolState.StatAllocate.Selected
 	local nextStat, nextCurrent, nextTarget = qolState.StatAllocate.SelectNextBuildStat()
+	if unloaded or (not nextStat and serial ~= qolState.StatAllocate.RequestSerial) then return false end
 	if nextStat then
 		qolState.StatAllocate.WaitingForGtp = false
 		qolState.StatAllocate.SetStatus(string.format(
@@ -15588,7 +15700,18 @@ function qolState.StatAllocate.RenderMotivation()
 	end
 end
 
+function qolState.StatAllocate.CancelMotivation()
+	local state = qolState.StatAllocate
+	state.MotivationSerial = (state.MotivationSerial or 0) + 1
+	state.MotivationBusy = false
+	if state.MotivationButton then
+		state.MotivationButton.Text = "Increase Once"
+		state.MotivationButton.BackgroundColor3 = colors.Accent
+	end
+end
+
 function qolState.StatAllocate.SetMotivationAutoEnabled(enabled)
+	qolState.StatAllocate.CancelMotivation()
 	qolState.StatAllocate.MotivationAutoEnabled = enabled == true
 	qolState.StatAllocate.MotivationElapsed = 0
 	qolState.StatAllocate.RenderMotivation()
@@ -15604,10 +15727,13 @@ end
 
 function qolState.StatAllocate.RequestMotivation()
 	if not configStore.FeatureAccess.Motivation then return false end
-	if unloaded or qolState.StatAllocate.MotivationBusy then
+	if unloaded or qolState.StatAllocate.MotivationBusy or os.clock() < (qolState.StatAllocate.MotivationRetryAt or 0) then
 		return false
 	end
 	qolState.StatAllocate.MotivationBusy = true
+	qolState.StatAllocate.MotivationSerial = (qolState.StatAllocate.MotivationSerial or 0) + 1
+	local serial = qolState.StatAllocate.MotivationSerial
+	local function current() return not unloaded and serial == qolState.StatAllocate.MotivationSerial end
 	if qolState.StatAllocate.MotivationButton then
 		qolState.StatAllocate.MotivationButton.Text = "Requesting..."
 		qolState.StatAllocate.MotivationButton.BackgroundColor3 = colors.AccentSoft
@@ -15628,9 +15754,11 @@ function qolState.StatAllocate.RequestMotivation()
 	end
 	local requestThread = task.spawn(function()
 		task.wait(0.15)
-		local ok, value = pcall(statRetrieveRemote.InvokeServer, statRetrieveRemote, "Motivation")
+		if not current() then return end
+		local ok, value = configStore.ReadStatBounded(5, current, "Motivation")
+		if not current() then return end
 		qolState.StatAllocate.MotivationBusy = false
-		if unloaded then return end
+		qolState.StatAllocate.MotivationRetryAt = ok and 0 or os.clock() + 5
 		if qolState.StatAllocate.MotivationButton then
 			qolState.StatAllocate.MotivationButton.Text = "Increase Once"
 			qolState.StatAllocate.MotivationButton.BackgroundColor3 = colors.Accent
@@ -15638,7 +15766,7 @@ function qolState.StatAllocate.RequestMotivation()
 		if qolState.StatAllocate.MotivationStatusLabel then
 			qolState.StatAllocate.MotivationStatusLabel.Text = ok and tonumber(value)
 				and ("Motivation confirmed: " .. tostring(value))
-				or "Motivation request sent; the current value is unavailable."
+				or ("Motivation confirmation " .. tostring(value) .. "; retry available in 5s.")
 			qolState.StatAllocate.MotivationStatusLabel.TextColor3 = ok and colors.Success or colors.Warning
 		end
 	end)
@@ -15646,7 +15774,19 @@ function qolState.StatAllocate.RequestMotivation()
 	return true
 end
 
+function qolState.StatAllocate.CancelAllocation()
+	local state = qolState.StatAllocate
+	state.RequestSerial += 1
+	state.Busy = false
+	state.PreChecking = false
+	if state.AllocateButton then
+		state.AllocateButton.Text = "Allocate 1"
+		state.AllocateButton.BackgroundColor3 = colors.Accent
+	end
+end
+
 function qolState.StatAllocate.SetAutoEnabled(enabled)
+	qolState.StatAllocate.CancelAllocation()
 	qolState.StatAllocate.AutoEnabled = enabled == true
 	qolState.StatAllocate.WaitingForGtp = false
 	qolState.StatAllocate.GtpEmptyAlertSent = false
@@ -15677,8 +15817,7 @@ function qolState.StatAllocate.SetPersistentAutoEnabled(enabled)
 	end
 	-- Cancel any in-flight allocation and reset the training launcher on every
 	-- toggle so pause -> start always begins a fresh, usable cycle.
-	state.RequestSerial += 1
-	state.Busy = false
+	state.CancelAllocation()
 	state.PersistentAutoEnabled = enabled == true
 	state.WaitingForGtp = false
 	state.AutoBuildSafeWaitUntil = 0
@@ -15725,6 +15864,7 @@ function qolState.StatAllocate.Select(statName)
 	if not qolState.StatAllocate.Definitions[statName] then
 		return false
 	end
+	if qolState.StatAllocate.Selected ~= statName then qolState.StatAllocate.CancelAllocation() end
 	qolState.StatAllocate.Selected = statName
 	qolState.StatAllocate.TargetEnhanced = qolState.StatAllocate.BuildTargets[statName]
 	qolState.StatAllocate.TargetBox.Text = qolState.StatAllocate.TargetEnhanced and tostring(qolState.StatAllocate.TargetEnhanced) or ""
@@ -15747,23 +15887,32 @@ function qolState.StatAllocate.Select(statName)
 end
 
 function qolState.StatAllocate.Allocate()
+	if unloaded or os.clock() < (qolState.StatAllocate.AllocationRetryAt or 0) then return false end
 	if qolState.StatAllocate.Busy or qolState.StatAllocate.PreChecking then
 		qolState.StatAllocate.SetStatus("An allocation request is already pending.", colors.Muted)
 		return false
 	end
 	-- The pre-checks below yield on InvokeServer; hold a flag so Heartbeat can't start a second pass.
 	qolState.StatAllocate.PreChecking = true
-	local ok, result = pcall(qolState.StatAllocate.AllocateUnguarded)
+	qolState.StatAllocate.RequestSerial += 1
+	local serial = qolState.StatAllocate.RequestSerial
+	local ok, result = pcall(qolState.StatAllocate.AllocateUnguarded, serial)
+	if unloaded or serial ~= qolState.StatAllocate.RequestSerial then return false end
 	qolState.StatAllocate.PreChecking = false
 	if not ok then
+		qolState.StatAllocate.Busy = false
+		qolState.StatAllocate.AllocationRetryAt = os.clock() + 5
 		qolState.StatAllocate.SetStatus("Allocation error: " .. tostring(result), colors.DangerHover)
 		return false
 	end
 	return result
 end
 
-function qolState.StatAllocate.AllocateUnguarded()
+function qolState.StatAllocate.AllocateUnguarded(requestSerial)
 	local statName = qolState.StatAllocate.Selected
+	local function current()
+		return not unloaded and requestSerial == qolState.StatAllocate.RequestSerial and statName == qolState.StatAllocate.Selected
+	end
 	local definition = qolState.StatAllocate.Definitions[statName]
 	if not definition then
 		qolState.StatAllocate.SetStatus("Select a valid stat first.", colors.DangerHover)
@@ -15776,10 +15925,13 @@ function qolState.StatAllocate.AllocateUnguarded()
 		end
 	end
 
-	local okBefore, gtpBefore = pcall(statRetrieveRemote.InvokeServer, statRetrieveRemote, "Gained TP")
+	local okBefore, gtpBefore = configStore.ReadStatBounded(5, current, "Gained TP")
+	if not current() then return false end
+	local readError = gtpBefore
 	gtpBefore = okBefore and tonumber(gtpBefore) or nil
 	if not gtpBefore then
-		qolState.StatAllocate.SetStatus("Could not read GTP right now.", colors.DangerHover)
+		qolState.StatAllocate.AllocationRetryAt = os.clock() + 5
+		qolState.StatAllocate.SetStatus("GTP read " .. tostring(readError) .. "; retry available in 5s.", colors.DangerHover)
 		return false
 	end
 	if qolState.StatAllocate.PersistentAutoEnabled then
@@ -15842,8 +15994,6 @@ function qolState.StatAllocate.AllocateUnguarded()
 	qolState.StatAllocate.GtpEmptyAlertSent = false
 
 	qolState.StatAllocate.Busy = true
-	qolState.StatAllocate.RequestSerial += 1
-	local requestSerial = qolState.StatAllocate.RequestSerial
 	qolState.StatAllocate.AllocateButton.Text = "Working..."
 	qolState.StatAllocate.AllocateButton.BackgroundColor3 = colors.AccentSoft
 	qolState.StatAllocate.SetStatus("Server request: " .. qolState.StatAllocate.DisplayNames[statName] .. "...", colors.Muted)
@@ -15864,7 +16014,7 @@ function qolState.StatAllocate.AllocateUnguarded()
 		local sendError = nil
 		local attempts = 0
 		for attempt = 1, 10 do
-			if unloaded or qolState.StatAllocate.RequestSerial ~= requestSerial then
+			if not current() then
 				return
 			end
 			attempts = attempt
@@ -15882,18 +16032,25 @@ function qolState.StatAllocate.AllocateUnguarded()
 			local confirmationDeadline = os.clock() + 0.28
 			repeat
 				task.wait(qolState.StatAllocate.RapidEnabled and 0.04 or 0.28)
-				local okAfter, currentGtp = pcall(statRetrieveRemote.InvokeServer, statRetrieveRemote, "Gained TP")
+				if not current() then return end
+				local okAfter, currentGtp = configStore.ReadStatBounded(5, current, "Gained TP")
+				if not current() then return end
+				if not okAfter then
+					sendError = "Confirmation " .. tostring(currentGtp) .. "; stopping retries to avoid duplicate spending"
+					qolState.StatAllocate.AllocationRetryAt = os.clock() + 5
+					break
+				end
 				currentGtp = okAfter and tonumber(currentGtp) or nil
 				if currentGtp then
 					gtpAfter = currentGtp
 				end
 			until gtpAfter < gtpBefore or os.clock() >= confirmationDeadline
-			if gtpAfter < gtpBefore then
+			if sendError or gtpAfter < gtpBefore then
 				break
 			end
 		end
 
-		if qolState.StatAllocate.RequestSerial ~= requestSerial then
+		if not current() then
 			return
 		end
 		qolState.StatAllocate.Busy = false
@@ -17231,8 +17388,8 @@ npcSafety.UpdateProfileVisual()
 
 connect(localPlayer.CharacterAdded, function()
 	restoreNpcMovementState()
-	qolState.StatAllocate.RequestSerial += 1
-	qolState.StatAllocate.Busy = false
+	qolState.StatAllocate.CancelAllocation()
+	qolState.StatAllocate.CancelMotivation()
 	qolState.ProfileEditor.RequestSerial += 1
 	qolState.ProfileEditor.Busy = false
 	qolState.Unlocks.RequestSerial += 1
@@ -20115,12 +20272,10 @@ function configStore.RequestReport()
 	refreshButton.BackgroundColor3 = colors.AccentSoft
 
 	task.spawn(function()
-		local statOk, statData = pcall(function()
-			return statRetrieveRemote:InvokeServer("StatData", "TableStat")
-		end)
-		local characterOk, characterData = pcall(function()
-			return statRetrieveRemote:InvokeServer("CharacterData", "TableStat")
-		end)
+		local function current() return requestSerial == thisRequest end
+		local statOk, statData = configStore.ReadStatBounded(3, current, "StatData", "TableStat")
+		if unloaded or not current() then return end
+		local characterOk, characterData = configStore.ReadStatBounded(3, current, "CharacterData", "TableStat")
 		if unloaded or requestSerial ~= thisRequest then
 			return
 		end
@@ -20140,6 +20295,7 @@ function configStore.RequestReport()
 	end)
 	schedule(6, function()
 		if requestPending and requestSerial == thisRequest then
+			requestSerial += 1
 			requestPending = false
 			refreshButton.Text = "Refresh"
 			refreshButton.BackgroundColor3 = colors.Accent
@@ -20151,17 +20307,18 @@ function configStore.RequestReport()
 end
 
 function configStore.RefreshLiveMotivation()
-	if unloaded or motivationRequestPending or currentTab ~= "Doctor" then
+	if unloaded or motivationRequestPending or currentTab ~= "Doctor" or os.clock() < (configStore.MotivationReadRetryAt or 0) then
 		return
 	end
 	motivationRequestPending = true
 	task.spawn(function()
-		local ok, value = pcall(function()
-			return statRetrieveRemote:InvokeServer("Motivation")
-		end)
+		local ok, value = configStore.ReadStatBounded(5, function() return currentTab == "Doctor" end, "Motivation")
 		motivationRequestPending = false
+		configStore.MotivationReadRetryAt = ok and 0 or os.clock() + 5
 		if not unloaded and currentTab == "Doctor" and ok then
 			valueLabels.Motivation.Text = configStore.FormatDirectStat(value)
+		elseif not unloaded and currentTab == "Doctor" then
+			valueLabels.Motivation.Text = "Unavailable (retrying)"
 		end
 	end)
 end
@@ -20552,6 +20709,7 @@ function configStore.Capture()
 		AutoAllocateBuildPriority = table.clone(qolState.StatAllocate.BuildPriority),
 		NpcType = selectedNpcType,
 		NpcPositionMode = npcSafety.SelectedPositionMode,
+		FastAttackPresets = npcSafety.CaptureAttackPresets(),
 		NpcAutofarm = npcTargetingEnabled,
 		AutoTransformEnabled = autoTransformState.Enabled,
 		AutoTransformForm = autoTransformState.Selected,
@@ -20601,6 +20759,7 @@ function configStore.Apply(data)
 		return false, "Config data is invalid."
 	end
 	configStore.ApplyTheme(configStore.ResolveSavedTheme(data))
+	npcSafety.ImportAttackPresets(data.FastAttackPresets)
 	if type(data.WindowPosition) == "table" then
 		local p = data.WindowPosition
 		if type(p.XScale)=="number" and type(p.XOffset)=="number" and type(p.YScale)=="number" and type(p.YOffset)=="number" then
@@ -20775,6 +20934,7 @@ function configStore.Apply(data)
 		or data.NpcPositionMode == "FrontBehind" then
 		npcSafety.SetPositionMode(data.NpcPositionMode)
 	end
+	npcSafety.ApplySavedAttackPreset(npcSafety.PositionMode)
 	if type(data.AutoTransformForm) == "string" then
 		autoTransformState.Select(data.AutoTransformForm)
 	end
@@ -20970,8 +21130,8 @@ function controller.Unload()
 		if configStore.ChatLog then configStore.ChatLog.RestoreNativeChat() end
 	end)
 	step("stat allocate", function()
-		qolState.StatAllocate.RequestSerial += 1
-		qolState.StatAllocate.Busy = false
+		qolState.StatAllocate.CancelAllocation()
+		qolState.StatAllocate.CancelMotivation()
 		qolState.StatAllocate.AutoEnabled = false
 		qolState.StatAllocate.PersistentAutoEnabled = false
 		qolState.StatAllocate.MotivationAutoEnabled = false
@@ -21042,6 +21202,8 @@ function controller.Unload()
 	step("movement", restoreNpcMovementState)
 	step("camera shake", restoreNpcCameraShake)
 	unloaded = true
+	for worker in pairs(configStore.PendingStatReads) do pcall(task.cancel, worker) end
+	table.clear(configStore.PendingStatReads)
 	requestPending = false
 	activeTrainingButton = nil
 
@@ -21475,6 +21637,7 @@ function configStore.PolishInterface()
 end
 configStore.PolishInterface()
 
+npcSafety.InitializeAttackPresets()
 configStore.SelectTab("Home")
 configStore.InitializeAutoload()
 print("[" .. HUB_DISPLAY_NAME .. "] Loaded on", currentPlanet, HUB_VERSION, "flight:", flightSpeed, "key:", visibilityKey.Name)

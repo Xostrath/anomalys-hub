@@ -9622,11 +9622,27 @@ connect(configStore.DragonBallESP.ScanButton.Activated, configStore.DragonBallES
 connect(RunService.Heartbeat, configStore.DragonBallESP.Update)
 configStore.DragonBallESP.RenderButtons()
 
+function npcSafety.IsExcludedFarmName(name)
+	return type(name) == "string" and string.find(string.lower(name):gsub("[^%w]", ""), "vegeta", 1, true) ~= nil
+end
+
+function npcSafety.IsExcludedFarmTarget(model)
+	if not model then return false end
+	if npcSafety.IsExcludedFarmName(model.Name) then return true end
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	if humanoid and npcSafety.IsExcludedFarmName(humanoid.DisplayName) then return true end
+	for _, key in ipairs({"NPCName", "DisplayName", "Name"}) do
+		if npcSafety.IsExcludedFarmName(model:GetAttribute(key)) then return true end
+	end
+	return false
+end
+
 local function isLivingNpcOfType(model, npcType)
 	local live = getLiveFolder()
 	if not live or not model or not model:IsA("Model") or not model:IsDescendantOf(live) then
 		return false
 	end
+	if npcSafety.IsExcludedFarmTarget(model) then return false end
 	if npcType == npcSafety.StrongestOptionName then
 		if not npcSafety.GetNpcPowerLevel(model) then return false end
 	elseif model.Name ~= npcType then
@@ -9897,7 +9913,8 @@ local function findNearestNpc(npcType, excludedTarget)
 			if model and root and descendant.Health > 0 and not Players:GetPlayerFromCharacter(model) then
 				table.insert(allNpcRoots, {Model = model, Root = root})
 			end
-			if model and model ~= excludedTarget and model:IsA("Model") and isLivingNpcOfType(model, npcType) then
+			if model and model ~= excludedTarget and model:IsA("Model")
+				and not npcSafety.IsExcludedFarmTarget(model) and isLivingNpcOfType(model, npcType) then
 				if npcType ~= npcSafety.StrongestOptionName then npcSafety.RememberSpawn(npcType, root.Position) end
 				if not npcSafety.IsNpcOutsidePlayerRange(model) then
 					npcSafety.ContestedNpcCount += 1
@@ -10030,6 +10047,7 @@ local function attachToNpc(target)
 		return false
 	end
 	if not npcSafety.IsNpcOutsidePlayerRange(target) then return false end
+	if npcSafety.IsExcludedFarmTarget(target) then return false end
 
 	local isNewTarget = npcSafety.LastAttachedTarget ~= target
 	if isNewTarget then
@@ -10851,6 +10869,7 @@ local function getPlayerAvoidance(position)
 end
 
 function npcSafety.FindSpawnAnchor(npcType, origin)
+	if npcSafety.IsExcludedFarmName(npcType) then return nil end
 	if type(npcType) ~= "string" or typeof(origin) ~= "Vector3" then
 		return nil
 	end
@@ -11067,6 +11086,7 @@ function npcSafety.SendLeftClick()
 end
 
 function npcSafety.SendLightAttack()
+	if npcSafety.IsExcludedFarmTarget(activeNpcTarget) then return false end
 	if not npcSafety.IsNpcOutsidePlayerRange(activeNpcTarget) then return false end
 	local combatController = getNpcCombatController()
 	if not combatController or type(combatController.Light) ~= "function" then
@@ -11085,6 +11105,7 @@ function npcSafety.IsDirectLightTargetAllowed(target)
 	if Players:GetPlayerFromCharacter(target) ~= nil then
 		return false, "target is a player"
 	end
+	if npcSafety.IsExcludedFarmTarget(target) then return false, "excluded NPC (Vegeta)" end
 	if target ~= activeNpcTarget or not npcTargetingEnabled or not selectedNpcType then
 		return false, "target not active or farming disabled"
 	end
@@ -11329,7 +11350,7 @@ function npcSafety.BuildDirectLightPayload(target, combo)
 	local location = offset.Magnitude > 0.05
 		and CFrame.lookAt(root.Position, targetRoot.Position) * CFrame.new(0, 0, -reach)
 		or root.CFrame * CFrame.new(0, 0, -3.5 * scale)
-	-- Below farming deliberately stays 15 studs beneath the NPC. The original
+	-- Below farming deliberately stays 10 studs beneath the NPC. The original
 	-- Fast Attack used the target pivot; the swing/hit rewrite accidentally
 	-- moved this box back beside the player, away from the requested victim.
 	-- Restore only that placement, not a larger box or a different attack rate.
@@ -11628,8 +11649,8 @@ function npcSafety.GetDirectLightAttackReadiness()
 		local root = localPlayer.Character:FindFirstChild("HumanoidRootPart")
 		local delta = getNpcRoot(npcSafety.DirectLight.Target).Position - root.Position
 		-- Rise starts while still travelling upward. Wait until close to the
-		-- normal 15-stud below position, not merely inside the 30-stud sample gate.
-		if delta.Y <= 0 or delta.Magnitude > 22 or delta.X * delta.X + delta.Z * delta.Z > 36 then
+		-- normal 10-stud below position, not merely inside the 30-stud sample gate.
+		if delta.Y <= 0 or delta.Magnitude > 17 or delta.X * delta.X + delta.Z * delta.Z > 36 then
 			return false, "settling below target", true
 		end
 	end
@@ -15118,7 +15139,8 @@ local function collectNpcTypes()
 		for _, descendant in ipairs(live:GetDescendants()) do
 			if descendant:IsA("Humanoid") then
 				local model = descendant.Parent
-				if model and model:IsA("Model") and not Players:GetPlayerFromCharacter(model) then
+				if model and model:IsA("Model") and not Players:GetPlayerFromCharacter(model)
+					and not npcSafety.IsExcludedFarmTarget(model) then
 					counts[model.Name] = (counts[model.Name] or 0) + 1
 				end
 			end
@@ -15248,6 +15270,10 @@ end
 local function setNpcTargetingEnabled(enabled)
 	if type(enabled) ~= "boolean" then
 		return false
+	end
+	if enabled and npcSafety.IsExcludedFarmName(selectedNpcType) then
+		selectedNpcType = npcSafety.StrongestOptionName
+		npcSelectorButton.Text = selectedNpcType .. "  v"
 	end
 	if enabled and not selectedNpcType then
 		setNpcStatus("Choose an NPC type before enabling autofarm.", colors.DangerHover)
@@ -17549,6 +17575,12 @@ connect(RunService.Heartbeat, function(deltaTime)
 	-- AutoFarm always requires noclip, independently of the QoL button. Reapply
 	-- it every Heartbeat to every current and newly inserted character BasePart.
 	applyNpcNoclip(character, true)
+	if npcSafety.IsExcludedFarmTarget(activeNpcTarget) or npcSafety.IsExcludedFarmTarget(npcSafety.GripTarget) then
+		clearNpcConstraintRig()
+		npcSafety.ResetPostCombat()
+		npcSafety.SpawnDestination, npcSafety.SpawnSource = nil, nil
+		npcAcquireElapsed = 1
+	end
 	npcSafety.RetargetContestedNpc()
 	npcSafety.UpdatePlayerProximityThreat()
 	npcSafety.UpdateHideMode(character, humanoid, characterRoot)
@@ -17857,7 +17889,7 @@ connect(RunService.Heartbeat, function(deltaTime)
 	if targetKnocked then
 		approachDepth = math.min(approachDepth, 6)
 	elseif npcSafety.PositionMode == "Below" or npcSafety.SelectedPositionMode == "Below" then
-		approachDepth = 15
+		approachDepth = 10
 	end
 	local targetDistance = (targetPosition - characterPosition).Magnitude
 	if not targetKnocked and targetDistance <= 30 and npcSafety.TargetCombatStartedAt == 0 then
@@ -20988,7 +21020,7 @@ function configStore.Apply(data)
 		end
 	end
 	if type(data.NpcType) == "string" and data.NpcType ~= "" then
-		selectedNpcType = data.NpcType
+		selectedNpcType = npcSafety.IsExcludedFarmName(data.NpcType) and npcSafety.StrongestOptionName or data.NpcType
 		npcSelectorButton.Text = selectedNpcType .. "  v"
 		clearNpcConstraintRig()
 		npcSafety.SpawnDestination = nil
@@ -21429,6 +21461,7 @@ controller.SetSelectedNpcType = function(npcType)
 	if type(npcType) ~= "string" or npcType == "" then
 		return false
 	end
+	if npcSafety.IsExcludedFarmName(npcType) then return false end
 	selectedNpcType = npcType
 	npcSelectorButton.Text = npcType .. "  v"
 	clearNpcConstraintRig()

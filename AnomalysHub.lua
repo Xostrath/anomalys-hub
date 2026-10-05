@@ -2321,7 +2321,7 @@ local configStore = {
 		Buttons = {},
 		UpdateElapsed = 0,
 		MaxDistance = 1000000,
-		MinDistance = 1000000,
+		MinDistance = 500,
 		MaxDistanceCap = 1000000,
 		DistanceSliderDragging = false,
 	},
@@ -4200,14 +4200,24 @@ function configStore.ESP.SetMaxDistance(value)
 end
 
 function configStore.NpcESP.GetDistanceAlpha(value)
-	return configStore.ESP.GetDistanceAlpha(value)
+	local minD = configStore.NpcESP.MinDistance or 500
+	local maxD = configStore.NpcESP.MaxDistanceCap or 1000000
+	if type(value) ~= "number" or value ~= value or maxD <= minD then return 0 end
+	-- Log spacing keeps nearby distances adjustable without losing the far end.
+	return math.clamp(math.log(math.clamp(value, minD, maxD) / minD) / math.log(maxD / minD), 0, 1)
+end
+
+function configStore.NpcESP.GetDistanceFromAlpha(alpha)
+	local minD = configStore.NpcESP.MinDistance or 500
+	local maxD = configStore.NpcESP.MaxDistanceCap or 1000000
+	return minD * (maxD / minD) ^ math.clamp(alpha, 0, 1)
 end
 
 function configStore.NpcESP.SetMaxDistance(value)
-	if type(value) ~= "number" then
+	if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge then
 		return false
 	end
-	local minD = configStore.NpcESP.MinDistance or 1000000
+	local minD = configStore.NpcESP.MinDistance or 500
 	local maxD = configStore.NpcESP.MaxDistanceCap or 1000000
 	configStore.NpcESP.MaxDistance = math.clamp(math.floor(value + 0.5), minD, maxD)
 	local alpha = configStore.NpcESP.GetDistanceAlpha(configStore.NpcESP.MaxDistance)
@@ -4251,9 +4261,7 @@ local function setNpcEspMaxDistanceFromInputX(inputX)
 		return
 	end
 	local alpha = math.clamp((inputX - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
-	local minD = configStore.NpcESP.MinDistance or 1000000
-	local maxD = configStore.NpcESP.MaxDistanceCap or 1000000
-	configStore.NpcESP.SetMaxDistance(minD + (maxD - minD) * alpha)
+	configStore.NpcESP.SetMaxDistance(configStore.NpcESP.GetDistanceFromAlpha(alpha))
 end
 
 connect(configStore.ESP.DistanceHitbox.InputBegan, function(input)

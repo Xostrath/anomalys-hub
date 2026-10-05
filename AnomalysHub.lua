@@ -4122,6 +4122,49 @@ configStore.DragonBallESP.StatusLabel = create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, configStore.DragonBallESP.Card)
 
+-- BEGIN BUU DETECTOR UI
+configStore.BuuDetector = {Enabled = false, Entries = {}, UpdateElapsed = 0}
+configStore.BuuDetector.Card = create("Frame", {
+	Name = "MajinBuuDetector", Position = UDim2.fromOffset(18, 1140),
+	Size = UDim2.new(1, -36, 0, 120), BackgroundColor3 = colors.SurfaceRaised, BorderSizePixel = 0,
+}, pages.ESP)
+create("UICorner", {CornerRadius = UDim.new(0, 9)}, configStore.BuuDetector.Card)
+create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.2}, configStore.BuuDetector.Card)
+create("TextLabel", {
+	Name = "Title", Position = UDim2.fromOffset(16, 12), Size = UDim2.new(1, -180, 0, 22),
+	BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold, Text = "Majin Buu detector",
+	TextColor3 = colors.Text, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+}, configStore.BuuDetector.Card)
+create("TextLabel", {
+	Position = UDim2.fromOffset(16, 38), Size = UDim2.new(1, -180, 0, 34),
+	BackgroundTransparency = 1, Font = Enum.Font.Gotham,
+	Text = "Alert + marker; webhook when ALERTS is on. Only detects living NPCs visible to this client.",
+	TextColor3 = colors.Muted, TextSize = 9, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, configStore.BuuDetector.Card)
+configStore.BuuDetector.Button = create("TextButton", {
+	Name = "Master", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -16, 0, 14),
+	Size = UDim2.fromOffset(142, 36), AutoButtonColor = false, BackgroundColor3 = colors.Surface,
+	BorderSizePixel = 0, Font = Enum.Font.GothamBold, Text = "BUU DETECTOR: OFF", TextColor3 = colors.Muted, TextSize = 10,
+}, configStore.BuuDetector.Card)
+create("UICorner", {CornerRadius = UDim.new(0, 6)}, configStore.BuuDetector.Button)
+configStore.BuuDetector.Status = create("TextLabel", {
+	Name = "Status", Position = UDim2.fromOffset(16, 82), Size = UDim2.new(1, -32, 0, 26),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = "Detector off", TextColor3 = colors.Muted,
+	TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, configStore.BuuDetector.Card)
+configStore.BuuDetector.Gui = create("ScreenGui", {
+	Name = "AnomalyHubBuuDetector", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 61,
+}, playerGui)
+configStore.BuuDetector.Banner = create("TextLabel", {
+	Name = "BuuAlert", AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 112),
+	Size = UDim2.new(0.8, 0, 0, 40), BackgroundColor3 = colors.SurfaceRaised, BorderSizePixel = 0,
+	Font = Enum.Font.GothamBold, Text = "", TextSize = 14, TextColor3 = colors.Accent, Visible = false,
+	TextWrapped = true,
+}, configStore.BuuDetector.Gui)
+create("UISizeConstraint", {MaxSize = Vector2.new(420, 40)}, configStore.BuuDetector.Banner)
+create("UICorner", {CornerRadius = UDim.new(0, 8)}, configStore.BuuDetector.Banner)
+-- END BUU DETECTOR UI
+
 function configStore.ESP.GetDistanceAlpha(value)
 	local minD = configStore.ESP.MinDistance or 500
 	local maxD = configStore.ESP.MaxDistanceCap or 100000
@@ -9044,6 +9087,106 @@ connect(RunService.Heartbeat, function(deltaTime)
 	configStore.NpcESP.Update(deltaTime)
 end)
 configStore.NpcESP.RenderButtons()
+
+-- BEGIN BUU DETECTOR LOGIC
+function configStore.BuuDetector.MatchesName(value)
+	if type(value) ~= "string" then return false end
+	local compact = string.lower(value):gsub("[%s%p_]", "")
+	return compact == "majinbuu" or compact == "buu"
+end
+
+function configStore.BuuDetector.IsCandidate(model, humanoid)
+	if not model or not model.Parent or not model:IsA("Model") or Players:GetPlayerFromCharacter(model)
+		or not humanoid or humanoid.Health <= 0 then return false end
+	local matches = configStore.BuuDetector.MatchesName
+	if matches(model.Name) or matches(humanoid.DisplayName) then return true end
+	for _, key in ipairs({"NPCName", "DisplayName", "Name"}) do
+		if matches(model:GetAttribute(key)) then return true end
+	end
+	return false
+end
+
+function configStore.BuuDetector.Clear()
+	local state = configStore.BuuDetector
+	for model, entry in pairs(state.Entries) do
+		entry.Billboard:Destroy()
+		state.Entries[model] = nil
+	end
+	state.Banner.Visible = false
+end
+
+function configStore.BuuDetector.Update(deltaTime)
+	local state = configStore.BuuDetector
+	if unloaded or not state.Enabled then return end
+	state.UpdateElapsed += deltaTime
+	if state.UpdateElapsed < 0.5 then return end
+	state.UpdateElapsed = 0
+	local seen, count, newCount = {}, 0, 0
+	local character = localPlayer.Character
+	local localRoot = character and character:FindFirstChild("HumanoidRootPart")
+	local nearest = math.huge
+	for _, candidate in ipairs(configStore.NpcESP.EnumerateModels()) do
+		local model, root = candidate.Model, candidate.Root
+		if not seen[model] and root and root.Parent and state.IsCandidate(model, candidate.Humanoid) then
+			seen[model] = true
+			count += 1
+			local entry = state.Entries[model]
+			if not entry then
+				local billboard = create("BillboardGui", {Name = "MajinBuuMarker", Adornee = root,
+					Size = UDim2.fromOffset(230, 46), StudsOffset = Vector3.new(0, 5, 0),
+					AlwaysOnTop = true, MaxDistance = 1000000}, state.Gui)
+				local label = create("TextLabel", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+					Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = colors.Accent,
+					TextStrokeTransparency = 0.25, TextStrokeColor3 = Color3.fromRGB(0, 0, 0), Text = ""}, billboard)
+				entry = {Billboard = billboard, Label = label}
+				state.Entries[model] = entry
+				newCount += 1
+			end
+			entry.Billboard.Adornee = root
+			local distance = localRoot and (root.Position - localRoot.Position).Magnitude or nil
+			if distance then nearest = math.min(nearest, distance) end
+			entry.Label.TextColor3 = colors.Accent
+			entry.Label.Text = "MAJIN BUU" .. (distance and string.format("\n%.0f studs", distance) or "\nDistance unavailable")
+		end
+	end
+	for model, entry in pairs(state.Entries) do
+		if not seen[model] then entry.Billboard:Destroy(); state.Entries[model] = nil end
+	end
+	local detail = nearest < math.huge and string.format(" | nearest %.0f studs", nearest) or ""
+	state.Status.Text = count > 0 and (string.format("DETECTED: %d", count) .. detail) or "Scanning | no matching living NPC visible to this client"
+	state.Banner.Text = "MAJIN BUU DETECTED" .. detail
+	state.Banner.BackgroundColor3 = colors.SurfaceRaised
+	state.Banner.TextColor3 = colors.Accent
+	state.Banner.Visible = count > 0
+	if newCount > 0 then
+		print("[Anomaly's Hub] Majin Buu detected locally" .. detail)
+		if configStore.Webhook and configStore.Webhook.Enabled then
+			configStore.Webhook.Send("Majin Buu detected",
+				string.format("%d newly detected living Majin Buu NPC(s) visible to your client", newCount) .. detail,
+				14337535)
+		end
+		pcall(function()
+			game:GetService("StarterGui"):SetCore("SendNotification", {
+				Title = "Majin Buu detected", Text = "Living NPC visible to your client" .. detail, Duration = 8,
+			})
+		end)
+	end
+end
+
+function configStore.BuuDetector.SetEnabled(enabled)
+	local state = configStore.BuuDetector
+	state.Enabled = enabled == true
+	state.Button.Text = state.Enabled and "BUU DETECTOR: ON" or "BUU DETECTOR: OFF"
+	state.Button.BackgroundColor3 = state.Enabled and colors.Accent or colors.Surface
+	state.Button.TextColor3 = state.Enabled and colors.Background or colors.Muted
+	if state.Enabled then state.UpdateElapsed = 0.5; state.Update(0)
+	else state.Clear(); state.Status.Text = "Detector off" end
+end
+connect(configStore.BuuDetector.Button.Activated, function()
+	configStore.BuuDetector.SetEnabled(not configStore.BuuDetector.Enabled)
+end)
+connect(RunService.Heartbeat, configStore.BuuDetector.Update)
+-- END BUU DETECTOR LOGIC
 
 configStore.DragonBallESP.NumberWords = {one = 1, two = 2, three = 3, four = 4, five = 5, six = 6, seven = 7}
 configStore.DragonBallESP.ExcludedWords = {"manager", "remote", "gui", "radar", "spawn", "sound", "effect", "vfx", "handler", "module", "script"}
@@ -20410,6 +20553,7 @@ function configStore.Capture()
 		ESPSettings = table.clone(configStore.ESP.Settings),
 		ESPMaxDistance = configStore.ESP.MaxDistance,
 		NpcESPEnabled = configStore.NpcESP.Enabled,
+		BuuDetectorEnabled = configStore.BuuDetector.Enabled,
 		NpcESPSettings = table.clone(configStore.NpcESP.Settings),
 		AutoClashEnabled = configStore.AutoClash.Enabled,
 		AutoClashMash = configStore.AutoClash.Mash,
@@ -20545,6 +20689,7 @@ function configStore.Apply(data)
 			end
 		end
 	end
+	if type(data.BuuDetectorEnabled) == "boolean" then configStore.BuuDetector.SetEnabled(data.BuuDetectorEnabled) end
 	if type(data.NpcESPEnabled) == "boolean" then
 		configStore.NpcESP.SetEnabled(data.NpcESPEnabled)
 	else
@@ -20856,6 +21001,10 @@ function controller.Unload()
 	step("npc esp", function()
 		configStore.NpcESP.Enabled = false
 		configStore.NpcESP.Clear()
+	end)
+	step("buu detector", function()
+		configStore.BuuDetector.SetEnabled(false)
+		configStore.BuuDetector.Gui:Destroy()
 	end)
 	step("auto clash", function()
 		configStore.AutoClash.Enabled = false

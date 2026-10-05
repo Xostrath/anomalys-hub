@@ -2737,7 +2737,7 @@ local npcSafety = {
 	DirectLight = {
 		Authorized = configStore.FeatureAccess.FastAttack,
 		Enabled = false,
-		Interval = 0.075,
+		Interval = 0.100,
 		-- Keep one delayed swing in flight. Timing uses bounded comparisons of
 		-- observed HP loss, then holds; these observations are not server acks.
 		SwingDelay = 0.13,
@@ -7191,7 +7191,7 @@ npcSafety.DirectLight.IntervalBox = create("TextBox", {
 	BorderSizePixel = 0,
 	ClearTextOnFocus = false,
 	Font = Enum.Font.GothamSemibold,
-	Text = "0.075",
+	Text = "0.100",
 	TextColor3 = colors.Text,
 	TextSize = 11,
 }, npcSafety.DirectLight.Card)
@@ -11517,7 +11517,7 @@ end
 
 function npcSafety.ImportAttackPresets(saved)
 	local d = npcSafety.DirectLight
-	d.Presets = d.Presets or {Below={Interval=0.075, Level=8, SwingDelay=0, Pairs=2}}
+	d.Presets = d.Presets or {Below={Interval=0.100, Level=8, SwingDelay=0, Pairs=2}}
 	if type(saved) ~= "table" then return end
 	for _, mode in ipairs({"Below", "Above", "FrontBehind"}) do
 		local preset = npcSafety.ValidateAttackPreset(saved[mode])
@@ -11529,7 +11529,7 @@ function npcSafety.ApplySavedAttackPreset(mode)
 	local d = npcSafety.DirectLight
 	if d.BenchmarkRunning then return false end
 	npcSafety.ImportAttackPresets(nil)
-	local preset = d.Presets[mode] or {Interval=0.075, Level=4}
+	local preset = d.Presets[mode] or {Interval=0.100, Level=4}
 	d.Interval, d.Accumulator = preset.Interval, 0
 	npcSafety.HoldDirectLightLevel(preset.Level, nil)
 	if d.IntervalBox then d.IntervalBox.Text = string.format("%.3f", d.Interval) end

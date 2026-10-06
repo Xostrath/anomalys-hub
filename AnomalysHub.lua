@@ -4788,6 +4788,38 @@ function configStore.ESP.ResolveLeaderboardPlayer(object)
 	end
 	-- Clicking a stat, icon, menu item, or blank area is not a name click.
 	local player=textPlayer(object)
+	-- This game's hovered row expands with a separate username line. Resolve
+	-- that exact username inside the name's immediate row, not just the clicked
+	-- character-name label. Never search the whole roster or hidden tooltips.
+	if (object:IsA("TextLabel") or object:IsA("TextButton")) and object.Text:find("%a") then
+		local row=object.Parent
+		if row==container then row=object end
+		if row and row~=container and not row:IsA("ScrollingFrame") and row:IsA("GuiObject") then
+			local found=nil
+			local count=0
+			for _,label in ipairs(row:GetDescendants()) do
+				count+=1;if count>64 then break end
+				if not (label:IsA("TextLabel") or label:IsA("TextButton")) then continue end
+				local visible=true
+				local ancestor=label
+				while ancestor and ancestor~=row do
+					if ancestor:IsA("GuiObject") and not ancestor.Visible then visible=false;break end
+					ancestor=ancestor.Parent
+				end
+				if not visible then continue end
+				local value=label.Text:gsub("<[^>]*>",""):match("^%s*@?([%w_]+)%s*$")
+				if value then
+					for _,candidate in ipairs(candidates) do
+						if value:lower()==candidate.Name:lower() then
+							if (identified and identified~=candidate) or (found and found~=candidate) then return nil end
+							found=candidate
+						end
+					end
+				end
+			end
+			if found then return found end
+		end
+	end
 	if player then return player end
 	if object:IsA("TextLabel") or (object:IsA("TextButton") and object.Text~="") then return nil end
 	-- Some leaderboards put a transparent button directly over the name label.

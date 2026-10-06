@@ -13496,12 +13496,22 @@ function npcSafety.RemoteSpy.Install()
 	local original
 	original = hook(game, "__namecall", wrap(function(self, ...)
 		local inspector = configStore.RemoteInspector
+		local serverInfoSession
 		if (spy.Active or inspector.Active) and not unloaded then
 			-- Instrumentation must never prevent the original call or change its returns.
 			local methodOk, method = pcall(getMethod)
 			if methodOk and (method == "FireServer" or method == "InvokeServer") and typeof(self) == "Instance" then
 				pcall(spy.Capture, self, method, table.pack(...), "namecall")
+				-- Observe the game's own named-server lookup, without making or
+				-- replaying requests. Preserve nil slots and every original return.
+				if inspector.Active and method=="InvokeServer" and self.Name=="GetServerInfo"
+					and self.Parent==remotes then serverInfoSession=inspector.SessionId end
 			end
+		end
+		if serverInfoSession then
+			local values=table.pack(original(self,...))
+			pcall(spy.CaptureServerInfoReturn,self,serverInfoSession,values)
+			return table.unpack(values,1,values.n)
 		end
 		return original(self, ...)
 	end))
@@ -13509,6 +13519,13 @@ function npcSafety.RemoteSpy.Install()
 	spy.Original = original
 	spy.Installed = true
 	return true
+end
+
+function npcSafety.RemoteSpy.CaptureServerInfoReturn(remote, sessionId, values)
+	local inspector=configStore.RemoteInspector
+	if unloaded or not inspector.Active or inspector.SessionId~=sessionId then return end
+	if remote.Parent~=remotes or remote.Name~="GetServerInfo" then return end
+	inspector.Observe(remote,"IN GetServerInfo RETURN (passive)",values)
 end
 
 function npcSafety.RemoteSpy.Capture(remote, method, args, channel)

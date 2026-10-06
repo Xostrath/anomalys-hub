@@ -16769,11 +16769,11 @@ function autoTransformState.IsOwnVisibleGui(object)
 	return true
 end
 
-function autoTransformState.ReadFatiguePercent()
+function autoTransformState.ReadFatiguePercent(forceScan)
 	local state = autoTransformState
 	local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
 	local character = localPlayer.Character
-	if state.FatigueGui ~= playerGui or state.FatigueCharacter ~= character
+	if forceScan or state.FatigueGui ~= playerGui or state.FatigueCharacter ~= character
 		or os.clock() >= (state.NextFatigueScanAt or 0) then
 		state.FatigueGui, state.FatigueCharacter = playerGui, character
 		state.NextFatigueScanAt = os.clock() + 0.75
@@ -16798,11 +16798,12 @@ function autoTransformState.ReadFatiguePercent()
 			end
 		end
 	end
-	-- Read the displayed percentage, not an assumed raw Fatigue scale. Unknown
-	-- or hidden UI is not treated as zero; never read another player's billboard.
-	local highest
+	-- Distinguish an absent/hidden bar from a visible but unreadable bar.
+	-- Never read another player's billboard or the hub's own status text.
+	local highest, visibleBar = nil, false
 	for _, panel in ipairs(state.FatiguePanels or {}) do
 		if state.IsOwnVisibleGui(panel) then
+			visibleBar = true
 			local objects = panel:GetDescendants()
 			table.insert(objects, 1, panel)
 			if #objects <= 200 then
@@ -16817,7 +16818,7 @@ function autoTransformState.ReadFatiguePercent()
 			end
 		end
 	end
-	return highest
+	return highest, visibleBar
 end
 
 function autoTransformState.ReadKi()
@@ -16836,7 +16837,7 @@ function autoTransformState.ReadKi()
 	return readPair(playerStats, true)
 end
 
-function autoTransformState.ResourceReady(selected)
+function autoTransformState.ResourceReady(selected, forceScan)
 	if string.lower(selected):gsub("[^%a]", "") == "kiburst" then
 		local ki, maxKi = autoTransformState.ReadKi()
 		if not ki then return false, "Ki unavailable" end
@@ -16844,13 +16845,14 @@ function autoTransformState.ResourceReady(selected)
 		if ki < maxKi then return false, string.format("Ki %.1f%% / 100%%", 100 * ki / maxKi) end
 		return true, "Ki full"
 	end
-	local fatigue = autoTransformState.ReadFatiguePercent()
+	local fatigue, visibleBar = autoTransformState.ReadFatiguePercent(forceScan)
+	if not visibleBar then return true, "No fatigue bar; ready" end
 	if fatigue == nil then return false, "Fatigue unavailable" end
 	if fatigue > 1 then return false, string.format("Fatigue %.1f%% > 1%%", fatigue) end
 	return true, "Fatigue ready"
 end
 
-function autoTransformState.GetReadyCharacter(selected)
+function autoTransformState.GetReadyCharacter(selected, forceScan)
 	if unloaded or not autoTransformState.Enabled or autoTransformState.Selected ~= selected or npcSafety.LootMode then
 		return nil, nil, "Paused"
 	end
@@ -16867,7 +16869,7 @@ function autoTransformState.GetReadyCharacter(selected)
 	end
 	local activeForm = tostring(formValue.Value)
 	if activeForm ~= "None" and activeForm ~= "" then return nil, nil, "Form active" end
-	local ready, reason = autoTransformState.ResourceReady(selected)
+	local ready, reason = autoTransformState.ResourceReady(selected, forceScan)
 	if not ready then return nil, nil, reason end
 	local ok, allowed = pcall(function()
 		local stateManager = require(ReplicatedStorage.Modules.Metadata.ControlData.StateManager)
@@ -17055,7 +17057,7 @@ function autoTransformState.Update(deltaTime)
 	end
 	task.delay(0.15, function()
 		if serial ~= autoTransformState.RequestSerial then return end
-		local readyCharacter, _, currentReason = autoTransformState.GetReadyCharacter(selected)
+		local readyCharacter, _, currentReason = autoTransformState.GetReadyCharacter(selected, true)
 		if serial ~= autoTransformState.RequestSerial then return end
 		autoTransformState.Pending = false
 		if readyCharacter ~= character then

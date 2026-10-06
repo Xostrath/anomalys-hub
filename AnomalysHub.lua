@@ -2326,7 +2326,7 @@ local configStore = {
 		DistanceSliderDragging = false,
 	},
 	DragonBallESP = {
-		Enabled = false,
+		Enabled = true,
 		Settings = {Distance = true, Highlight = true, Holders = true, Alerts = true},
 		Entries = {},
 		Buttons = {},
@@ -4047,7 +4047,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -180, 0, 28),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
-	Text = "Marks every Dragon Ball in the world and shows which players are carrying one.",
+	Text = "Always scans client-visible balls. Alert + marker; webhook when ALERTS is on.",
 	TextColor3 = colors.Muted,
 	TextSize = 9,
 	TextWrapped = true,
@@ -4062,7 +4062,7 @@ configStore.DragonBallESP.MasterButton = create("TextButton", {
 	BackgroundColor3 = colors.Surface,
 	BorderSizePixel = 0,
 	Font = Enum.Font.GothamBold,
-	Text = "DRAGON BALL ESP: OFF",
+	Text = "SCANNER: ALWAYS ON",
 	TextColor3 = colors.Muted,
 	TextSize = 9,
 }, configStore.DragonBallESP.Card)
@@ -4184,6 +4184,62 @@ configStore.BuuDetector.Banner = create("TextLabel", {
 create("UISizeConstraint", {MaxSize = Vector2.new(420, 40)}, configStore.BuuDetector.Banner)
 create("UICorner", {CornerRadius = UDim.new(0, 8)}, configStore.BuuDetector.Banner)
 -- END BUU DETECTOR UI
+
+-- BEGIN SUPER17 DETECTOR UI
+configStore.Super17Detector = {Enabled = false, Entries = {}, UpdateElapsed = 0}
+configStore.Super17Detector.Card = create("Frame", {
+	Name = "Super17Detector", Position = UDim2.fromOffset(18, 1278),
+	Size = UDim2.new(1, -36, 0, 120), BackgroundColor3 = colors.SurfaceRaised, BorderSizePixel = 0,
+}, pages.ESP)
+create("UICorner", {CornerRadius = UDim.new(0, 9)}, configStore.Super17Detector.Card)
+create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.2}, configStore.Super17Detector.Card)
+create("TextLabel", {
+	Name = "Title", Position = UDim2.fromOffset(16, 12), Size = UDim2.new(1, -180, 0, 22),
+	BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold, Text = "Super 17 detector",
+	TextColor3 = colors.Text, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+}, configStore.Super17Detector.Card)
+create("TextLabel", {
+	Position = UDim2.fromOffset(16, 38), Size = UDim2.new(1, -180, 0, 34),
+	BackgroundTransparency = 1, Font = Enum.Font.Gotham,
+	Text = "Alert + marker; webhook when ALERTS is on. Only detects living NPCs visible to this client.",
+	TextColor3 = colors.Muted, TextSize = 9, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, configStore.Super17Detector.Card)
+configStore.Super17Detector.Button = create("TextButton", {
+	Name = "Master", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -16, 0, 14),
+	Size = UDim2.fromOffset(142, 36), AutoButtonColor = false, BackgroundColor3 = colors.Surface,
+	BorderSizePixel = 0, Font = Enum.Font.GothamBold, Text = "SUPER 17: OFF", TextColor3 = colors.Muted, TextSize = 10,
+}, configStore.Super17Detector.Card)
+create("UICorner", {CornerRadius = UDim.new(0, 6)}, configStore.Super17Detector.Button)
+configStore.Super17Detector.Status = create("TextLabel", {
+	Name = "Status", Position = UDim2.fromOffset(16, 82), Size = UDim2.new(1, -32, 0, 26),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = "Detector off", TextColor3 = colors.Muted,
+	TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, configStore.Super17Detector.Card)
+configStore.Super17Detector.Gui = create("ScreenGui", {
+	Name = "AnomalyHubSuper17Detector", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 61,
+}, playerGui)
+configStore.Super17Detector.Banner = create("TextLabel", {
+	Name = "Super17Alert", AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 158),
+	Size = UDim2.new(0.8, 0, 0, 40), BackgroundColor3 = colors.SurfaceRaised, BorderSizePixel = 0,
+	Font = Enum.Font.GothamBold, Text = "", TextSize = 14, TextColor3 = colors.Accent, Visible = false,
+	TextWrapped = true,
+}, configStore.Super17Detector.Gui)
+create("UISizeConstraint", {MaxSize = Vector2.new(420, 40)}, configStore.Super17Detector.Banner)
+create("UICorner", {CornerRadius = UDim.new(0, 8)}, configStore.Super17Detector.Banner)
+-- END SUPER17 DETECTOR UI
+
+-- BEGIN DRAGON DETECTOR UI
+configStore.DragonBallESP.Gui = create("ScreenGui", {
+	Name = "AnomalyHubDragonBallDetector", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 61,
+}, playerGui)
+configStore.DragonBallESP.Banner = create("TextLabel", {
+	Name = "DragonBallAlert", AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 204),
+	Size = UDim2.new(0.8, 0, 0, 40), BackgroundColor3 = colors.SurfaceRaised, BorderSizePixel = 0,
+	Font = Enum.Font.GothamBold, Text = "", TextSize = 14, TextColor3 = colors.Accent, Visible = false, TextWrapped = true,
+}, configStore.DragonBallESP.Gui)
+create("UISizeConstraint", {MaxSize = Vector2.new(420, 40)}, configStore.DragonBallESP.Banner)
+create("UICorner", {CornerRadius = UDim.new(0, 8)}, configStore.DragonBallESP.Banner)
+-- END DRAGON DETECTOR UI
 
 function configStore.ESP.GetDistanceAlpha(value)
 	local minD = configStore.ESP.MinDistance or 500
@@ -9357,6 +9413,106 @@ end)
 connect(RunService.Heartbeat, configStore.BuuDetector.Update)
 -- END BUU DETECTOR LOGIC
 
+-- BEGIN SUPER17 DETECTOR LOGIC
+function configStore.Super17Detector.MatchesName(value)
+	if type(value) ~= "string" then return false end
+	local compact = string.lower(value):gsub("[%s%p_]", "")
+	return compact == "super17" or compact == "superandroid17"
+end
+
+function configStore.Super17Detector.IsCandidate(model, humanoid)
+	if not model or not model.Parent or not model:IsA("Model") or Players:GetPlayerFromCharacter(model)
+		or not humanoid or humanoid.Health <= 0 then return false end
+	local matches = configStore.Super17Detector.MatchesName
+	if matches(model.Name) or matches(humanoid.DisplayName) then return true end
+	for _, key in ipairs({"NPCName", "DisplayName", "Name"}) do
+		if matches(model:GetAttribute(key)) then return true end
+	end
+	return false
+end
+
+function configStore.Super17Detector.Clear()
+	local state = configStore.Super17Detector
+	for model, entry in pairs(state.Entries) do
+		entry.Billboard:Destroy()
+		state.Entries[model] = nil
+	end
+	state.Banner.Visible = false
+end
+
+function configStore.Super17Detector.Update(deltaTime)
+	local state = configStore.Super17Detector
+	if unloaded or not state.Enabled then return end
+	state.UpdateElapsed += deltaTime
+	if state.UpdateElapsed < 1 then return end
+	state.UpdateElapsed = 0
+	local seen, count, newCount = {}, 0, 0
+	local character = localPlayer.Character
+	local localRoot = character and character:FindFirstChild("HumanoidRootPart")
+	local nearest = math.huge
+	for _, candidate in ipairs(configStore.NpcESP.EnumerateModels()) do
+		local model, root = candidate.Model, candidate.Root
+		if not seen[model] and root and root.Parent and state.IsCandidate(model, candidate.Humanoid) then
+			seen[model] = true
+			count += 1
+			local entry = state.Entries[model]
+			if not entry then
+				local billboard = create("BillboardGui", {Name = "Super17Marker", Adornee = root,
+					Size = UDim2.fromOffset(230, 46), StudsOffset = Vector3.new(0, 5, 0),
+					AlwaysOnTop = true, MaxDistance = 1000000}, state.Gui)
+				local label = create("TextLabel", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+					Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = colors.Accent,
+					TextStrokeTransparency = 0.25, TextStrokeColor3 = Color3.fromRGB(0, 0, 0), Text = ""}, billboard)
+				entry = {Billboard = billboard, Label = label}
+				state.Entries[model] = entry
+				newCount += 1
+			end
+			entry.Billboard.Adornee = root
+			local distance = localRoot and (root.Position - localRoot.Position).Magnitude or nil
+			if distance then nearest = math.min(nearest, distance) end
+			entry.Label.TextColor3 = colors.Accent
+			entry.Label.Text = "SUPER 17" .. (distance and string.format("\n%.0f studs", distance) or "\nDistance unavailable")
+		end
+	end
+	for model, entry in pairs(state.Entries) do
+		if not seen[model] then entry.Billboard:Destroy(); state.Entries[model] = nil end
+	end
+	local detail = nearest < math.huge and string.format(" | nearest %.0f studs", nearest) or ""
+	state.Status.Text = count > 0 and (string.format("DETECTED: %d", count) .. detail) or "Scanning | no matching living NPC visible to this client"
+	state.Banner.Text = "SUPER 17 DETECTED" .. detail
+	state.Banner.BackgroundColor3 = colors.SurfaceRaised
+	state.Banner.TextColor3 = colors.Accent
+	state.Banner.Visible = count > 0
+	if newCount > 0 then
+		print("[Anomaly's Hub] Super 17 detected locally" .. detail)
+		if configStore.Webhook and configStore.Webhook.Enabled then
+			configStore.Webhook.Send("Super 17 detected",
+				string.format("%d newly detected living Super 17 NPC(s) visible to your client", newCount) .. detail,
+				14337535)
+		end
+		pcall(function()
+			game:GetService("StarterGui"):SetCore("SendNotification", {
+				Title = "Super 17 detected", Text = "Living NPC visible to your client" .. detail, Duration = 8,
+			})
+		end)
+	end
+end
+
+function configStore.Super17Detector.SetEnabled(enabled)
+	local state = configStore.Super17Detector
+	state.Enabled = enabled == true
+	state.Button.Text = state.Enabled and "SUPER 17: ON" or "SUPER 17: OFF"
+	state.Button.BackgroundColor3 = state.Enabled and colors.Accent or colors.Surface
+	state.Button.TextColor3 = state.Enabled and colors.Background or colors.Muted
+	if state.Enabled then state.UpdateElapsed = 1; state.Update(0)
+	else state.Clear(); state.Status.Text = "Detector off" end
+end
+connect(configStore.Super17Detector.Button.Activated, function()
+	configStore.Super17Detector.SetEnabled(not configStore.Super17Detector.Enabled)
+end)
+connect(RunService.Heartbeat, configStore.Super17Detector.Update)
+-- END SUPER17 DETECTOR LOGIC
+
 configStore.DragonBallESP.NumberWords = {one = 1, two = 2, three = 3, four = 4, five = 5, six = 6, seven = 7}
 configStore.DragonBallESP.ExcludedWords = {"manager", "remote", "gui", "radar", "spawn", "sound", "effect", "vfx", "handler", "module", "script"}
 configStore.DragonBallESP.StarColors = {
@@ -9444,29 +9600,31 @@ function configStore.DragonBallESP.Consider(instance)
 	end
 	for tracked in pairs(configStore.DragonBallESP.Tracked) do
 		if tracked:IsDescendantOf(resolved) then
+			if configStore.DragonBallESP.AlertedBalls[tracked] then
+				configStore.DragonBallESP.AlertedBalls[resolved] = true
+				configStore.DragonBallESP.AlertedBalls[tracked] = nil
+			end
 			configStore.DragonBallESP.Tracked[tracked] = nil
 			configStore.DragonBallESP.RemoveEntry(tracked)
 		end
 	end
 	configStore.DragonBallESP.Tracked[resolved] = true
-	if configStore.DragonBallESP.Primed and configStore.DragonBallESP.Settings.Alerts
-		and not configStore.DragonBallESP.AlertedBalls[resolved] then
-		configStore.DragonBallESP.AlertedBalls[resolved] = true
-		task.defer(configStore.DragonBallESP.AnnounceSpawn, resolved)
-	end
 end
 
-function configStore.DragonBallESP.AnnounceSpawn(instance)
-	if not instance.Parent or not configStore.DragonBallESP.Enabled then
+function configStore.DragonBallESP.AnnounceSpawn(instance, holder)
+	local state = configStore.DragonBallESP
+	if unloaded or not instance.Parent or not state.Enabled or not state.Settings.Alerts
+		or state.AlertedBalls[instance] then
 		return
 	end
-	local holderCharacter = instance:FindFirstAncestorOfClass("Model")
-	if holderCharacter and Players:GetPlayerFromCharacter(holderCharacter) then
-		return
-	end
+	state.AlertedBalls[instance] = true
 	local stars = configStore.DragonBallESP.GetStarCount(instance)
-	local message = (stars and (stars .. "-Star ") or "") .. "Dragon Ball appeared: " .. instance.Name
+	local message = (stars and (stars .. "-Star ") or "") .. "Dragon Ball detected locally"
+		.. (holder and (" | carried by @" .. holder.Name) or " | in world")
 	print("[Anomaly's Hub] " .. message .. " @ " .. instance:GetFullName())
+	if configStore.Webhook and configStore.Webhook.Enabled then
+		configStore.Webhook.Send("Dragon Ball detected", message, 16761920)
+	end
 	pcall(function()
 		game:GetService("StarterGui"):SetCore("SendNotification", {
 			Title = "Dragon Ball",
@@ -9507,7 +9665,7 @@ function configStore.DragonBallESP.CreateEntry(instance)
 		LightInfluence = 0,
 		MaxDistance = 1000000,
 		Enabled = false,
-	}, screenGui)
+	}, configStore.DragonBallESP.Gui)
 	local function label(name, y, textColor, size)
 		return create("TextLabel", {
 			Name = name,
@@ -9534,7 +9692,7 @@ function configStore.DragonBallESP.CreateEntry(instance)
 		OutlineTransparency = 0,
 		DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
 		Enabled = false,
-	}, screenGui)
+	}, configStore.DragonBallESP.Gui)
 	configStore.DragonBallESP.Entries[instance] = entry
 	return entry
 end
@@ -9553,6 +9711,7 @@ function configStore.DragonBallESP.Clear()
 	for instance in pairs(configStore.DragonBallESP.Entries) do
 		configStore.DragonBallESP.RemoveEntry(instance)
 	end
+	configStore.DragonBallESP.Banner.Visible = false
 end
 
 function configStore.DragonBallESP.DisconnectWorld()
@@ -9563,17 +9722,12 @@ function configStore.DragonBallESP.DisconnectWorld()
 end
 
 function configStore.DragonBallESP.StartTracking()
+	if configStore.DragonBallESP.Tracking then return end
+	configStore.DragonBallESP.Tracking = true
 	configStore.DragonBallESP.DisconnectWorld()
-	table.clear(configStore.DragonBallESP.Tracked)
-	table.clear(configStore.DragonBallESP.AlertedBalls)
-	configStore.DragonBallESP.Primed = false
 	for _, descendant in ipairs(workspace:GetDescendants()) do
 		configStore.DragonBallESP.Consider(descendant)
 	end
-	for tracked in pairs(configStore.DragonBallESP.Tracked) do
-		configStore.DragonBallESP.AlertedBalls[tracked] = true
-	end
-	configStore.DragonBallESP.Primed = true
 	table.insert(configStore.DragonBallESP.WorldConnections, connect(workspace.DescendantAdded, function(descendant)
 		if configStore.DragonBallESP.Enabled then
 			configStore.DragonBallESP.Consider(descendant)
@@ -9595,7 +9749,6 @@ function configStore.DragonBallESP.CollectBalls()
 			table.insert(balls, {Instance = instance, Holder = holder})
 		else
 			configStore.DragonBallESP.Tracked[instance] = nil
-			configStore.DragonBallESP.AlertedBalls[instance] = nil
 			configStore.DragonBallESP.RemoveEntry(instance)
 		end
 	end
@@ -9617,7 +9770,8 @@ end
 function configStore.DragonBallESP.RenderButtons()
 	local master = configStore.DragonBallESP.MasterButton
 	local enabled = configStore.DragonBallESP.Enabled
-	master.Text = enabled and "DRAGON BALL ESP: ON" or "DRAGON BALL ESP: OFF"
+	master.Text = "SCANNER: ALWAYS ON"
+	master.Active = false
 	master.BackgroundColor3 = enabled and colors.Accent or colors.Surface
 	master.TextColor3 = enabled and colors.Background or colors.Muted
 	for key, button in pairs(configStore.DragonBallESP.Buttons) do
@@ -9636,15 +9790,10 @@ function configStore.DragonBallESP.RenderButtons()
 end
 
 function configStore.DragonBallESP.SetEnabled(enabled)
-	configStore.DragonBallESP.Enabled = enabled == true
-	if configStore.DragonBallESP.Enabled then
-		configStore.DragonBallESP.StartTracking()
-	else
-		configStore.DragonBallESP.DisconnectWorld()
-		table.clear(configStore.DragonBallESP.Tracked)
-		table.clear(configStore.DragonBallESP.AlertedBalls)
-		configStore.DragonBallESP.Clear()
-	end
+	-- Always on for this hub lifetime, even when loading an older OFF preset.
+	if unloaded then return false end
+	configStore.DragonBallESP.Enabled = true
+	configStore.DragonBallESP.StartTracking()
 	configStore.DragonBallESP.RenderButtons()
 	return configStore.DragonBallESP.Enabled
 end
@@ -9659,7 +9808,7 @@ function configStore.DragonBallESP.SetSetting(key, enabled)
 end
 
 function configStore.DragonBallESP.Update(deltaTime)
-	if not configStore.DragonBallESP.Enabled then
+	if unloaded or not configStore.DragonBallESP.Enabled then
 		return
 	end
 	configStore.DragonBallESP.UpdateElapsed += deltaTime
@@ -9676,6 +9825,7 @@ function configStore.DragonBallESP.Update(deltaTime)
 		local holderRoot = holder and holder.Character and holder.Character:FindFirstChild("HumanoidRootPart")
 		local anchor = ball.Stowed and holderRoot or configStore.DragonBallESP.GetAnchor(instance)
 		if anchor and (not holder or settings.Holders) then
+			configStore.DragonBallESP.AnnounceSpawn(instance, holder)
 			active[instance] = true
 			if holder then
 				carriedCount += 1
@@ -9704,6 +9854,15 @@ function configStore.DragonBallESP.Update(deltaTime)
 	local status = configStore.DragonBallESP.StatusLabel
 	status.Text = string.format("DRAGON BALLS // %d IN WORLD // %d CARRIED", worldCount, carriedCount)
 	status.TextColor3 = (worldCount + carriedCount) > 0 and colors.Success or colors.Muted
+	local banner = configStore.DragonBallESP.Banner
+	banner.Text = string.format("DRAGON BALLS DETECTED // %d WORLD | %d CARRIED", worldCount, carriedCount)
+	banner.Visible = (worldCount + carriedCount) > 0
+	banner.BackgroundColor3, banner.TextColor3 = colors.SurfaceRaised, colors.Accent
+	for instance in pairs(configStore.DragonBallESP.AlertedBalls) do
+		if not instance.Parent or (not instance:IsDescendantOf(workspace) and not instance:IsDescendantOf(Players)) then
+			configStore.DragonBallESP.AlertedBalls[instance] = nil
+		end
+	end
 end
 
 function configStore.DragonBallESP.Scan()
@@ -9745,9 +9904,6 @@ function configStore.DragonBallESP.Scan()
 	status.TextColor3 = colors.Accent
 end
 
-connect(configStore.DragonBallESP.MasterButton.Activated, function()
-	configStore.DragonBallESP.SetEnabled(not configStore.DragonBallESP.Enabled)
-end)
 for key, button in pairs(configStore.DragonBallESP.Buttons) do
 	connect(button.Activated, function()
 		configStore.DragonBallESP.SetSetting(key, not configStore.DragonBallESP.Settings[key])
@@ -9755,7 +9911,7 @@ for key, button in pairs(configStore.DragonBallESP.Buttons) do
 end
 connect(configStore.DragonBallESP.ScanButton.Activated, configStore.DragonBallESP.Scan)
 connect(RunService.Heartbeat, configStore.DragonBallESP.Update)
-configStore.DragonBallESP.RenderButtons()
+configStore.DragonBallESP.SetEnabled(true)
 
 function npcSafety.IsExcludedFarmName(name)
 	return type(name) == "string" and string.find(string.lower(name):gsub("[^%w]", ""), "vegeta", 1, true) ~= nil
@@ -21225,6 +21381,7 @@ function configStore.Capture()
 		ESPMaxDistance = configStore.ESP.MaxDistance,
 		NpcESPEnabled = configStore.NpcESP.Enabled,
 		BuuDetectorEnabled = configStore.BuuDetector.Enabled,
+		Super17DetectorEnabled = configStore.Super17Detector.Enabled,
 		NpcESPSettings = table.clone(configStore.NpcESP.Settings),
 		AutoClashEnabled = configStore.AutoClash.Enabled,
 		AutoClashMash = configStore.AutoClash.Mash,
@@ -21362,6 +21519,7 @@ function configStore.Apply(data)
 		end
 	end
 	if type(data.BuuDetectorEnabled) == "boolean" then configStore.BuuDetector.SetEnabled(data.BuuDetectorEnabled) end
+	if type(data.Super17DetectorEnabled) == "boolean" then configStore.Super17Detector.SetEnabled(data.Super17DetectorEnabled) end
 	if type(data.NpcESPEnabled) == "boolean" then
 		configStore.NpcESP.SetEnabled(data.NpcESPEnabled)
 	else
@@ -21680,6 +21838,10 @@ function controller.Unload()
 		configStore.BuuDetector.SetEnabled(false)
 		configStore.BuuDetector.Gui:Destroy()
 	end)
+	step("super17 detector", function()
+		configStore.Super17Detector.SetEnabled(false)
+		configStore.Super17Detector.Gui:Destroy()
+	end)
 	step("auto clash", function()
 		configStore.AutoClash.Enabled = false
 		configStore.AutoClash.Recording = false
@@ -21692,6 +21854,9 @@ function controller.Unload()
 		configStore.DragonBallESP.Enabled = false
 		configStore.DragonBallESP.DisconnectWorld()
 		configStore.DragonBallESP.Clear()
+		configStore.DragonBallESP.Gui:Destroy()
+		table.clear(configStore.DragonBallESP.Tracked)
+		table.clear(configStore.DragonBallESP.AlertedBalls)
 	end)
 	step("session", function()
 		configStore.Session.StopWatchingTarget()

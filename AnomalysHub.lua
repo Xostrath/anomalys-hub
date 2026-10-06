@@ -17995,13 +17995,6 @@ function autoTransformState.Update(deltaTime)
 			autoTransformState.Render()
 			return
 		end
-		local oneShot = string.lower(selected):gsub("[^%a]", "") == "kaioken"
-		if oneShot then
-			-- Kaioken is one activation attempt per manual enable. Disarm before
-			-- dispatch, including on error: a sent request is not an acknowledgement
-			-- and missing/delayed form replication must never cause another press.
-			autoTransformState.SetEnabled(false)
-		end
 		local ok = pcall(function()
 			serverRemote:FireServer("Run", {Action = "Terminate"})
 			serverRemote:FireServer("Charge", {
@@ -18010,9 +18003,7 @@ function autoTransformState.Update(deltaTime)
 				ThirdAction = "Transform",
 			})
 		end)
-		autoTransformState.Status = oneShot
-			and (ok and "Kaioken requested once; Auto Form off" or "Request failed; Auto Form off")
-			or (ok and "Activation requested" or "Request failed; retrying")
+		autoTransformState.Status = ok and "Activation requested" or "Request failed; retrying"
 		autoTransformState.Render()
 	end)
 end

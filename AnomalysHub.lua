@@ -4047,7 +4047,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -180, 0, 28),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
-	Text = "Always scans client-visible balls. Alert + marker; webhook when ALERTS is on.",
+	Text = "Always on; scans every 15 seconds. Alert + marker; webhook when ALERTS is on.",
 	TextColor3 = colors.Muted,
 	TextSize = 9,
 	TextWrapped = true,
@@ -9862,7 +9862,7 @@ function configStore.DragonBallESP.Update(deltaTime)
 		return
 	end
 	configStore.DragonBallESP.UpdateElapsed += deltaTime
-	if configStore.DragonBallESP.UpdateElapsed < 0.2 then
+	if configStore.DragonBallESP.UpdateElapsed < 15 then
 		return
 	end
 	configStore.DragonBallESP.UpdateElapsed = 0

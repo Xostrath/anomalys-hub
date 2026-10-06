@@ -2344,7 +2344,6 @@ local configStore = {
 		AdvancedBuild = true,
 		Motivation = true,
 		FormMastery = true,
-		SaibamanSpawner = true,
 		AngelRace = true,
 	},
 }
@@ -2726,18 +2725,6 @@ local autoTransformState = {
 	OptionButtons = {},
 }
 local npcSafety = {
-	SaibamanSpawner = {
-		Authorized = configStore.FeatureAccess.SaibamanSpawner,
-		LoopEnabled = false,
-		LoopInterval = 5,
-		Accumulator = 0,
-		RequestsSent = 0,
-		Connection = nil,
-		Card = nil,
-		SpawnButton = nil,
-		LoopButton = nil,
-		StatusLabel = nil,
-	},
 	DirectLight = {
 		Authorized = configStore.FeatureAccess.FastAttack,
 		Enabled = false,
@@ -2977,7 +2964,6 @@ local function applyFullFeatureAccess()
 		configStore.FeatureAccess[key] = true
 	end
 	configStore.TrainingEnabled = true
-	npcSafety.SaibamanSpawner.Authorized = true
 	npcSafety.DirectLight.Authorized = true
 end
 applyFullFeatureAccess()
@@ -3438,7 +3424,11 @@ tpState.Page = makePage("TP")
 local doctorPage = makePage("Doctor")
 local otherworldPage = makePage("Otherworld")
 qolState.Page = makePage("QoL")
-makePage("Build")
+-- Build Planner shares the Training scroll canvas below the minigames.
+configStore.BuildPanel = create("Frame", {
+	Name = "BuildPlanner", Position = UDim2.fromOffset(0, 336),
+	Size = UDim2.new(1, 0, 0, 518), BackgroundTransparency = 1, BorderSizePixel = 0,
+}, mainPage)
 makePage("Character")
 makePage("ESP")
 makePage("Chat")
@@ -5646,13 +5636,13 @@ create("TextLabel", {
 	Name = "Heading", Position = UDim2.fromOffset(16, 14), Size = UDim2.new(1, -32, 0, 24),
 	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = "AUTO BUILD TRAINER",
 	TextColor3 = colors.Accent, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
-}, pages.Build)
+}, configStore.BuildPanel)
 create("TextLabel", {
 	Name = "Subtitle", Position = UDim2.fromOffset(16, 36), Size = UDim2.new(1, -32, 0, 18),
 	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = "Autofarm runs whenever UTP is available; training starts only at 0 UTP.",
 	TextColor3 = colors.Muted, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
-}, pages.Build)
-qolState.StatAllocate.Card.Parent = pages.Build
+}, configStore.BuildPanel)
+qolState.StatAllocate.Card.Parent = configStore.BuildPanel
 qolState.StatAllocate.Card.Position = UDim2.fromOffset(16, 66)
 qolState.StatAllocate.AllocateButton.Visible = false
 qolState.StatAllocate.AutoButton.Visible = false
@@ -5664,7 +5654,7 @@ qolState.StatAllocate.PersistentAutoButton.Size = UDim2.fromOffset(180, 34)
 configStore.BuildInfo = create("Frame", {
 	Name="QueueGuide", Position=UDim2.fromOffset(16, 274), Size=UDim2.new(1, -32, 0, 104),
 	BackgroundColor3=colors.SurfaceRaised, BorderSizePixel=0,
-}, pages.Build)
+}, configStore.BuildPanel)
 create("UICorner", {CornerRadius=UDim.new(0, 8)}, configStore.BuildInfo)
 create("UIStroke", {Color=colors.Stroke, Thickness=1, Transparency=0.25}, configStore.BuildInfo)
 create("TextLabel", {
@@ -5686,7 +5676,7 @@ qolState.StatAllocate.MotivationCard = create("Frame", {
 	Size = UDim2.new(1, -32, 0, 112),
 	BackgroundColor3 = colors.SurfaceRaised,
 	BorderSizePixel = 0,
-}, pages.Build)
+}, configStore.BuildPanel)
 qolState.StatAllocate.MotivationCard.Visible = configStore.FeatureAccess.Motivation
 create("UICorner", {CornerRadius = UDim.new(0, 8)}, qolState.StatAllocate.MotivationCard)
 create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.25}, qolState.StatAllocate.MotivationCard)
@@ -6367,8 +6357,16 @@ function configStore.Session.WatchTarget()
 	end
 end
 
-function configStore.Session.RecordChest()
+function configStore.Session.RecordChest(receipt)
+	if not receipt or receipt.Counted then return false end
+	receipt.Counted = true
+	local prompt = receipt.Prompt
+	if prompt then
+		if prompt:GetAttribute("AnomalyChestCounted") then return false end
+		prompt:SetAttribute("AnomalyChestCounted", true)
+	end
 	configStore.Session.Counters.Chests += 1
+	return true
 end
 
 function configStore.Session.OnLevel(level)
@@ -7247,53 +7245,6 @@ npcSafety.DirectLight.TelemetryLabel = create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	TextYAlignment = Enum.TextYAlignment.Top,
 }, npcSafety.DirectLight.Card)
-
-npcSafety.SaibamanSpawner.Card = create("Frame", {
-	Name = "SaibamanSpawner",
-	Position = UDim2.fromOffset(16, 528),
-	Size = UDim2.new(1, -32, 0, 112),
-	BackgroundColor3 = colors.SurfaceRaised,
-	BorderSizePixel = 0,
-}, npcPage)
-npcSafety.SaibamanSpawner.Card.Visible = npcSafety.SaibamanSpawner.Authorized
-create("UICorner", {CornerRadius = UDim.new(0, 9)}, npcSafety.SaibamanSpawner.Card)
-create("UIStroke", {
-	Color = npcSafety.SaibamanSpawner.Authorized and colors.AccentSoft or colors.Warning,
-	Thickness = 1,
-	Transparency = 0.2,
-}, npcSafety.SaibamanSpawner.Card)
-create("TextLabel", {
-	Name = "Title", Position = UDim2.fromOffset(14, 7), Size = UDim2.new(1, -28, 0, 20),
-	BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
-	Text = npcSafety.SaibamanSpawner.Authorized and "SAIBAMAN SPAWNER" or "SAIBAMAN SPAWNER  //  PREMIUM",
-	TextColor3 = npcSafety.SaibamanSpawner.Authorized and colors.Accent or colors.Warning,
-	TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
-}, npcSafety.SaibamanSpawner.Card)
-npcSafety.SaibamanSpawner.SpawnButton = create("TextButton", {
-	Name = "SpawnOnce", Position = UDim2.fromOffset(14, 33), Size = UDim2.new(0.5, -21, 0, 32),
-	AutoButtonColor = false, BackgroundColor3 = colors.Accent, BorderSizePixel = 0,
-	Font = Enum.Font.GothamSemibold,
-	Text = npcSafety.SaibamanSpawner.Authorized and "Spawn Saibaman" or "Spawn Saibaman: LOCKED",
-	TextColor3 = colors.Text, TextSize = 10,
-}, npcSafety.SaibamanSpawner.Card)
-create("UICorner", {CornerRadius = UDim.new(0, 7)}, npcSafety.SaibamanSpawner.SpawnButton)
-create("UIStroke", {Color = colors.AccentSoft, Thickness = 1}, npcSafety.SaibamanSpawner.SpawnButton)
-npcSafety.SaibamanSpawner.LoopButton = create("TextButton", {
-	Name = "LoopToggle", Position = UDim2.new(0.5, 7, 0, 33), Size = UDim2.new(0.5, -21, 0, 32),
-	AutoButtonColor = false, BackgroundColor3 = colors.Surface, BorderSizePixel = 0,
-	Font = Enum.Font.GothamSemibold,
-	Text = npcSafety.SaibamanSpawner.Authorized and "Loop Spawn: OFF" or "Loop Spawn: LOCKED",
-	TextColor3 = npcSafety.SaibamanSpawner.Authorized and colors.Muted or colors.Warning, TextSize = 10,
-}, npcSafety.SaibamanSpawner.Card)
-create("UICorner", {CornerRadius = UDim.new(0, 7)}, npcSafety.SaibamanSpawner.LoopButton)
-create("UIStroke", {Color = colors.AccentSoft, Thickness = 1}, npcSafety.SaibamanSpawner.LoopButton)
-npcSafety.SaibamanSpawner.StatusLabel = create("TextLabel", {
-	Name = "Status", Position = UDim2.fromOffset(14, 72), Size = UDim2.new(1, -28, 0, 30),
-	BackgroundTransparency = 1, Font = Enum.Font.Gotham,
-	Text = npcSafety.SaibamanSpawner.Authorized and "Ready. Loop sends one spawn request every 5 seconds." or "Premium feature. Select a control to join the official GohanHub Discord.",
-	TextColor3 = npcSafety.SaibamanSpawner.Authorized and colors.Muted or colors.Warning,
-	TextSize = 9, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-}, npcSafety.SaibamanSpawner.Card)
 
 local npcDropdownList = create("ScrollingFrame", {
 	Name = "NpcTypeList",
@@ -11160,67 +11111,6 @@ function npcSafety.IsDirectLightTargetAllowed(target)
 	return true
 end
 
-function npcSafety.UpdateSaibamanSpawnerUi(message, color)
-	local spawner = npcSafety.SaibamanSpawner
-	if spawner.LoopButton then
-		spawner.LoopButton.Text = spawner.Authorized
-			and (spawner.LoopEnabled and "Loop Spawn: ON" or "Loop Spawn: OFF") or "Loop Spawn: LOCKED"
-		spawner.LoopButton.BackgroundColor3 = spawner.LoopEnabled and colors.Accent or colors.Surface
-		spawner.LoopButton.TextColor3 = spawner.LoopEnabled and colors.Text or (spawner.Authorized and colors.Muted or colors.Warning)
-	end
-	if message and spawner.StatusLabel then
-		spawner.StatusLabel.Text = message
-		spawner.StatusLabel.TextColor3 = color or colors.Muted
-	end
-end
-
-function npcSafety.SpawnSaibaman()
-	local spawner = npcSafety.SaibamanSpawner
-	if not spawner.Authorized then return configStore.ShowPremiumUpgrade("Saibaman Spawner") end
-	local questRemote = remotes:FindFirstChild("QuestRemote")
-	if not questRemote or not questRemote:IsA("RemoteEvent") then
-		npcSafety.UpdateSaibamanSpawnerUi("QuestRemote is unavailable in this world.", colors.DangerHover)
-		return false
-	end
-	local sent, sendError = pcall(questRemote.FireServer, questRemote, {
-		QuestSpawn = "Saibamen", QuestKey = "Attacked By Saibamen", QuestType = "Kill",
-		QuestMaxKills = 50, QuestCurrentKills = 0, QuestDesc = "Get Hit 50 times.",
-		SpawnTimer = 150, Timer = 130,
-		QuestRewards = {Exp = 1500, ["Class Quest"] = {Class = "Brawler", ["Class Story Part"] = "Endure The Pain"}},
-		QuestName = "Endure The Pain", Is_Skippable = true,
-	}, "SpawnQuestItem")
-	if sent then
-		spawner.RequestsSent += 1
-		npcSafety.UpdateSaibamanSpawnerUi("Spawn request sent. Total requests: " .. spawner.RequestsSent, colors.Success)
-	else
-		npcSafety.UpdateSaibamanSpawnerUi("Spawn request failed: " .. tostring(sendError), colors.DangerHover)
-	end
-	return sent
-end
-
-function npcSafety.SetSaibamanSpawnLoop(enabled)
-	local spawner = npcSafety.SaibamanSpawner
-	if not spawner.Authorized then return configStore.ShowPremiumUpgrade("Saibaman Spawner") end
-	spawner.LoopEnabled = enabled == true
-	spawner.Accumulator = 0
-	if spawner.Connection then spawner.Connection:Disconnect(); spawner.Connection = nil end
-	if spawner.LoopEnabled then
-		npcSafety.SpawnSaibaman()
-		spawner.Connection = RunService.Heartbeat:Connect(function(deltaTime)
-			if not spawner.LoopEnabled then return end
-			spawner.Accumulator += deltaTime
-			if spawner.Accumulator >= spawner.LoopInterval then
-				spawner.Accumulator %= spawner.LoopInterval
-				npcSafety.SpawnSaibaman()
-			end
-		end)
-	else
-		npcSafety.UpdateSaibamanSpawnerUi("Loop stopped. Total requests: " .. spawner.RequestsSent, colors.Muted)
-	end
-	npcSafety.UpdateSaibamanSpawnerUi()
-	return spawner.LoopEnabled
-end
-
 function npcSafety.GetDirectLightDiagnosticTelemetry()
 	local diagnostic = npcSafety.DirectLight
 	local elapsed = diagnostic.Enabled and math.max(os.clock() - diagnostic.StartedAt, 0) or diagnostic.Elapsed
@@ -13631,6 +13521,7 @@ function npcSafety.ResetPostCombat()
 	npcSafety.LastTargetPosition = nil
 	npcSafety.LootMode = false
 	npcSafety.LootStartedAt = 0
+	npcSafety.LootReceipt = nil
 	npcSafety.LootClickedAt = 0
 	npcSafety.LootPromptElapsed = 0
 	npcSafety.LootPrompt = nil
@@ -13830,6 +13721,7 @@ function npcSafety.BeginLootWait(character, humanoid, characterRoot, position, p
 	npcSafety.GripConfirmed = false
 	npcSafety.LootMode = true
 	npcSafety.LootStartedAt = os.clock()
+	npcSafety.LootReceipt = nil
 	npcSafety.LootClickedAt = 0
 	npcSafety.LootPromptElapsed = prompt and 0 or 1
 	npcSafety.LootPrompt = prompt
@@ -13852,6 +13744,10 @@ function npcSafety.BeginLootWait(character, humanoid, characterRoot, position, p
 end
 
 function npcSafety.FinishLootWait(message)
+	-- Cancel the receipt before Close can yield or disable the UI. Cleanup and
+	-- timeouts must never masquerade as a successful loot-window transition.
+	npcSafety.LootMode = false
+	npcSafety.LootReceipt = nil
 	if npcSafety.LootPrompt then
 		npcSafety.IgnoredChestPrompts[npcSafety.LootPrompt] = os.clock() + npcSafety.ChestRetryDelay
 	end
@@ -13866,6 +13762,7 @@ function npcSafety.FinishLootWait(message)
 	npcSafety.LootScanCooldownUntil = os.clock() + 8
 	npcSafety.LootMode = false
 	npcSafety.LootStartedAt = 0
+	npcSafety.LootReceipt = nil
 	npcSafety.LootClickedAt = 0
 	npcSafety.LootPromptElapsed = 0
 	npcSafety.LootPrompt = nil
@@ -13884,6 +13781,27 @@ function npcSafety.FinishLootWait(message)
 	setNpcStatus(message or ("Chest check complete; reacquiring " .. tostring(selectedNpcType) .. "..."), colors.Success)
 end
 
+-- A receipt starts only on a non-empty Take All attempt, never on opening a prompt.
+-- UI completion is a client observation, not a server reward acknowledgement.
+function npcSafety.IsChestUiEmpty(gui)
+	local title = gui and gui:FindFirstChild("Title", true)
+	return title and title:IsA("TextLabel") and string.match(string.upper(title.Text), "^%s*EMPTY%s*$") ~= nil
+end
+
+function npcSafety.ConfirmChestReceipt(gui, now)
+	local receipt = npcSafety.LootReceipt
+	if not receipt or not receipt.Sent or receipt.Busy or now - receipt.StartedAt < 0.6 then return false end
+	local original = receipt.Gui
+	local closed = not original.Parent or not original.Enabled
+	if gui ~= original and not closed then return false end
+	local takeAll = original:FindFirstChild("TakeAll", true)
+	if closed or npcSafety.IsChestUiEmpty(original) or (takeAll and not takeAll.Visible) then
+		configStore.Session.RecordChest(receipt)
+		return true
+	end
+	return false
+end
+
 function npcSafety.UpdateLootWait(deltaTime, character, humanoid, characterRoot)
 	if not npcSafety.LootMode then
 		return false
@@ -13898,24 +13816,32 @@ function npcSafety.UpdateLootWait(deltaTime, character, humanoid, characterRoot)
 	end
 
 	local chestGui = playerGui:FindFirstChild("DropChestGui")
+	if npcSafety.ConfirmChestReceipt(chestGui, os.clock()) then
+		npcSafety.FinishLootWait("Dropped chest looted; reacquiring " .. tostring(selectedNpcType) .. "...")
+		return true
+	end
 	if chestGui and chestGui:IsA("ScreenGui") and chestGui.Enabled then
 		local takeAll = chestGui:FindFirstChild("TakeAll", true)
-		local title = chestGui:FindFirstChild("Title", true)
-		if takeAll and takeAll:IsA("GuiButton") and takeAll.Visible
-			and os.clock() - npcSafety.LootClickedAt >= 0.8 then
-			npcSafety.LootClickedAt = os.clock()
-			npcSafety.ClickGuiButton(takeAll)
-			setNpcStatus("Dropped chest opened; taking all loot...", colors.Success)
-		end
-		if npcSafety.LootClickedAt > 0 and os.clock() - npcSafety.LootClickedAt >= 0.6
-			and ((title and title:IsA("TextLabel") and title.Text == "EMPTY") or not (takeAll and takeAll.Visible)) then
-			local close = chestGui:FindFirstChild("Close", true)
-			if close and close:IsA("GuiButton") then
-				npcSafety.ClickGuiButton(close)
-			end
-			configStore.Session.RecordChest()
-			npcSafety.FinishLootWait("Dropped chest looted; reacquiring " .. tostring(selectedNpcType) .. "...")
+		if npcSafety.IsChestUiEmpty(chestGui) and not npcSafety.LootReceipt then
+			npcSafety.FinishLootWait("Chest already empty; reacquiring " .. tostring(selectedNpcType) .. "...")
 			return true
+		end
+		local receipt = npcSafety.LootReceipt
+		if receipt and receipt.Busy then return true end
+		if takeAll and takeAll:IsA("GuiButton") and takeAll.Visible
+			and not npcSafety.IsChestUiEmpty(chestGui)
+			and (not receipt or os.clock() - receipt.LastAttemptAt >= 0.8) then
+			if not receipt then
+				receipt = {Gui = chestGui, Prompt = npcSafety.LootPrompt, StartedAt = os.clock()}
+				npcSafety.LootReceipt = receipt
+			end
+			receipt.LastAttemptAt = os.clock()
+			receipt.Busy = true
+			local sent = npcSafety.ClickGuiButton(takeAll)
+			receipt.Busy = false
+			if unloaded or not npcSafety.LootMode or npcSafety.LootReceipt ~= receipt then return true end
+			receipt.Sent = receipt.Sent or sent
+			setNpcStatus(sent and "Dropped chest opened; taking all loot..." or "Loot click failed; retrying...", colors.Success)
 		end
 	else
 		npcSafety.LootPromptElapsed += deltaTime
@@ -13944,7 +13870,8 @@ function npcSafety.UpdateLootWait(deltaTime, character, humanoid, characterRoot)
 		and movementDelta.Unit * math.min(speed, math.max(18, movementDistance * 5))
 		or Vector3.zero
 
-	if npcSafety.LootPrompt and npcSafety.LootPrompt.Parent then
+	if not (chestGui and chestGui:IsA("ScreenGui") and chestGui.Enabled)
+		and not npcSafety.LootReceipt and npcSafety.LootPrompt and npcSafety.LootPrompt.Parent then
 		local promptDistance = npcSafety.LootPosition and (npcSafety.LootPosition - characterRoot.Position).Magnitude or math.huge
 		if promptDistance <= math.max(4, npcSafety.LootPrompt.MaxActivationDistance - 0.25)
 			and os.clock() - npcSafety.LootClickedAt >= 0.9 then
@@ -17745,11 +17672,6 @@ connect(npcSafety.DirectLight.BenchmarkButton.Activated, function()
 		npcSafety.StartDirectLightBenchmark("intervals")
 	end
 end)
-connect(npcSafety.SaibamanSpawner.SpawnButton.Activated, npcSafety.SpawnSaibaman)
-connect(npcSafety.SaibamanSpawner.LoopButton.Activated, function()
-	npcSafety.SetSaibamanSpawnLoop(not npcSafety.SaibamanSpawner.LoopEnabled)
-end)
-npcSafety.UpdateSaibamanSpawnerUi()
 
 connect(npcSafety.BelowModeButton.Activated, function()
 	npcSafety.SetPositionMode("Below")
@@ -20864,6 +20786,9 @@ function configStore.RequestYemmaRevive()
 end
 
 function configStore.SelectTab(name)
+	-- Migrate old saved tabs; removed sections cannot be reopened.
+	if name == "Build" then name = "Training" end
+	if name == "Chat" or name == "Character" then name = "Home" end
 	if unloaded or not pages[name] then
 		return
 	end
@@ -20897,10 +20822,6 @@ function configStore.SelectTab(name)
 		tpState.Refresh()
 	elseif name == "QoL" and not qolState.ServerNavigation.Browser.Loaded then
 		qolState.ServerNavigation.RefreshServerList(false)
-	elseif name == "Character" then
-		if next(qolState.ProfileEditor.RaceOrder) == nil then
-			task.spawn(qolState.ProfileEditor.LoadMetadata)
-		end
 	elseif name == "Config" and type(configStore.RefreshDropdown) == "function" then
 		configStore.RefreshDropdown()
 	end
@@ -20908,8 +20829,8 @@ end
 
 configStore.TabLabels = {
 	Home = "[D]  Dashboard", NPCs = "[F]  Auto Farm", TP = "[T]  Travel", Doctor = "[S]  Statistics", Otherworld = "[O]  Otherworld",
-	Training = "[R]  Auto Training", Build = "[B]  Build Planner", Character = "[C]  Character", ESP = "[E]  Player ESP",
-	Chat = "[L]  Chat Logs", QoL = "[U]  Utilities", Config = "[=]  Settings",
+	Training = "[R]  Auto Training", ESP = "[E]  Player ESP",
+	QoL = "[U]  Utilities", Config = "[=]  Settings",
 }
 configStore.PageMeta = {
 	Home={Title="FIELD DASHBOARD",Subtitle="Live server, planet, and connection telemetry"},
@@ -20925,7 +20846,7 @@ configStore.PageMeta = {
 	QoL={Title="FIELD UTILITIES",Subtitle="Movement, camera, food, commerce, and convenience tools"},
 	Config={Title="SYSTEM SETTINGS",Subtitle="Appearance, persistence, keybinds, and saved profiles"},
 }
-for order, tabName in ipairs({"Home", "NPCs", "Training", "Build", "Character", "TP", "Doctor", "Otherworld", "ESP", "Chat", "QoL", "Config"}) do
+for order, tabName in ipairs({"Home", "NPCs", "Training", "TP", "Doctor", "Otherworld", "ESP", "QoL", "Config"}) do
 	local button = create("TextButton", {
 		Name = tabName,
 		LayoutOrder = order,
@@ -21318,7 +21239,7 @@ function configStore.Apply(data)
 	else
 		configStore.NpcESP.SetMaxDistance(1000000)
 	end
-	if type(data.LastTab) == "string" and pages[data.LastTab] then configStore.SelectTab(data.LastTab) end
+	if type(data.LastTab) == "string" then configStore.SelectTab(data.LastTab) end
 	if type(data.NpcPlayerRange) == "number" then
 		npcSafety.PlayerRange = math.clamp(math.floor(data.NpcPlayerRange + 0.5), 25, 5000)
 		npcSafety.PlayerRangeBox.Text = tostring(npcSafety.PlayerRange)
@@ -21581,13 +21502,6 @@ function controller.Unload()
 	step("camera clip", function() qolState.SetCameraClipEnabled(false) end)
 	step("noclip", function() qolState.SetNoclipEnabled(false) end)
 	step("diagnostic", function() npcSafety.StopDirectLightDiagnostic("Hub unloaded") end)
-	step("saibaman", function()
-		npcSafety.SaibamanSpawner.LoopEnabled = false
-		if npcSafety.SaibamanSpawner.Connection then
-			npcSafety.SaibamanSpawner.Connection:Disconnect()
-			npcSafety.SaibamanSpawner.Connection = nil
-		end
-	end)
 	step("autofarm", function() setNpcTargetingEnabled(false) end)
 	npcTargetingEnabled = false
 	step("flight", function()
@@ -21841,12 +21755,6 @@ controller.GetDirectLightSpeedTestResults = function()
 	return npcSafety.DirectLight.BenchmarkRunning,
 		npcSafety.DirectLight.BenchmarkResults,
 		npcSafety.DirectLight.LastBenchmarkSummary
-end
-controller.IsSaibamanSpawnerAuthorized = function() return npcSafety.SaibamanSpawner.Authorized end
-controller.SpawnSaibaman = npcSafety.SpawnSaibaman
-controller.SetSaibamanSpawnLoop = npcSafety.SetSaibamanSpawnLoop
-controller.GetSaibamanSpawnerState = function()
-	return npcSafety.SaibamanSpawner.LoopEnabled, npcSafety.SaibamanSpawner.RequestsSent, npcSafety.SaibamanSpawner.LoopInterval
 end
 controller.GetNormalAttackAttempts = function() return npcSafety.NormalAttackAttempts end
 controller.SetSelectedNpcType = function(npcType)

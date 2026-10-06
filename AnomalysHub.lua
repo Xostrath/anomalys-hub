@@ -8390,7 +8390,7 @@ local flightSpeedHitbox = create("TextButton", {
 }, flightSpeedTrack)
 
 qolState.ServerNavigation.Card=create("Frame",{
-	Name="ServerNavigation",Position=UDim2.fromOffset(16,510),Size=UDim2.new(1,-32,0,196),
+	Name="ServerNavigation",Position=UDim2.fromOffset(16,510),Size=UDim2.new(1,-32,0,490),
 	BackgroundColor3=colors.SurfaceRaised,BorderSizePixel=0,
 },qolState.Scroll)
 create("UICorner",{CornerRadius=UDim.new(0,9)},qolState.ServerNavigation.Card)
@@ -8476,6 +8476,37 @@ qolState.ServerNavigation.AutoBlockButton=create("TextButton",{
 },qolState.ServerNavigation.Card)
 create("UICorner",{CornerRadius=UDim.new(0,6)},qolState.ServerNavigation.AutoBlockButton)
 create("UIStroke",{Color=colors.AccentSoft,Thickness=1,Transparency=0.2},qolState.ServerNavigation.AutoBlockButton)
+
+-- BEGIN SERVER BROWSER UI
+qolState.Scroll.CanvasSize = UDim2.fromOffset(0, 1024)
+qolState.ServerNavigation.Browser = {Rows={}, Seen={}, RowConnections={}, Serial=0, Busy=false}
+do
+	local browser = qolState.ServerNavigation.Browser
+	browser.Status = create("TextLabel", {
+		Name="ServerListStatus", Position=UDim2.fromOffset(14,194), Size=UDim2.new(1,-122,0,30),
+		BackgroundTransparency=1, Font=Enum.Font.Gotham, Text="Public servers // "..tostring(currentPlanet),
+		TextSize=10, TextColor3=colors.Muted, TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd,
+	}, qolState.ServerNavigation.Card)
+	browser.Refresh = create("TextButton", {
+		Name="RefreshServers", Position=UDim2.new(1,-102,0,194), Size=UDim2.fromOffset(88,30),
+		AutoButtonColor=false, BackgroundColor3=colors.Surface, BorderSizePixel=0,
+		Font=Enum.Font.GothamBold, Text="REFRESH", TextSize=10, TextColor3=colors.Text,
+	}, qolState.ServerNavigation.Card)
+	create("UICorner", {CornerRadius=UDim.new(0,6)}, browser.Refresh)
+	browser.List = create("ScrollingFrame", {
+		Name="PlanetServers", Position=UDim2.fromOffset(14,232), Size=UDim2.new(1,-28,0,210),
+		BackgroundColor3=colors.Surface, BorderSizePixel=0, CanvasSize=UDim2.new(),
+		AutomaticCanvasSize=Enum.AutomaticSize.Y, ScrollBarThickness=5, ScrollBarImageColor3=colors.Accent,
+	}, qolState.ServerNavigation.Card)
+	create("UIListLayout", {Padding=UDim.new(0,5), SortOrder=Enum.SortOrder.LayoutOrder}, browser.List)
+	browser.More = create("TextButton", {
+		Name="MoreServers", Position=UDim2.fromOffset(14,450), Size=UDim2.new(1,-28,0,28),
+		AutoButtonColor=false, BackgroundColor3=colors.Surface, BorderSizePixel=0,
+		Font=Enum.Font.GothamSemibold, Text="LOAD MORE", TextSize=10, TextColor3=colors.Muted, Visible=false,
+	}, qolState.ServerNavigation.Card)
+	create("UICorner", {CornerRadius=UDim.new(0,6)}, browser.More)
+end
+-- END SERVER BROWSER UI
 
 configStore.RemoteInspector = {Active = false, Watching = false, Entries = {}, ByObject = {}, Incoming = {},
 	Stats = {}, Samples = {}, Count = 0, MaxRemotes = 2000, MaxCalls = 10000, MaxSamples = 1000}
@@ -8566,6 +8597,17 @@ local unloadButton = create("TextButton", {
 	TextSize = 13,
 }, configStore.List)
 create("UICorner", {CornerRadius = UDim.new(0, 9)}, unloadButton)
+
+-- BEGIN RELOAD UI
+configStore.Reload = {Busy=false, Serial=0}
+configStore.Reload.Button = create("TextButton", {
+	Name="Reload", LayoutOrder=7, Size=UDim2.new(1,0,0,44), AutoButtonColor=false,
+	BackgroundColor3=Color3.fromRGB(72,186,116), BorderSizePixel=0,
+	Font=Enum.Font.GothamSemibold, Text="Reload "..HUB_DISPLAY_NAME,
+	TextColor3=Color3.fromRGB(12,31,19), TextSize=13,
+}, configStore.List)
+create("UICorner", {CornerRadius=UDim.new(0,9)}, configStore.Reload.Button)
+-- END RELOAD UI
 
 local cachedFlyHandler
 local flightSliderDragging = false
@@ -14380,6 +14422,150 @@ function qolState.ServerNavigation.RunJoinFriend(rawIdentifier)
 		end
 	end
 end
+
+-- BEGIN SERVER BROWSER LOGIC
+function qolState.ServerNavigation.ClearServerRows()
+	local b = qolState.ServerNavigation.Browser
+	for _, connection in ipairs(b.RowConnections) do connection:Disconnect() end
+	table.clear(b.RowConnections)
+	for _, child in ipairs(b.List:GetChildren()) do if child:IsA("Frame") then child:Destroy() end end
+end
+
+function qolState.ServerNavigation.RenderServers()
+	local nav = qolState.ServerNavigation
+	local b = nav.Browser
+	if unloaded then return end
+	nav.ClearServerRows()
+	for index, row in ipairs(b.Rows) do
+		local current = row.id == game.JobId
+		local full = row.playing >= row.maxPlayers
+		local frame = create("Frame", {Name="Server", LayoutOrder=index, Size=UDim2.new(1,-8,0,38),
+			BackgroundColor3=colors.SurfaceRaised, BorderSizePixel=0}, b.List)
+		create("UICorner", {CornerRadius=UDim.new(0,5)}, frame)
+		create("TextLabel", {Position=UDim2.fromOffset(8,0), Size=UDim2.new(1,-86,1,0), BackgroundTransparency=1,
+			Font=Enum.Font.Gotham, Text=string.format("%s  //  %d/%d players", row.id:sub(1,8),row.playing,row.maxPlayers),
+			TextSize=11, TextColor3=colors.Text, TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd},frame)
+		-- Transient rows own their connections instead of adding contrast
+		-- watchers to the hub-wide lifetime list on every refresh.
+		local button=Instance.new("TextButton")
+		for property,value in pairs({Name="JoinListedServer",Position=UDim2.new(1,-76,0,5), Size=UDim2.fromOffset(70,28),
+			AutoButtonColor=false, BackgroundColor3=(current or full) and colors.Surface or colors.Accent,
+			Font=Enum.Font.GothamBold, Text=current and "CURRENT" or (full and "FULL" or "JOIN"),
+			TextSize=9, TextColor3=(current or full) and colors.Muted or colors.Background, BorderSizePixel=0,
+			Active=not current and not full}) do button[property]=value end
+		button.Parent=frame
+		create("UICorner", {CornerRadius=UDim.new(0,5)},button)
+		if not current and not full then
+			table.insert(b.RowConnections,button.Activated:Connect(function() nav.JoinListedServer(row.id) end))
+		end
+	end
+	b.More.Visible = type(b.Cursor)=="string" and b.Cursor~="" and #b.Rows<500
+	b.More.Active = not b.Busy
+	b.Refresh.Active = not b.Busy
+	b.Refresh.Text = b.Busy and "LOADING..." or "REFRESH"
+end
+
+function qolState.ServerNavigation.MergeServerPage(page, placeId)
+	local b = qolState.ServerNavigation.Browser
+	if placeId~=game.PlaceId or b.PlaceId~=placeId or type(page)~="table" or type(page.data)~="table" then return false end
+	for _, row in ipairs(page.data) do
+		if #b.Rows>=500 then break end
+		if type(row)=="table" and type(row.id)=="string" and #row.id>0 and #row.id<=128
+			and row.id:match("^[%w%-]+$")
+			and not b.Seen[row.id] and type(row.playing)=="number" and type(row.maxPlayers)=="number"
+			and row.playing>=0 and row.playing<math.huge and row.maxPlayers>0 and row.maxPlayers<math.huge
+			and row.playing%1==0 and row.maxPlayers%1==0 then
+			b.Seen[row.id]=true
+			table.insert(b.Rows,{id=row.id,playing=row.playing,maxPlayers=row.maxPlayers})
+		end
+	end
+	local cursor = page.nextPageCursor
+	b.Cursors=b.Cursors or {}
+	b.Cursor = type(cursor)=="string" and cursor~="" and not b.Cursors[cursor] and cursor or nil
+	if b.Cursor then b.Cursors[b.Cursor]=true end
+	b.Loaded=true
+	return true
+end
+
+function qolState.ServerNavigation.RefreshServerList(loadMore)
+	local nav = qolState.ServerNavigation
+	local b = nav.Browser
+	if unloaded or b.Busy then return false end
+	local now = os.clock()
+	if b.LastRequest and now-b.LastRequest<2 then return false end
+	if loadMore and (not b.Cursor or #b.Rows>=500 or b.PlaceId~=game.PlaceId) then return false end
+	b.LastRequest, b.Busy = now, true
+	b.Serial += 1
+	local serial, placeId = b.Serial, game.PlaceId
+	if not loadMore then
+		b.Rows, b.Seen, b.Cursor, b.Loaded, b.Cursors = {}, {}, nil, false, {}
+		b.PlaceId=placeId
+		b.List.CanvasPosition=Vector2.zero
+	end
+	local cursor = b.Cursor
+	b.Status.Text="Loading public "..tostring(currentPlanet).." servers..."
+	nav.RenderServers()
+	local function alive() return not unloaded and serial==b.Serial and game.PlaceId==placeId end
+	b.Worker=task.defer(function()
+		local ok, page=pcall(function()
+			local url=string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&excludeFullGames=false&limit=100",placeId)
+			if cursor then url..="&cursor="..HttpService:UrlEncode(cursor) end
+			return npcSafety.HttpGetJson(url)
+		end)
+		if not alive() then return end
+		b.Worker, b.Busy=nil,false
+		if ok and nav.MergeServerPage(page,placeId) then
+			b.Status.Text=string.format("%s // %d servers%s",tostring(currentPlanet),#b.Rows,
+				#b.Rows>=500 and " (limit; refresh for latest)" or (#b.Rows==0 and " found" or " shown"))
+		else b.Status.Text="Server list unavailable; try Refresh." end
+		nav.RenderServers()
+	end)
+	task.delay(20,function()
+		if not alive() or not b.Busy then return end
+		b.Serial+=1;b.Busy=false
+		if b.Worker then pcall(task.cancel,b.Worker);b.Worker=nil end
+		b.Status.Text="Server list timed out; try Refresh."
+		nav.RenderServers()
+	end)
+	return true
+end
+
+function qolState.ServerNavigation.JoinListedServer(jobId)
+	local nav = qolState.ServerNavigation
+	local b = nav.Browser
+	if unloaded or nav.Busy or b.PlaceId~=game.PlaceId or jobId==game.JobId then return false end
+	local destination
+	for _, row in ipairs(b.Rows) do if row.id==jobId then destination=row;break end end
+	if not destination or destination.playing>=destination.maxPlayers then return false end
+	local placeId=game.PlaceId
+	nav.SetBusy(true)
+	task.spawn(function()
+		if unloaded then return end
+		local ok, reason=pcall(function()
+			if not nav.PrepareTeleport(nil,nav.SetStatus) then error("Could not prepare teleport") end
+			if unloaded or game.PlaceId~=placeId then return end
+			TeleportService:TeleportToPlaceInstance(placeId,jobId,localPlayer)
+		end)
+		if unloaded then return end
+		if not ok then nav.SetBusy(false);nav.SetStatus("Join failed; refresh the server list.",colors.DangerHover)
+		else
+			nav.SetStatus("Joining selected server...",colors.Success)
+			task.delay(12,function() if not unloaded then nav.SetBusy(false) end end)
+		end
+	end)
+	return true
+end
+
+function qolState.ServerNavigation.StopServerBrowser()
+	local b=qolState.ServerNavigation.Browser
+	b.Serial+=1;b.Busy=false
+	if b.Worker then pcall(task.cancel,b.Worker);b.Worker=nil end
+	qolState.ServerNavigation.ClearServerRows()
+end
+
+connect(qolState.ServerNavigation.Browser.Refresh.Activated,function() qolState.ServerNavigation.RefreshServerList(false) end)
+connect(qolState.ServerNavigation.Browser.More.Activated,function() qolState.ServerNavigation.RefreshServerList(true) end)
+-- END SERVER BROWSER LOGIC
 
 function qolState.ServerNavigation.FetchServers(sortOrder,maxPages)
 	local candidates={}
@@ -20709,6 +20895,8 @@ function configStore.SelectTab(name)
 		refreshNpcTypes()
 	elseif name == "TP" then
 		tpState.Refresh()
+	elseif name == "QoL" and not qolState.ServerNavigation.Browser.Loaded then
+		qolState.ServerNavigation.RefreshServerList(false)
 	elseif name == "Character" then
 		if next(qolState.ProfileEditor.RaceOrder) == nil then
 			task.spawn(qolState.ProfileEditor.LoadMetadata)
@@ -21367,6 +21555,12 @@ function controller.Unload()
 			warn("[" .. HUB_DISPLAY_NAME .. "] Unload step failed (" .. label .. "):", err)
 		end
 	end
+	step("server browser",qolState.ServerNavigation.StopServerBrowser)
+	step("reload request",function()
+		local state=configStore.Reload
+		state.Serial+=1;state.Busy=false
+		if state.Worker then pcall(task.cancel,state.Worker);state.Worker=nil end
+	end)
 	step("chat", function()
 		if configStore.ChatLog then configStore.ChatLog.RestoreNativeChat() end
 	end)
@@ -21469,6 +21663,61 @@ function controller.Unload()
 	end
 	print("[" .. HUB_DISPLAY_NAME .. "] Unloaded cleanly")
 end
+
+-- BEGIN RELOAD LOGIC
+function controller.Reload()
+	local state=configStore.Reload
+	if unloaded or state.Busy or state.Committing then return false end
+	state.Busy=true;state.Serial+=1
+	local serial=state.Serial
+	state.Button.Text="Downloading reload..."
+	local function alive() return not unloaded and state.Serial==serial end
+	local function failed(message)
+		if not alive() then return end
+		state.Busy=false;state.Worker=nil
+		state.Button.Text="Reload failed - try again"
+		warn("["..HUB_DISPLAY_NAME.."] Reload: "..tostring(message))
+	end
+	state.Worker=task.defer(function()
+		local ok, source=pcall(function()
+			if environment.GohanHubEnvironment=="local" then
+				local reader=configStore.GetFunction("readfile")
+				if not reader then error("readfile unavailable") end
+				return reader("GohanHub_dev.lua")
+			end
+			local url=environment.__GohanHubLoaderUrl
+			if type(url)=="string" and url:match("^https://") then return game:HttpGet(url) end
+			return environment.__GohanHubSource
+		end)
+		if not alive() then return end
+		if not ok or type(source)~="string" or source=="" then failed("Could not read hub source: "..tostring(source));return end
+		if type(loadstring)~="function" then failed("loadstring unavailable");return end
+		local compiled, chunk, err=pcall(loadstring,source,"AnomalysHub_reload")
+		if not compiled or type(chunk)~="function" then failed(err or chunk or "compile failed");return end
+		if not alive() then return end
+		-- Do not include this continuation in unload's canceled workers.
+		state.Worker=nil;state.Committing=true
+		environment.__GohanHubSource=source
+		controller.Unload()
+		local ran, runtimeError=pcall(chunk)
+		if not ran then warn("["..HUB_DISPLAY_NAME.."] Reload runtime error: "..tostring(runtimeError)) end
+	end)
+	task.delay(20,function()
+		if not alive() or not state.Busy then return end
+		if state.Worker then pcall(task.cancel,state.Worker);state.Worker=nil end
+		failed("download timed out; existing hub kept open")
+		state.Serial+=1
+	end)
+	return true
+end
+connect(configStore.Reload.Button.Activated,controller.Reload)
+connect(configStore.Reload.Button.MouseEnter,function()
+	configStore.Reload.Button.BackgroundColor3=Color3.fromRGB(98,211,141)
+end)
+connect(configStore.Reload.Button.MouseLeave,function()
+	configStore.Reload.Button.BackgroundColor3=Color3.fromRGB(72,186,116)
+end)
+-- END RELOAD LOGIC
 
 controller.Gui = screenGui
 controller.SetESPEnabled = configStore.ESP.SetEnabled

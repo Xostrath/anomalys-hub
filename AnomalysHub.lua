@@ -14935,6 +14935,59 @@ function qolState.ServerNavigation.RunJoinFriend(rawIdentifier)
 end
 
 -- BEGIN SERVER BROWSER LOGIC
+-- Native GetServerInfo("Get") returns {key=serverId,value={Name,Planet,...}}.
+-- Names only decorate exact public-API IDs; native capacity/ordering is not trusted.
+function qolState.ServerNavigation.ParseServerNames(records, planet)
+	local names, duplicates = {}, {}
+	if type(records)~="table" or type(planet)~="string" then return names end
+	local function clean(value, limit)
+		if type(value)~="string" then return nil end
+		value=value:gsub("%c"," "):match("^%s*(.-)%s*$")
+		return #value>0 and #value<=limit and value or nil
+	end
+	for index, record in ipairs(records) do
+		if index>1000 then break end
+		local data=type(record)=="table" and record.value
+		local id=type(record)=="table" and record.key
+		if type(id)=="string" and #id>0 and #id<=128 and id:match("^[%w%-]+$")
+			and type(data)=="table" and data.Pool=="Default" and type(data.Planet)=="string"
+			and data.Planet:lower()==planet:lower() then
+			local name=clean(data.Name,96)
+			if names[id] then duplicates[id]=true;names[id]=nil end
+			if name and not duplicates[id] then names[id]={Name=name,Region=clean(data.ServerRegion,64)} end
+		end
+	end
+	return names
+end
+
+function qolState.ServerNavigation.FetchServerNames(placeId, planet)
+	local nav=qolState.ServerNavigation
+	local b=nav.Browser
+	b.NameSerial=(b.NameSerial or 0)+1
+	local serial=b.NameSerial
+	if b.NameWorker then pcall(task.cancel,b.NameWorker);b.NameWorker=nil end
+	b.Names={};b.NameState="loading"
+	local function alive() return not unloaded and b.NameSerial==serial and b.PlaceId==placeId and game.PlaceId==placeId end
+	b.NameWorker=task.defer(function()
+		local ok, records=pcall(function()
+			local remote=remotes:FindFirstChild("GetServerInfo")
+			if not remote or not remote:IsA("RemoteFunction") then error("Name lookup unavailable here") end
+			return remote.InvokeServer(remote,"Get")
+		end)
+		if not alive() then return end
+		b.NameWorker=nil
+		b.Names=ok and nav.ParseServerNames(records,planet) or {}
+		b.NameState=next(b.Names) and "ready" or "unavailable"
+		nav.RenderServers()
+	end)
+	task.delay(8,function()
+		if not alive() or b.NameState~="loading" then return end
+		b.NameSerial+=1;b.NameState="unavailable"
+		if b.NameWorker then pcall(task.cancel,b.NameWorker);b.NameWorker=nil end
+		nav.RenderServers()
+	end)
+end
+
 function qolState.ServerNavigation.ClearServerRows()
 	local b = qolState.ServerNavigation.Browser
 	for _, connection in ipairs(b.RowConnections) do connection:Disconnect() end
@@ -14950,16 +15003,22 @@ function qolState.ServerNavigation.RenderServers()
 	for index, row in ipairs(b.Rows) do
 		local current = row.id == game.JobId
 		local full = row.playing >= row.maxPlayers
-		local frame = create("Frame", {Name="Server", LayoutOrder=index, Size=UDim2.new(1,-8,0,38),
+		local metadata=b.Names and b.Names[row.id]
+		local title=metadata and metadata.Name or (b.NameState=="loading" and "Loading server name..." or "Name unavailable")
+		local detail=string.format("%s // %d/%d players // %s",metadata and metadata.Region or "Region unknown",row.playing,row.maxPlayers,row.id:sub(1,8))
+		local frame = create("Frame", {Name="Server", LayoutOrder=index, Size=UDim2.new(1,-8,0,52),
 			BackgroundColor3=colors.SurfaceRaised, BorderSizePixel=0}, b.List)
 		create("UICorner", {CornerRadius=UDim.new(0,5)}, frame)
-		create("TextLabel", {Position=UDim2.fromOffset(8,0), Size=UDim2.new(1,-86,1,0), BackgroundTransparency=1,
-			Font=Enum.Font.Gotham, Text=string.format("%s  //  %d/%d players", row.id:sub(1,8),row.playing,row.maxPlayers),
+		create("TextLabel", {Name="ServerName",Position=UDim2.fromOffset(8,4), Size=UDim2.new(1,-86,0,21), BackgroundTransparency=1,
+			Font=Enum.Font.GothamSemibold, Text=title, RichText=false,
 			TextSize=11, TextColor3=colors.Text, TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd},frame)
+		create("TextLabel", {Name="ServerDetails",Position=UDim2.fromOffset(8,26), Size=UDim2.new(1,-86,0,20), BackgroundTransparency=1,
+			Font=Enum.Font.Gotham, Text=detail, RichText=false,
+			TextSize=10, TextColor3=colors.Muted, TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd},frame)
 		-- Transient rows own their connections instead of adding contrast
 		-- watchers to the hub-wide lifetime list on every refresh.
 		local button=Instance.new("TextButton")
-		for property,value in pairs({Name="JoinListedServer",Position=UDim2.new(1,-76,0,5), Size=UDim2.fromOffset(70,28),
+		for property,value in pairs({Name="JoinListedServer",Position=UDim2.new(1,-76,0,12), Size=UDim2.fromOffset(70,28),
 			AutoButtonColor=false, BackgroundColor3=(current or full) and colors.Surface or colors.Accent,
 			Font=Enum.Font.GothamBold, Text=current and "CURRENT" or (full and "FULL" or "JOIN"),
 			TextSize=9, TextColor3=(current or full) and colors.Muted or colors.Background, BorderSizePixel=0,
@@ -15012,6 +15071,7 @@ function qolState.ServerNavigation.RefreshServerList(loadMore)
 		b.Rows, b.Seen, b.Cursor, b.Loaded, b.Cursors = {}, {}, nil, false, {}
 		b.PlaceId=placeId
 		b.List.CanvasPosition=Vector2.zero
+		nav.FetchServerNames(placeId,currentPlanet)
 	end
 	local cursor = b.Cursor
 	b.Status.Text="Loading public "..tostring(currentPlanet).." servers..."
@@ -15071,6 +15131,8 @@ function qolState.ServerNavigation.StopServerBrowser()
 	local b=qolState.ServerNavigation.Browser
 	b.Serial+=1;b.Busy=false
 	if b.Worker then pcall(task.cancel,b.Worker);b.Worker=nil end
+	b.NameSerial=(b.NameSerial or 0)+1;b.NameState="unavailable";b.Names={}
+	if b.NameWorker then pcall(task.cancel,b.NameWorker);b.NameWorker=nil end
 	qolState.ServerNavigation.ClearServerRows()
 end
 

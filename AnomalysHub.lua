@@ -12345,6 +12345,26 @@ function npcSafety.AdaptDirectLightDelay()
 		return
 	end
 	local now = os.clock()
+	local startup = diagnostic.Startup
+	if startup and not startup.Confirmed and npcSafety.PositionMode == "Below" then
+		-- Startup is not a DPS sample. Count eligible combat time and requests
+		-- independently: brief movement gaps reset the DPS warmup, and used to
+		-- prevent this recovery from ever running. Pauses still forbid attacks.
+		local hits = diagnostic.RequestsSent - startup.RequestsAtStart
+		if not startup.ProbeUsed and tuning.Phase == "HOLDING"
+			and startup.ReadyElapsed >= 0.8 and hits >= 4 then
+			startup.ProbeUsed, startup.OriginalLevel = true, diagnostic.Level
+			startup.ReadyElapsed, startup.RequestsAtStart = 0, diagnostic.RequestsSent
+			npcSafety.ApplyDirectLightLevel(diagnostic.Level == 4 and 1 or 4)
+			return
+		elseif startup.OriginalLevel then
+			if startup.ReadyElapsed >= 3 and hits >= 4 then
+				npcSafety.RestoreDirectLightStartup()
+				npcSafety.BeginDirectLightSearch()
+			end
+			return
+		end
+	end
 	if not diagnostic.WindowReady then
 		-- Discard delayed health replication from the previous setting/warmup.
 		diagnostic.WindowHits, diagnostic.WindowDamage, diagnostic.WindowLoss = 0, 0, 0
@@ -12354,23 +12374,6 @@ function npcSafety.AdaptDirectLightDelay()
 		return
 	end
 	local elapsed = now - diagnostic.WindowStartedAt
-	local startup = diagnostic.Startup
-	if startup and not startup.Confirmed and npcSafety.PositionMode == "Below" then
-		if not startup.ProbeUsed and tuning.Phase == "HOLDING"
-			and elapsed >= 2 and diagnostic.WindowHits >= 4 and diagnostic.WindowLoss <= 0 then
-			-- A sustained-DPS cooldown must not leave a fresh NPC untouched for
-			-- 20 seconds. Try one delayed single-pair opener, then restore timing.
-			startup.ProbeUsed, startup.OriginalLevel = true, diagnostic.Level
-			npcSafety.ApplyDirectLightLevel(diagnostic.Level == 4 and 1 or 4)
-			return
-		elseif startup.OriginalLevel then
-			if elapsed >= 3 and diagnostic.WindowHits >= 4 then
-				npcSafety.RestoreDirectLightStartup()
-				npcSafety.BeginDirectLightSearch()
-			end
-			return
-		end
-	end
 	if elapsed < 3 or diagnostic.WindowHits < 4 then return end
 	diagnostic.LandRate = diagnostic.Pairs == 1 and math.min(diagnostic.WindowDamage / diagnostic.WindowHits, 1) or nil
 	local score = diagnostic.WindowLoss / elapsed
@@ -12437,7 +12440,9 @@ function npcSafety.SetDirectLightTarget(target)
 		return false
 	end
 	diagnostic.Target = target
-	diagnostic.Startup = not diagnostic.BenchmarkRunning and {Confirmed=false, ProbeUsed=false} or nil
+	diagnostic.Startup = not diagnostic.BenchmarkRunning and {
+		Confirmed=false, ProbeUsed=false, ReadyElapsed=0, RequestsAtStart=diagnostic.RequestsSent,
+	} or nil
 	diagnostic.StartHealth = humanoid.Health
 	diagnostic.CurrentHealth = humanoid.Health
 	diagnostic.LastHealth = humanoid.Health
@@ -12899,6 +12904,10 @@ function npcSafety.StartDirectLightDiagnostic()
 			return
 		end
 		diagnostic.LastStopReason = "RUNNING"
+		if diagnostic.Startup and not diagnostic.Startup.Confirmed then
+			-- Never count travel/safety pauses or a stalled frame as combat time.
+			diagnostic.Startup.ReadyElapsed += math.clamp(deltaTime, 0, 0.1)
+		end
 		if npcSafety.LootMode then return end
 		if not diagnostic.Target then
 			npcSafety.UpdateDirectLightTelemetry()

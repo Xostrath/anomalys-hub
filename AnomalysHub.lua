@@ -2550,11 +2550,12 @@ local configStore = {
 	},
 	DragonBallESP = {
 		Enabled = true,
-		Settings = {Distance = true, Highlight = true, Holders = true, Alerts = true},
+		Settings = {Distance = true, Highlight = true, Alerts = true},
 		Entries = {},
 		Buttons = {},
 		Tracked = {},
 		AlertedBalls = {},
+		SuppressedBalls = {},
 		WorldConnections = {},
 		UpdateElapsed = 0,
 	},
@@ -4270,7 +4271,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -180, 0, 28),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
-	Text = "Always on; scans every 15 seconds. Alert + marker; webhook when ALERTS is on.",
+	Text = "World balls only; scans every 15 seconds. New arrivals alert; carried balls ignored.",
 	TextColor3 = colors.Muted,
 	TextSize = 9,
 	TextWrapped = true,
@@ -4305,10 +4306,9 @@ create("UIGridLayout", {
 configStore.DragonBallESP.ToggleLabels = {
 	Distance = "Stud distance",
 	Highlight = "Glow through walls",
-	Holders = "Show carriers",
 	Alerts = "Spawn alerts",
 }
-for order, key in ipairs({"Distance", "Highlight", "Holders", "Alerts"}) do
+for order, key in ipairs({"Distance", "Highlight", "Alerts"}) do
 	local button = create("TextButton", {
 		Name = key,
 		LayoutOrder = order,
@@ -4822,9 +4822,20 @@ function configStore.ESP.LeaderboardPlayerAt(position)
 				-- topmost subtree, never search through an unrelated overlay.
 				if index>1 and not top:IsDescendantOf(hits[1]) then break end
 				local resolved,player=pcall(configStore.ESP.ResolveLeaderboardPlayer,top)
-				if resolved and player then return player end
+				if resolved and player then return player,top end
 				if top:IsA("GuiButton") or top:IsA("TextLabel") or top:IsA("TextBox")
-					or top:IsDescendantOf(screenGui) then return nil end
+					or top:IsDescendantOf(screenGui) then
+					-- Retain only leaderboard text/buttons for a post-click identity check.
+					local node=top
+					if not top:IsDescendantOf(screenGui) and not top:IsA("TextBox") then
+						for _=1,24 do
+							if not node then break end
+							if configStore.ESP.IsLeaderboardContainer(node) then return nil,top end
+							node=node.Parent
+						end
+					end
+					return nil
+				end
 			end
 		end
 	end
@@ -4835,8 +4846,10 @@ connect(UserInputService.InputBegan,function(input)
 	if unloaded or configStore.ESP.LeaderboardPress or UserInputService:GetFocusedTextBox() then return end
 	if input.UserInputType~=Enum.UserInputType.MouseButton1 and input.UserInputType~=Enum.UserInputType.Touch then return end
 	-- GUI clicks are processed input, so do not reject gameProcessedEvent here.
-	local player=configStore.ESP.LeaderboardPlayerAt(input.Position)
-	if player then configStore.ESP.LeaderboardPress={Input=input,Player=player,Position=input.Position} end
+	configStore.ESP.LeaderboardClickSerial=(configStore.ESP.LeaderboardClickSerial or 0)+1
+	local player,object=configStore.ESP.LeaderboardPlayerAt(input.Position)
+	if player or object then configStore.ESP.LeaderboardPress={Input=input,Player=player,Object=object,Position=input.Position,
+		Serial=configStore.ESP.LeaderboardClickSerial} end
 end)
 connect(UserInputService.InputChanged,function(input)
 	local press=configStore.ESP.LeaderboardPress
@@ -4854,9 +4867,23 @@ connect(UserInputService.InputEnded,function(input)
 	if input~=press.Input and not mouseRelease then return end
 	configStore.ESP.LeaderboardPress=nil
 	if unloaded or press.Dragged or (input.Position-press.Position).Magnitude>10 then return end
-	configStore.ESP.ToggleLeaderboardSpectate(press.Player)
+	if press.Player then configStore.ESP.ToggleLeaderboardSpectate(press.Player);return end
+	-- Activated may reveal @username only after InputEnded. Inspect that same
+	-- clicked object next scheduler cycle, never an arbitrary new object under the mouse.
+	task.defer(function()
+		if unloaded or configStore.ESP.LeaderboardClickSerial~=press.Serial then return end
+		local ok,player=pcall(configStore.ESP.ResolveLeaderboardPlayer,press.Object)
+		if ok and player then configStore.ESP.ToggleLeaderboardSpectate(player)
+		else
+			configStore.ESP.SpectateLabel.Text="SPECTATE // could not identify clicked player"
+			warn("[Anomaly's Hub] Spectate: leaderboard name could not be matched to a player.")
+		end
+	end)
 end)
-connect(UserInputService.WindowFocusReleased,function() configStore.ESP.LeaderboardPress=nil end)
+connect(UserInputService.WindowFocusReleased,function()
+	configStore.ESP.LeaderboardPress=nil
+	configStore.ESP.LeaderboardClickSerial=(configStore.ESP.LeaderboardClickSerial or 0)+1
+end)
 -- END LEADERBOARD SPECTATE
 
 function configStore.ESP.ReadNamedValue(root, names)
@@ -9825,7 +9852,7 @@ end
 
 function configStore.DragonBallESP.IsCandidate(instance)
 	return (instance:IsA("BasePart") or instance:IsA("Model") or instance:IsA("Tool"))
-		and not Players:GetPlayerFromCharacter(instance)
+		and not (instance:IsA("Model") and Players:GetPlayerFromCharacter(instance))
 		and configStore.DragonBallESP.IsDragonBallName(instance.Name)
 end
 
@@ -9863,16 +9890,36 @@ function configStore.DragonBallESP.Resolve(instance)
 	return resolved
 end
 
-function configStore.DragonBallESP.Consider(instance)
+function configStore.DragonBallESP.IsCarried(instance)
+	local node=instance
+	while node and node~=workspace and node~=Players do
+		if node:IsA("Backpack") or (node:IsA("Model") and Players:GetPlayerFromCharacter(node)) then return true end
+		node=node.Parent
+	end
+	return instance:IsDescendantOf(Players)
+end
+
+function configStore.DragonBallESP.Consider(instance, existing)
 	if not configStore.DragonBallESP.IsCandidate(instance) then
 		return
 	end
 	local resolved = configStore.DragonBallESP.Resolve(instance)
+	local state=configStore.DragonBallESP
+	local carried=state.IsCarried(resolved)
+	if existing or carried then state.SuppressedBalls[resolved]=true end
+	if carried then
+		state.Tracked[resolved]=nil
+		state.RemoveEntry(resolved)
+		return
+	end
 	if configStore.DragonBallESP.Tracked[resolved] then
 		return
 	end
 	for tracked in pairs(configStore.DragonBallESP.Tracked) do
 		if tracked:IsDescendantOf(resolved) then
+			if state.SuppressedBalls[tracked] then
+				state.SuppressedBalls[resolved]=true;state.SuppressedBalls[tracked]=nil
+			end
 			if configStore.DragonBallESP.AlertedBalls[tracked] then
 				configStore.DragonBallESP.AlertedBalls[resolved] = true
 				configStore.DragonBallESP.AlertedBalls[tracked] = nil
@@ -9886,14 +9933,14 @@ end
 
 function configStore.DragonBallESP.AnnounceSpawn(instance, holder)
 	local state = configStore.DragonBallESP
-	if unloaded or not instance.Parent or not state.Enabled or not state.Settings.Alerts
-		or state.AlertedBalls[instance] then
+	if unloaded or not instance.Parent or not instance:IsDescendantOf(workspace) or holder or state.IsCarried(instance)
+		or not state.Enabled or not state.Settings.Alerts or state.SuppressedBalls[instance] or state.AlertedBalls[instance] then
 		return
 	end
 	state.AlertedBalls[instance] = true
 	local stars = configStore.DragonBallESP.GetStarCount(instance)
 	local message = (stars and (stars .. "-Star ") or "") .. "Dragon Ball detected locally"
-		.. (holder and (" | carried by @" .. holder.Name) or " | in world")
+		.. " | new world arrival"
 	print("[Anomaly's Hub] " .. message .. " @ " .. instance:GetFullName())
 	if configStore.Webhook and configStore.Webhook.Enabled then
 		configStore.Webhook.Send("Dragon Ball detected", message, 16761920)
@@ -9999,8 +10046,19 @@ function configStore.DragonBallESP.StartTracking()
 	configStore.DragonBallESP.Tracking = true
 	configStore.DragonBallESP.DisconnectWorld()
 	for _, descendant in ipairs(workspace:GetDescendants()) do
-		configStore.DragonBallESP.Consider(descendant)
+		configStore.DragonBallESP.Consider(descendant, true)
 	end
+	-- Remember inventory balls without displaying them, so equipping/dropping
+	-- the same object cannot masquerade as a new spawn.
+	for _,player in ipairs(Players:GetPlayers()) do
+		local backpack=player:FindFirstChildOfClass("Backpack")
+		if backpack then
+			for _,item in ipairs(backpack:GetDescendants()) do configStore.DragonBallESP.Consider(item,true) end
+		end
+	end
+	table.insert(configStore.DragonBallESP.WorldConnections, connect(Players.DescendantAdded,function(descendant)
+		if not unloaded then configStore.DragonBallESP.Consider(descendant,true) end
+	end))
 	table.insert(configStore.DragonBallESP.WorldConnections, connect(workspace.DescendantAdded, function(descendant)
 		if configStore.DragonBallESP.Enabled then
 			configStore.DragonBallESP.Consider(descendant)
@@ -10012,29 +10070,14 @@ function configStore.DragonBallESP.CollectBalls()
 	local balls = {}
 	for instance in pairs(configStore.DragonBallESP.Tracked) do
 		if instance.Parent and instance:IsDescendantOf(workspace) then
-			local character = instance:FindFirstAncestorOfClass("Model")
-			local holder = nil
-			while character do
-				holder = Players:GetPlayerFromCharacter(character)
-				if holder then break end
-				character = character.Parent and character.Parent:FindFirstAncestorOfClass("Model")
-			end
-			table.insert(balls, {Instance = instance, Holder = holder})
+			if configStore.DragonBallESP.IsCarried(instance) then
+				configStore.DragonBallESP.SuppressedBalls[instance]=true
+				configStore.DragonBallESP.RemoveEntry(instance)
+			else table.insert(balls, {Instance = instance}) end
 		else
+			if instance.Parent and configStore.DragonBallESP.IsCarried(instance) then configStore.DragonBallESP.SuppressedBalls[instance]=true end
 			configStore.DragonBallESP.Tracked[instance] = nil
 			configStore.DragonBallESP.RemoveEntry(instance)
-		end
-	end
-	if configStore.DragonBallESP.Settings.Holders then
-		for _, player in ipairs(Players:GetPlayers()) do
-			local backpack = player:FindFirstChildOfClass("Backpack")
-			if backpack then
-				for _, item in ipairs(backpack:GetChildren()) do
-					if configStore.DragonBallESP.IsCandidate(item) then
-						table.insert(balls, {Instance = item, Holder = player, Stowed = true})
-					end
-				end
-			end
 		end
 	end
 	return balls
@@ -10092,19 +10135,15 @@ function configStore.DragonBallESP.Update(deltaTime)
 	local settings = configStore.DragonBallESP.Settings
 	local localRoot = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 	local active = {}
-	local worldCount, carriedCount = 0, 0
+	local worldCount = 0
 	for _, ball in ipairs(configStore.DragonBallESP.CollectBalls()) do
 		local instance, holder = ball.Instance, ball.Holder
 		local holderRoot = holder and holder.Character and holder.Character:FindFirstChild("HumanoidRootPart")
 		local anchor = ball.Stowed and holderRoot or configStore.DragonBallESP.GetAnchor(instance)
-		if anchor and (not holder or settings.Holders) then
+		if anchor and not holder and not configStore.DragonBallESP.IsCarried(instance) then
 			configStore.DragonBallESP.AnnounceSpawn(instance, holder)
 			active[instance] = true
-			if holder then
-				carriedCount += 1
-			else
-				worldCount += 1
-			end
+			worldCount += 1
 			local entry = configStore.DragonBallESP.CreateEntry(instance)
 			entry.Billboard.Adornee = anchor
 			entry.Billboard.StudsOffsetWorldSpace = Vector3.new(0, ball.Stowed and 5.5 or 3, 0)
@@ -10125,15 +10164,20 @@ function configStore.DragonBallESP.Update(deltaTime)
 		end
 	end
 	local status = configStore.DragonBallESP.StatusLabel
-	status.Text = string.format("DRAGON BALLS // %d IN WORLD // %d CARRIED", worldCount, carriedCount)
-	status.TextColor3 = (worldCount + carriedCount) > 0 and colors.Success or colors.Muted
+	status.Text = string.format("DRAGON BALLS // %d IN WORLD // CARRIED IGNORED", worldCount)
+	status.TextColor3 = worldCount > 0 and colors.Success or colors.Muted
 	local banner = configStore.DragonBallESP.Banner
-	banner.Text = string.format("DRAGON BALLS DETECTED // %d WORLD | %d CARRIED", worldCount, carriedCount)
-	banner.Visible = (worldCount + carriedCount) > 0
+	banner.Text = string.format("DRAGON BALLS DETECTED // %d IN WORLD", worldCount)
+	banner.Visible = worldCount > 0
 	banner.BackgroundColor3, banner.TextColor3 = colors.SurfaceRaised, colors.Accent
 	for instance in pairs(configStore.DragonBallESP.AlertedBalls) do
 		if not instance.Parent or (not instance:IsDescendantOf(workspace) and not instance:IsDescendantOf(Players)) then
 			configStore.DragonBallESP.AlertedBalls[instance] = nil
+		end
+	end
+	for instance in pairs(configStore.DragonBallESP.SuppressedBalls) do
+		if not instance.Parent or (not instance:IsDescendantOf(workspace) and not instance:IsDescendantOf(Players)) then
+			configStore.DragonBallESP.SuppressedBalls[instance]=nil
 		end
 	end
 end
@@ -10143,6 +10187,7 @@ function configStore.DragonBallESP.Scan()
 	local seen = {}
 	local function check(instance)
 		local compact = configStore.DragonBallESP.Compact(instance.Name)
+		if configStore.DragonBallESP.IsCarried(instance) then return end
 		if seen[instance] then
 			return
 		end
@@ -10153,10 +10198,7 @@ function configStore.DragonBallESP.Scan()
 				configStore.DragonBallESP.IsCandidate(instance) and "  <-- TRACKED" or ""))
 		end
 	end
-	local roots = {workspace, game:GetService("ReplicatedStorage")}
-	for _, player in ipairs(Players:GetPlayers()) do
-		table.insert(roots, player)
-	end
+	local roots = {workspace}
 	for _, root in ipairs(roots) do
 		for _, descendant in ipairs(root:GetDescendants()) do
 			check(descendant)
@@ -11650,10 +11692,19 @@ function npcSafety.SendLeftClick()
 end
 
 function npcSafety.SendLightAttack()
-	if npcSafety.IsExcludedFarmTarget(activeNpcTarget) then return false end
-	if not npcSafety.IsNpcOutsidePlayerRange(activeNpcTarget) then return false end
+	local target,character=activeNpcTarget,localPlayer.Character
+	local function allowed()
+		if unloaded or not character or localPlayer.Character~=character
+			or npcSafety.GripMode or npcSafety.LootMode or npcSafety.RecoveryMode
+			or npcSafety.HideMode or npcSafety.PlayerEvadeMode or npcSafety.ServerHopBusy then return false end
+		local humanoid=character:FindFirstChildOfClass("Humanoid")
+		return humanoid~=nil and humanoid.Health>0 and character:FindFirstChild("HumanoidRootPart")~=nil
+			and npcSafety.IsDirectLightTargetAllowed(target)
+	end
+	if not allowed() then return false end
 	local combatController = getNpcCombatController()
-	if not combatController or type(combatController.Light) ~= "function" then
+	-- Loading the controller can yield; never send a stale intent after that gap.
+	if not allowed() or not combatController or type(combatController.Light) ~= "function" then
 		return false
 	end
 	-- Call the same client combat intent used by normal M1 handling without
@@ -22192,6 +22243,7 @@ function controller.Unload()
 		configStore.DragonBallESP.Gui:Destroy()
 		table.clear(configStore.DragonBallESP.Tracked)
 		table.clear(configStore.DragonBallESP.AlertedBalls)
+		table.clear(configStore.DragonBallESP.SuppressedBalls)
 	end)
 	step("session", function()
 		configStore.Session.StopWatchingTarget()

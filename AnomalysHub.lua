@@ -4697,6 +4697,68 @@ function configStore.ESP.ToggleLeaderboardSpectate(player)
 	return configStore.ESP.StartSpectate(player)
 end
 
+-- Verified by the in-game click trace: each native row is a TextButton named
+-- after its account, under PlayerGui.KamiLeaderboardGui.Panel.List.
+function configStore.ESP.GetNativeLeaderboardRow(object)
+	local node=object
+	for _=1,8 do
+		if not node or node==playerGui then break end
+		local list=node.Parent
+		local panel=list and list.Parent
+		local gui=panel and panel.Parent
+		if node:IsA("TextButton") and list and list.Name=="List" and list:IsA("ScrollingFrame")
+			and panel and panel.Name=="Panel" and gui and gui.Name=="KamiLeaderboardGui"
+			and gui:IsA("ScreenGui") and gui.Parent==playerGui then return node end
+		node=node.Parent
+	end
+	return nil
+end
+
+function configStore.ESP.BindNativeLeaderboardRow(object)
+	if unloaded or configStore.ESP.GetNativeLeaderboardRow(object)~=object then return end
+	local bindings=configStore.ESP.NativeLeaderboardBindings
+	if bindings[object] then return end
+	bindings[object]=object.Activated:Connect(function()
+		if unloaded or configStore.ESP.GetNativeLeaderboardRow(object)~=object then return end
+		local node=object
+		while node and node~=playerGui do
+			if node:IsA("GuiObject") and not node.Visible then return end
+			if node:IsA("ScreenGui") and not node.Enabled then return end
+			node=node.Parent
+		end
+		for _,player in ipairs(Players:GetPlayers()) do
+			if player.Name==object.Name then
+				configStore.ESP.ToggleLeaderboardSpectate(player)
+				return
+			end
+		end
+	end)
+end
+
+function configStore.ESP.StopNativeLeaderboardBindings()
+	for row,connection in pairs(configStore.ESP.NativeLeaderboardBindings) do
+		connection:Disconnect()
+		configStore.ESP.NativeLeaderboardBindings[row]=nil
+	end
+end
+
+configStore.ESP.NativeLeaderboardBindings={}
+connect(playerGui.DescendantAdded,function(object)
+	configStore.ESP.BindNativeLeaderboardRow(object)
+end)
+connect(playerGui.DescendantRemoving,function(object)
+	local connection=configStore.ESP.NativeLeaderboardBindings[object]
+	if connection then connection:Disconnect();configStore.ESP.NativeLeaderboardBindings[object]=nil end
+end)
+do
+	local gui=playerGui:FindFirstChild("KamiLeaderboardGui")
+	local panel=gui and gui:FindFirstChild("Panel")
+	local list=panel and panel:FindFirstChild("List")
+	if list then
+		for _,row in ipairs(list:GetChildren()) do configStore.ESP.BindNativeLeaderboardRow(row) end
+	end
+end
+
 function configStore.ESP.IsLeaderboardContainer(object)
 	local name=string.lower(object.Name):gsub("[%s_%-]", "")
 	if name=="leaderboard" or name=="leaderboardgui" or name=="playerlist"
@@ -4850,6 +4912,9 @@ function configStore.ESP.LeaderboardPlayerAt(position)
 		if readable and hits and hits[1] then
 			for index=1,math.min(#hits,24) do
 				local top=hits[index]
+				-- Native buttons own their Activated event; the generic fallback must
+				-- never toggle the same click a second time.
+				if configStore.ESP.GetNativeLeaderboardRow(top) then return nil end
 				-- A Frame can precede its clicked name child. Stay inside that
 				-- topmost subtree, never search through an unrelated overlay.
 				if index>1 and not top:IsDescendantOf(hits[1]) then break end
@@ -22260,6 +22325,7 @@ function controller.Unload()
 	end)
 	step("esp", function()
 		configStore.ESP.LeaderboardPress=nil
+		configStore.ESP.StopNativeLeaderboardBindings()
 		configStore.ESP.Enabled = false
 		configStore.ESP.StopSpectate()
 		configStore.ESP.Clear()

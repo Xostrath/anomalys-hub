@@ -4413,7 +4413,11 @@ function configStore.ESP.StartSpectate(player)
 	player=player or configStore.ESP.SpectateSelected
 	if not player or player==localPlayer or player.Parent~=Players then return false end
 	local humanoid=player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-	if not humanoid or humanoid.Health<=0 then return false end
+	if not humanoid or humanoid.Health<=0 then
+		configStore.ESP.SpectateLabel.Text="SPECTATE // @"..player.Name.." has no loaded living character"
+		warn("[Anomaly's Hub] Cannot spectate @"..player.Name..": character not loaded or alive.")
+		return false
+	end
 	configStore.ESP.SpectateSelected=player
 	configStore.ESP.SpectateTarget=player
 	configStore.ESP.SpectateReturnPending=false
@@ -4470,6 +4474,44 @@ function configStore.ESP.ToggleLeaderboardSpectate(player)
 	return configStore.ESP.StartSpectate(player)
 end
 
+function configStore.ESP.IsLeaderboardContainer(object)
+	local name=string.lower(object.Name):gsub("[%s_%-]", "")
+	if name=="leaderboard" or name=="leaderboardgui" or name=="playerlist"
+		or name=="playerlistgui" or name=="playerlistmaster" or name=="fighters" then return true end
+	-- The recorded game uses a custom FIGHTERS panel, not Roblox's player list.
+	-- Identify its visible header without depending on an unobserved instance path.
+	if not (object:IsA("Frame") or object:IsA("ScrollingFrame") or object:IsA("ScreenGui")) then return false end
+	local checked=0
+	local function header(child)
+		checked+=1
+		return checked<=96 and (child:IsA("TextLabel") or child:IsA("TextButton")) and child.Visible
+			and string.match(string.upper(child.Text:gsub("<[^>]*>","")),"^%s*FIGHTERS%s*$")~=nil
+	end
+	for _,child in ipairs(object:GetChildren()) do
+		if checked>=96 then break end
+		if header(child) then return true end
+		local childName=string.lower(child.Name)
+		if child:IsA("GuiObject") and child.Visible and (childName=="header" or childName=="titlebar" or childName=="topbar") then
+			for _,nested in ipairs(child:GetChildren()) do
+				if checked>=96 then break end
+				if header(nested) then return true end
+			end
+		end
+	end
+	return false
+end
+
+function configStore.ESP.GetLeaderboardCharacterName(player)
+	-- Read replicated/cached identity only; a click must never invoke a stats remote.
+	local snapshot=player==localPlayer and configStore.ESP.LocalSnapshot
+	if snapshot and type(snapshot.Name)=="string" then return snapshot.Name end
+	local stats=player:FindFirstChild("PlayerStats")
+	local data=stats and stats:FindFirstChild("CharacterData")
+	return configStore.ESP.ReadNamedValue(data,{"Name","CharacterName","InGameName"})
+		or configStore.ESP.ReadNamedValue(player.Character,{"CharacterName","InGameName"})
+		or player:GetAttribute("CharacterName")
+end
+
 function configStore.ESP.ResolveLeaderboardPlayer(object)
 	if not object or object:IsDescendantOf(screenGui) then return nil end
 	local chain={}
@@ -4479,9 +4521,7 @@ function configStore.ESP.ResolveLeaderboardPlayer(object)
 		if not node then break end
 		if node:IsA("GuiObject") and not node.Visible then return nil end
 		if node:IsA("ScreenGui") and not node.Enabled then return nil end
-		local name=string.lower(node.Name):gsub("[%s_%-]", "")
-		if name=="leaderboard" or name=="leaderboardgui" or name=="playerlist"
-			or name=="playerlistgui" or name=="playerlistmaster" then
+		if configStore.ESP.IsLeaderboardContainer(node) then
 			container=node;break
 		end
 		table.insert(chain,node)
@@ -4489,6 +4529,8 @@ function configStore.ESP.ResolveLeaderboardPlayer(object)
 	end
 	if not container then return nil end
 	local candidates=Players:GetPlayers()
+	local characterNames={}
+	for _,player in ipairs(candidates) do characterNames[player]=configStore.ESP.GetLeaderboardCharacterName(player) end
 	-- Stable row IDs take precedence over display names (which need not be unique).
 	local identified=nil
 	for _,entry in ipairs(chain) do
@@ -4506,13 +4548,14 @@ function configStore.ESP.ResolveLeaderboardPlayer(object)
 		local value=string.match(label.Text:gsub("<[^>]*>",""),"^%s*(.-)%s*$")
 		local username=string.match(value,"^@([%w_]+)$")
 		if identified then
-			if value==identified.Name or value==identified.DisplayName or username==identified.Name then return identified end
+			if value==identified.Name or value==identified.DisplayName or value==characterNames[identified]
+				or username==identified.Name then return identified end
 			return nil
 		end
 		local matched=nil
 		for _,player in ipairs(candidates) do
 			local match=username and username==player.Name
-				or not username and (value==player.Name or value==player.DisplayName)
+				or not username and (value==player.Name or value==player.DisplayName or value==characterNames[player])
 			if match then
 				if matched and matched~=player then return nil end
 				matched=player
@@ -4525,7 +4568,7 @@ function configStore.ESP.ResolveLeaderboardPlayer(object)
 	if player then return player end
 	if object:IsA("TextLabel") or (object:IsA("TextButton") and object.Text~="") then return nil end
 	-- Some leaderboards put a transparent button directly over the name label.
-	if object:IsA("GuiButton") then
+	if object:IsA("GuiButton") or (identified and object:IsA("Frame")) then
 		local count=0
 		for _,child in ipairs(object:GetDescendants()) do
 			count+=1;if count>64 then break end
@@ -4550,12 +4593,16 @@ function configStore.ESP.LeaderboardPlayerAt(position)
 	for _,root in ipairs(roots) do
 		local readable,hits=pcall(function() return root:GetGuiObjectsAtPosition(position.X,position.Y) end)
 		if readable and hits and hits[1] then
-			local top=hits[1]
-			local resolved,player=pcall(configStore.ESP.ResolveLeaderboardPlayer,top)
-			if resolved and player then return player end
-			-- Never click through an unrelated interactive overlay or hub control.
-			if top:IsA("GuiButton") or top:IsA("TextLabel") or top:IsA("TextBox")
-				or top:IsDescendantOf(screenGui) then return nil end
+			for index=1,math.min(#hits,24) do
+				local top=hits[index]
+				-- A Frame can precede its clicked name child. Stay inside that
+				-- topmost subtree, never search through an unrelated overlay.
+				if index>1 and not top:IsDescendantOf(hits[1]) then break end
+				local resolved,player=pcall(configStore.ESP.ResolveLeaderboardPlayer,top)
+				if resolved and player then return player end
+				if top:IsA("GuiButton") or top:IsA("TextLabel") or top:IsA("TextBox")
+					or top:IsDescendantOf(screenGui) then return nil end
+			end
 		end
 	end
 	return nil
@@ -4578,7 +4625,10 @@ connect(UserInputService.InputChanged,function(input)
 end)
 connect(UserInputService.InputEnded,function(input)
 	local press=configStore.ESP.LeaderboardPress
-	if not press or input~=press.Input then return end
+	if not press then return end
+	local mouseRelease=input.UserInputType==Enum.UserInputType.MouseButton1
+		and press.Input.UserInputType==Enum.UserInputType.MouseButton1
+	if input~=press.Input and not mouseRelease then return end
 	configStore.ESP.LeaderboardPress=nil
 	if unloaded or press.Dragged or (input.Position-press.Position).Magnitude>10 then return end
 	configStore.ESP.ToggleLeaderboardSpectate(press.Player)

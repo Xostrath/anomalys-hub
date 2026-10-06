@@ -4,6 +4,224 @@ do
 	env.GohanHubEnvironment = "public"
 	env.__GohanHubLoaderUrl = "https://raw.githubusercontent.com/Xostrath/anomalys-hub/main/AnomalysHub.lua"
 end
+if ((getgenv and getgenv()) or shared).AnomalyServerCapture == true then
+((getgenv and getgenv()) or shared).AnomalyServerCapture = nil
+(function()
+-- Standalone, opt-in recorder for the title-screen server list. No game requests.
+if not game:IsLoaded() then game.Loaded:Wait() end
+local env=(getgenv and getgenv()) or shared
+if env.__AnomalyServerCapture then pcall(env.__AnomalyServerCapture.Close) end
+local Players=game:GetService("Players")
+local ReplicatedStorage=game:GetService("ReplicatedStorage")
+local HttpService=game:GetService("HttpService")
+local player=Players.LocalPlayer
+while not player do Players:GetPropertyChangedSignal("LocalPlayer"):Wait();player=Players.LocalPlayer end
+local playerGui=player:WaitForChild("PlayerGui")
+local capture={Active=false,Serial=0,Lines={},Bytes=0,Connections={},Samples={},Closed=false}
+env.__AnomalyServerCapture=capture
+
+-- BEGIN SERVER CAPTURE CORE
+function capture.Sample(value,depth,seen,budget)
+	depth=depth or 0;seen=seen or {};budget=budget or {Left=512}
+	budget.Left-=1;if budget.Left<=0 then return "<node limit>" end
+	local kind=type(value)
+	if kind=="string" then return string.format("%q",value:sub(1,256)) end
+	if kind=="number" or kind=="boolean" or kind=="nil" then return tostring(value) end
+	if kind~="table" then return "<"..typeof(value)..">" end
+	if seen[value] then return "<cycle>" end
+	if depth>=6 then return "<depth limit>" end
+	seen[value]=true
+	local parts,n={},0
+	for k,v in pairs(value) do
+		if budget.Left<=0 then table.insert(parts,"<node limit>");break end
+		n+=1;if n>32 then table.insert(parts,"<field limit>");break end
+		local key=type(k)=="string" and k:lower() or ""
+		local private=key:find("token",1,true) or key:find("password",1,true) or key:find("secret",1,true)
+			or key:find("webhook",1,true) or key:find("cookie",1,true) or key=="authorization" or key=="api_key"
+		table.insert(parts,capture.Sample(k,depth+1,seen,budget).."="..(private and "<redacted>" or capture.Sample(v,depth+1,seen,budget)))
+	end
+	seen[value]=nil
+	return "{"..table.concat(parts,", ").."}"
+end
+
+function capture.Log(line)
+	if #capture.Lines>=500 or capture.Bytes>=250000 then capture.Limited=true;return end
+	line=tostring(line):sub(1,12000)
+	table.insert(capture.Lines,line);capture.Bytes+=#line
+end
+
+function capture.Observe(remote,direction,values,serial)
+	if not capture.Active or capture.Closed or serial~=capture.Serial then return end
+	if not remote:IsDescendantOf(ReplicatedStorage) then return end
+	local key=direction.." "..remote:GetFullName()
+	local count=(capture.Samples[key] or 0)+1;capture.Samples[key]=count
+	if count>3 then return end
+	capture.Log(key.." argc="..tostring(values.n).." "..capture.Sample(values))
+end
+
+function capture.Snapshot()
+	capture.Log("UI SNAPSHOT // server-related containers only")
+	local inspected=0
+	for _,object in ipairs(playerGui:GetDescendants()) do
+		inspected+=1;if inspected>10000 then capture.Log("UI traversal limit reached");break end
+		if capture.Gui and object:IsDescendantOf(capture.Gui) then continue end
+		local node=object;local relevant=false
+		for _=1,16 do
+			if not node or node==playerGui then break end
+			if node.Name:lower():find("server",1,true) then relevant=true;break end
+			node=node.Parent
+		end
+		if relevant then
+			local detail=""
+			if object:IsA("TextLabel") or object:IsA("TextButton") then detail=" text="..capture.Sample(object.Text) end
+			local attrs={}
+			for _,key in ipairs({"JobId","ServerId","ServerName","PlaceId","Region"}) do attrs[key]=object:GetAttribute(key) end
+			if detail~="" or next(attrs) then capture.Log(object:GetFullName()..detail.." attrs="..capture.Sample(attrs)) end
+		end
+	end
+end
+
+function capture.Report()
+	return table.concat(capture.Lines,"\n")..(capture.Limited and "\nREPORT LIMIT REACHED; additional observations omitted." or "")
+end
+
+function capture.Save()
+	local report=capture.Report()
+	local writer=env.writefile or writefile
+	local folder=env.makefolder or makefolder
+	local exists=env.isfolder or isfolder
+	local ok=false
+	if type(writer)=="function" then
+		ok=pcall(function()
+			if type(folder)=="function" and (type(exists)~="function" or not exists("GohanHub")) then folder("GohanHub") end
+			writer(capture.File,report)
+			writer("GohanHub/server_list_capture_latest.txt",report)
+		end)
+	end
+	return ok
+end
+
+function capture.Stop()
+	if not capture.Active then return end
+	capture.Active=false
+	for _,connection in ipairs(capture.Connections) do connection:Disconnect() end
+	table.clear(capture.Connections)
+	local ok=pcall(capture.Snapshot)
+	if not ok then capture.Log("UI snapshot unavailable; remote samples retained.") end
+	local saved=capture.Save()
+	capture.Status.Text=saved and "Saved. Tell me done; you can close this panel." or "File save unavailable. Use COPY REPORT."
+	capture.RecordButton.Text="RECORD SERVER LIST"
+end
+
+function capture.Install()
+	if capture.Installed then return capture.HookStatus end
+	capture.Installed=true
+	local hook=env.hookmetamethod or hookmetamethod
+	local getMethod=env.getnamecallmethod or getnamecallmethod
+	local wrap=env.newcclosure or newcclosure or function(fn) return fn end
+	local supported={}
+	if type(hook)=="function" and type(getMethod)=="function" then
+		local original
+		local ok=pcall(function()
+			original=hook(game,"__namecall",wrap(function(self,...)
+				local serial=capture.Active and not capture.Closed and capture.Serial
+				local valid,method=pcall(getMethod)
+				if serial and valid and typeof(self)=="Instance" and (method=="InvokeServer" or method=="FireServer") then
+					pcall(capture.Observe,self,"OUT "..method,table.pack(...),serial)
+					if method=="InvokeServer" then
+						local values=table.pack(original(self,...))
+						pcall(capture.Observe,self,"RETURN namecall",values,serial)
+						return table.unpack(values,1,values.n)
+					end
+				end
+				return original(self,...)
+			end))
+		end)
+		if ok then table.insert(supported,"namecalls") end
+	end
+	-- Direct InvokeServer syntax may not pass through __namecall.
+	local hookFunction=env.hookfunction or hookfunction
+	local remote=ReplicatedStorage:FindFirstChildWhichIsA("RemoteFunction",true)
+	if type(hookFunction)=="function" and remote then
+		local original
+		local ok=pcall(function()
+			original=hookFunction(remote.InvokeServer,wrap(function(self,...)
+				local serial=capture.Active and not capture.Closed and capture.Serial
+				if not serial then return original(self,...) end
+				pcall(capture.Observe,self,"OUT direct InvokeServer",table.pack(...),serial)
+				local values=table.pack(original(self,...))
+				pcall(capture.Observe,self,"RETURN direct",values,serial)
+				return table.unpack(values,1,values.n)
+			end))
+		end)
+		if ok then table.insert(supported,"direct functions") end
+	end
+	capture.HookStatus=#supported>0 and table.concat(supported," + ") or "UI/incoming events only; hooks unavailable"
+	return capture.HookStatus
+end
+
+function capture.Start()
+	if capture.Closed then return end
+	if capture.Active then capture.Stop();return end
+	capture.Serial+=1
+	capture.Lines,capture.Samples,capture.Bytes,capture.Limited={},{},0,false
+	capture.File="GohanHub/server_list_capture_"..tostring(os.time()).."_"..HttpService:GenerateGUID(false):gsub("[^%w]",""):sub(1,12)..".txt"
+	capture.Log("SERVER LIST CAPTURE // passive v1 place="..tostring(game.PlaceId).." universe="..tostring(game.GameId))
+	capture.Log("No remotes invoked/replayed, no join requests, no game script execution. Samples may be capped. Declarations are not proof of server behavior.")
+	capture.Log("Coverage: "..capture.Install())
+	capture.Active=true
+	local serial=capture.Serial;local events=0
+	for _,remote in ipairs(ReplicatedStorage:GetDescendants()) do
+		if remote:IsA("RemoteEvent") then
+			events+=1;if events>128 then capture.Log("Incoming event subscription cap reached");break end
+			table.insert(capture.Connections,remote.OnClientEvent:Connect(function(...)
+				pcall(capture.Observe,remote,"IN event",table.pack(...),serial)
+			end))
+		end
+	end
+	local ok=pcall(capture.Snapshot)
+	if not ok then capture.Log("UI snapshot unavailable; remote recording continues.") end
+	capture.Status.Text="Recording 60s. Open/refresh the GAME'S server list, then STOP + SAVE. Do not join."
+	capture.RecordButton.Text="STOP + SAVE"
+	task.delay(60,function() if capture.Active and capture.Serial==serial and not capture.Closed then capture.Stop() end end)
+end
+
+function capture.Close()
+	if capture.Active then capture.Stop() end
+	capture.Closed=true;capture.Serial+=1
+	-- Dormant wrappers preserve later-installed hooks; never overwrite someone else's hook.
+	if capture.Gui then capture.Gui:Destroy() end
+	if env.__AnomalyServerCapture==capture then env.__AnomalyServerCapture=nil end
+end
+-- END SERVER CAPTURE CORE
+
+local function make(class,properties,parent)
+	local object=Instance.new(class)
+	for key,value in pairs(properties) do object[key]=value end
+	object.Parent=parent
+	return object
+end
+capture.Gui=make("ScreenGui",{Name="AnomalyServerListCapture",ResetOnSpawn=false,DisplayOrder=200},playerGui)
+local panel=make("Frame",{Position=UDim2.fromOffset(18,90),Size=UDim2.fromOffset(390,218),BackgroundColor3=Color3.fromRGB(40,35,50),BorderSizePixel=0},capture.Gui)
+make("UICorner",{CornerRadius=UDim.new(0,10)},panel)
+make("TextLabel",{Position=UDim2.fromOffset(14,12),Size=UDim2.new(1,-28,0,24),BackgroundTransparency=1,Font=Enum.Font.GothamBold,Text="SERVER LIST CAPTURE",TextSize=15,TextColor3=Color3.fromRGB(218,197,255)},panel)
+capture.Status=make("TextLabel",{Position=UDim2.fromOffset(14,44),Size=UDim2.new(1,-28,0,76),BackgroundTransparency=1,Font=Enum.Font.Gotham,Text="Place "..game.PlaceId..". Press RECORD, open the game's server list, then STOP + SAVE.",TextSize=12,TextColor3=Color3.fromRGB(240,233,250),TextWrapped=true},panel)
+local function button(text,x,y,width,callback)
+	local b=make("TextButton",{Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(width,32),BackgroundColor3=Color3.fromRGB(218,197,255),Font=Enum.Font.GothamBold,Text=text,TextSize=11,TextColor3=Color3.fromRGB(40,35,50),BorderSizePixel=0},panel)
+	make("UICorner",{CornerRadius=UDim.new(0,6)},b)
+	b.Activated:Connect(callback);return b
+end
+capture.RecordButton=button("RECORD SERVER LIST",14,126,362,capture.Start)
+button("COPY REPORT",14,170,236,function()
+	local copy=env.setclipboard or setclipboard
+	local ok=type(copy)=="function" and pcall(copy,capture.Report())
+	capture.Status.Text=ok and "Report copied." or "Clipboard unavailable; use the saved report."
+end)
+button("CLOSE",262,170,114,capture.Close)
+
+end)()
+return
+end
 if game.PlaceId == 89366025586253 then
 (function()
 --[[

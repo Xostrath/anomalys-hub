@@ -19632,7 +19632,7 @@ function configStore.AutoMaze.Update()
 	if not session or session.Grid ~= grid or session.Head ~= head then
 		maze.Generation += 1
 		maze.Release()
-		session = {Grid = grid, Head = head, ResetCount = 0, StartAt = now + math.random(350, 500) / 1000}
+		session = {Grid = grid, Head = head, ResetCount = 0, StartAt = now + math.random(350, 500) / 1100}
 		maze.Session = session
 	end
 	if session.Planning then status("CALCULATING ROUTE"); return end
@@ -19643,7 +19643,7 @@ function configStore.AutoMaze.Update()
 		maze.Generation += 1
 		maze.Release()
 		session.Route, session.Pending, session.ResetCount = nil, nil, 0
-		session.StartAt = now + math.random(350, 500) / 1000
+		session.StartAt = now + math.random(350, 500) / 1100
 	end
 	session.Signature = model.Signature
 	local x, y = model.Layout.Start[1], model.Layout.Start[2]
@@ -19699,7 +19699,7 @@ function configStore.AutoMaze.Update()
 	local keys = {U = "W", D = "S", L = "A", R = "D"}
 	if maze.Press(keys[move.Key]) then
 		session.Pending = {X = move.X, Y = move.Y, SentAt = now,
-			Until = now + math.clamp(move.Cells * 0.025, 0.04, 0.22) + math.random(120, 180) / 1000}
+			Until = now + (math.clamp(move.Cells * 0.025, 0.04, 0.22) + math.random(120, 180) / 1000) / 1.1}
 		status(string.format("%s // MOVE %d/%d", keys[move.Key], session.Index, #session.Route))
 	else
 		session.Error = "KEYBOARD INPUT UNAVAILABLE"

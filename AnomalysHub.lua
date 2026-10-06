@@ -4339,24 +4339,28 @@ end
 
 function configStore.ESP.StopSpectate()
 	configStore.ESP.SpectateTarget=nil
+	configStore.ESP.SpectateReturnPending=true
 	local camera=workspace.CurrentCamera
 	local character=localPlayer.Character
 	local humanoid=character and character:FindFirstChildOfClass("Humanoid")
 	if camera and humanoid then
 		camera.CameraType=Enum.CameraType.Custom
 		camera.CameraSubject=humanoid
+		configStore.ESP.SpectateReturnPending=false
 	end
 	configStore.ESP.RenderSpectate()
 	return true
 end
 
 function configStore.ESP.StartSpectate(player)
+	if unloaded then return false end
 	player=player or configStore.ESP.SpectateSelected
 	if not player or player==localPlayer or player.Parent~=Players then return false end
 	local humanoid=player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-	if not humanoid then return false end
+	if not humanoid or humanoid.Health<=0 then return false end
 	configStore.ESP.SpectateSelected=player
 	configStore.ESP.SpectateTarget=player
+	configStore.ESP.SpectateReturnPending=false
 	local camera=workspace.CurrentCamera
 	if camera then
 		camera.CameraType=Enum.CameraType.Custom
@@ -4385,12 +4389,146 @@ function configStore.ESP.UpdateSpectate(deltaTime)
 	if configStore.ESP.SpectateElapsed<0.2 then return end
 	configStore.ESP.SpectateElapsed=0
 	local target=configStore.ESP.SpectateTarget
-	if not target then return end
+	if not target then
+		if configStore.ESP.SpectateReturnPending then configStore.ESP.StopSpectate() end
+		return
+	end
 	if target.Parent~=Players then configStore.ESP.StopSpectate();return end
 	local humanoid=target.Character and target.Character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health<=0 then configStore.ESP.StopSpectate();return end
 	local camera=workspace.CurrentCamera
-	if humanoid and camera and camera.CameraSubject~=humanoid then camera.CameraSubject=humanoid end
+	if camera then
+		camera.CameraType=Enum.CameraType.Custom
+		if camera.CameraSubject~=humanoid then camera.CameraSubject=humanoid end
+	end
 end
+
+-- BEGIN LEADERBOARD SPECTATE
+-- Resolve only the clicked leaderboard row, with live identity on every click.
+-- No per-frame UI scans, row overlays, remote calls, or changes to the leaderboard.
+function configStore.ESP.ToggleLeaderboardSpectate(player)
+	if unloaded or not player or player.Parent~=Players then return false end
+	if player==localPlayer or player==configStore.ESP.SpectateTarget then
+		return configStore.ESP.StopSpectate()
+	end
+	return configStore.ESP.StartSpectate(player)
+end
+
+function configStore.ESP.ResolveLeaderboardPlayer(object)
+	if not object or object:IsDescendantOf(screenGui) then return nil end
+	local chain={}
+	local node=object
+	local container=nil
+	for _=1,24 do
+		if not node then break end
+		if node:IsA("GuiObject") and not node.Visible then return nil end
+		if node:IsA("ScreenGui") and not node.Enabled then return nil end
+		local name=string.lower(node.Name):gsub("[%s_%-]", "")
+		if name=="leaderboard" or name=="leaderboardgui" or name=="playerlist"
+			or name=="playerlistgui" or name=="playerlistmaster" then
+			container=node;break
+		end
+		table.insert(chain,node)
+		node=node.Parent
+	end
+	if not container then return nil end
+	local candidates=Players:GetPlayers()
+	-- Stable row IDs take precedence over display names (which need not be unique).
+	local identified=nil
+	for _,entry in ipairs(chain) do
+		local id=tonumber(entry:GetAttribute("UserId") or entry:GetAttribute("PlayerUserId")
+			or string.match(entry.Name,"^PlayerEntry[_%-](%d+)$"))
+		for _,player in ipairs(candidates) do
+			if (id and player.UserId==id) or entry.Name==player.Name then
+				if identified and identified~=player then return nil end
+				identified=player
+			end
+		end
+	end
+	local function textPlayer(label)
+		if not (label:IsA("TextLabel") or label:IsA("TextButton")) then return nil end
+		local value=string.match(label.Text:gsub("<[^>]*>",""),"^%s*(.-)%s*$")
+		local username=string.match(value,"^@([%w_]+)$")
+		if identified then
+			if value==identified.Name or value==identified.DisplayName or username==identified.Name then return identified end
+			return nil
+		end
+		local matched=nil
+		for _,player in ipairs(candidates) do
+			local match=username and username==player.Name
+				or not username and (value==player.Name or value==player.DisplayName)
+			if match then
+				if matched and matched~=player then return nil end
+				matched=player
+			end
+		end
+		return matched
+	end
+	-- Clicking a stat, icon, menu item, or blank area is not a name click.
+	local player=textPlayer(object)
+	if player then return player end
+	if object:IsA("TextLabel") or (object:IsA("TextButton") and object.Text~="") then return nil end
+	-- Some leaderboards put a transparent button directly over the name label.
+	if object:IsA("GuiButton") then
+		local count=0
+		for _,child in ipairs(object:GetDescendants()) do
+			count+=1;if count>64 then break end
+			if child:IsA("GuiObject") and child.Visible then
+				local found=textPlayer(child)
+				if found then
+					if player and player~=found then return nil end
+					player=found
+				end
+			end
+		end
+	end
+	return player
+end
+
+function configStore.ESP.LeaderboardPlayerAt(position)
+	-- CoreGui is optional: inaccessible built-in UI must not break custom PlayerGui UI.
+	local roots={}
+	local ok,core=pcall(game.GetService,game,"CoreGui")
+	if ok and core then table.insert(roots,core) end
+	table.insert(roots,playerGui)
+	for _,root in ipairs(roots) do
+		local readable,hits=pcall(function() return root:GetGuiObjectsAtPosition(position.X,position.Y) end)
+		if readable and hits and hits[1] then
+			local top=hits[1]
+			local resolved,player=pcall(configStore.ESP.ResolveLeaderboardPlayer,top)
+			if resolved and player then return player end
+			-- Never click through an unrelated interactive overlay or hub control.
+			if top:IsA("GuiButton") or top:IsA("TextLabel") or top:IsA("TextBox")
+				or top:IsDescendantOf(screenGui) then return nil end
+		end
+	end
+	return nil
+end
+
+connect(UserInputService.InputBegan,function(input)
+	if unloaded or configStore.ESP.LeaderboardPress or UserInputService:GetFocusedTextBox() then return end
+	if input.UserInputType~=Enum.UserInputType.MouseButton1 and input.UserInputType~=Enum.UserInputType.Touch then return end
+	-- GUI clicks are processed input, so do not reject gameProcessedEvent here.
+	local player=configStore.ESP.LeaderboardPlayerAt(input.Position)
+	if player then configStore.ESP.LeaderboardPress={Input=input,Player=player,Position=input.Position} end
+end)
+connect(UserInputService.InputChanged,function(input)
+	local press=configStore.ESP.LeaderboardPress
+	if not press then return end
+	if input==press.Input or (press.Input.UserInputType==Enum.UserInputType.MouseButton1
+		and input.UserInputType==Enum.UserInputType.MouseMovement) then
+		if (input.Position-press.Position).Magnitude>10 then press.Dragged=true end
+	end
+end)
+connect(UserInputService.InputEnded,function(input)
+	local press=configStore.ESP.LeaderboardPress
+	if not press or input~=press.Input then return end
+	configStore.ESP.LeaderboardPress=nil
+	if unloaded or press.Dragged or (input.Position-press.Position).Magnitude>10 then return end
+	configStore.ESP.ToggleLeaderboardSpectate(press.Player)
+end)
+connect(UserInputService.WindowFocusReleased,function() configStore.ESP.LeaderboardPress=nil end)
+-- END LEADERBOARD SPECTATE
 
 function configStore.ESP.ReadNamedValue(root, names)
 	if not root then return nil end
@@ -21512,6 +21650,7 @@ function controller.Unload()
 		end
 	end)
 	step("esp", function()
+		configStore.ESP.LeaderboardPress=nil
 		configStore.ESP.Enabled = false
 		configStore.ESP.StopSpectate()
 		configStore.ESP.Clear()

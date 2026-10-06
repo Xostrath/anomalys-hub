@@ -2716,6 +2716,10 @@ local autoTransformState = {
 	AttemptElapsed = 0,
 	RetryDelay = 6,
 	LastSetAt = 0,
+	RequestSerial = 0,
+	Pending = false,
+	CheckElapsed = 0,
+	Status = "Waiting for form",
 	SelectorButton = nil,
 	ToggleButton = nil,
 	Dropdown = nil,
@@ -16739,6 +16743,146 @@ function qolState.Unlocks.GetRaceFormCategory(race, snapshot)
 	return nil
 end
 
+function autoTransformState.CancelPending()
+	autoTransformState.RequestSerial += 1
+	autoTransformState.Pending = false
+end
+
+function autoTransformState.FiniteNumber(value)
+	local number = tonumber(value)
+	return number and number == number and math.abs(number) < math.huge and number or nil
+end
+
+function autoTransformState.IsOwnVisibleGui(object)
+	local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
+	local character = localPlayer.Character
+	if not object or not object.Parent or object:IsDescendantOf(screenGui) then return false end
+	if not ((playerGui and object:IsDescendantOf(playerGui)) or (character and object:IsDescendantOf(character))) then return false end
+	local current = object
+	while current and current ~= playerGui and current ~= character do
+		if current:IsA("GuiObject") and not current.Visible then return false end
+		if current:IsA("LayerCollector") and not current.Enabled then return false end
+		if current:IsA("BillboardGui") and current.Adornee
+			and not (character and current.Adornee:IsDescendantOf(character)) then return false end
+		current = current.Parent
+	end
+	return true
+end
+
+function autoTransformState.ReadFatiguePercent()
+	local state = autoTransformState
+	local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
+	local character = localPlayer.Character
+	if state.FatigueGui ~= playerGui or state.FatigueCharacter ~= character
+		or os.clock() >= (state.NextFatigueScanAt or 0) then
+		state.FatigueGui, state.FatigueCharacter = playerGui, character
+		state.NextFatigueScanAt = os.clock() + 0.75
+		state.FatiguePanels = {}
+		local seen = {}
+		for _, root in pairs({playerGui, character}) do
+			local descendants = root:GetDescendants()
+			for index, object in ipairs(descendants) do
+				if index > 6000 then break end
+				if object:IsA("GuiObject") and state.IsOwnVisibleGui(object) then
+					local name = string.lower(object.Name):gsub("[^%a]", "")
+					local text = (object:IsA("TextLabel") or object:IsA("TextButton"))
+						and string.lower(object.Text:gsub("<[^>]+>", "")) or ""
+					local panel
+					if name == "fatigue" or name == "fatiguebar" or name == "fatigueframe" then panel = object end
+					if text:match("^%s*fatigue%s*[:%d%%%.%s]*$") then panel = object.Parent end
+					if panel and panel:IsA("GuiObject") and not seen[panel] then
+						seen[panel] = true
+						table.insert(state.FatiguePanels, panel)
+					end
+				end
+			end
+		end
+	end
+	-- Read the displayed percentage, not an assumed raw Fatigue scale. Unknown
+	-- or hidden UI is not treated as zero; never read another player's billboard.
+	local highest
+	for _, panel in ipairs(state.FatiguePanels or {}) do
+		if state.IsOwnVisibleGui(panel) then
+			local objects = panel:GetDescendants()
+			table.insert(objects, 1, panel)
+			if #objects <= 200 then
+				for _, object in ipairs(objects) do
+					if (object:IsA("TextLabel") or object:IsA("TextButton")) and state.IsOwnVisibleGui(object) then
+						local text = object.Text:gsub("<[^>]+>", "")
+						local percent = state.FiniteNumber(text:match("^%s*([%d%.]+)%s*%%%s*$")
+							or string.lower(text):match("^%s*fatigue%s*:?%s*([%d%.]+)%s*%%%s*$"))
+						if percent and percent >= 0 and percent <= 100 then highest = math.max(highest or 0, percent) end
+					end
+				end
+			end
+		end
+	end
+	return highest
+end
+
+function autoTransformState.ReadKi()
+	local playerStats = localPlayer:FindFirstChild("PlayerStats")
+	local statData = playerStats and playerStats:FindFirstChild("StatData")
+	local characterStats = statData and statData:FindFirstChild("CharacterStats")
+	local function readPair(root, recursive)
+		local ki = root and root:FindFirstChild("Ki", recursive)
+		local maxKi = root and root:FindFirstChild("MaxKi", recursive)
+		local current = ki and ki:IsA("ValueBase") and autoTransformState.FiniteNumber(ki.Value)
+		local maximum = maxKi and maxKi:IsA("ValueBase") and autoTransformState.FiniteNumber(maxKi.Value)
+		if current and current >= 0 and maximum and maximum > 0 then return current, maximum end
+	end
+	local current, maximum = readPair(characterStats, false)
+	if current then return current, maximum end
+	return readPair(playerStats, true)
+end
+
+function autoTransformState.ResourceReady(selected)
+	if string.lower(selected):gsub("[^%a]", "") == "kiburst" then
+		local ki, maxKi = autoTransformState.ReadKi()
+		if not ki then return false, "Ki unavailable" end
+		-- Compare the actual values, not a rounded label that may say 100% early.
+		if ki < maxKi then return false, string.format("Ki %.1f%% / 100%%", 100 * ki / maxKi) end
+		return true, "Ki full"
+	end
+	local fatigue = autoTransformState.ReadFatiguePercent()
+	if fatigue == nil then return false, "Fatigue unavailable" end
+	if fatigue > 1 then return false, string.format("Fatigue %.1f%% > 1%%", fatigue) end
+	return true, "Fatigue ready"
+end
+
+function autoTransformState.GetReadyCharacter(selected)
+	if unloaded or not autoTransformState.Enabled or autoTransformState.Selected ~= selected or npcSafety.LootMode then
+		return nil, nil, "Paused"
+	end
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local playerStats = localPlayer:FindFirstChild("PlayerStats")
+	local statData = playerStats and playerStats:FindFirstChild("StatData")
+	local coreStats = statData and statData:FindFirstChild("CoreStats")
+	local misc = statData and statData:FindFirstChild("Misc")
+	local formValue = coreStats and coreStats:FindFirstChild("Form")
+	local configuredValue = misc and misc:FindFirstChild("Transformation")
+	if not character or not humanoid or humanoid.Health <= 0 or not formValue or not configuredValue then
+		return nil, nil, "Waiting for character"
+	end
+	local activeForm = tostring(formValue.Value)
+	if activeForm ~= "None" and activeForm ~= "" then return nil, nil, "Form active" end
+	local ready, reason = autoTransformState.ResourceReady(selected)
+	if not ready then return nil, nil, reason end
+	local ok, allowed = pcall(function()
+		local stateManager = require(ReplicatedStorage.Modules.Metadata.ControlData.StateManager)
+		return stateManager.CanPerformAction(character, "Transform") == true
+	end)
+	if not ok or not allowed then return nil, nil, "Waiting for action" end
+	if unloaded or not autoTransformState.Enabled or autoTransformState.Selected ~= selected
+		or localPlayer.Character ~= character or humanoid.Health <= 0 or npcSafety.LootMode then return nil, nil, "Paused" end
+	activeForm = tostring(formValue.Value)
+	if activeForm ~= "None" and activeForm ~= "" then return nil, nil, "Form active" end
+	ready, reason = autoTransformState.ResourceReady(selected)
+	if not ready then return nil, nil, reason end
+	return character, configuredValue, reason
+end
+
 function autoTransformState.Render()
 	local selector = autoTransformState.SelectorButton
 	local toggle = autoTransformState.ToggleButton
@@ -16747,7 +16891,7 @@ function autoTransformState.Render()
 	end
 	if not toggle then return end
 	if autoTransformState.Enabled then
-		toggle.Text = "Auto Form: ON"
+		toggle.Text = "Auto Form: ON\n" .. autoTransformState.Status
 		toggle.BackgroundColor3 = colors.Accent
 		toggle.TextColor3 = colors.Text
 	else
@@ -16762,6 +16906,7 @@ function autoTransformState.Select(formName)
 		return false
 	end
 	autoTransformState.Selected = formName
+	autoTransformState.CancelPending()
 	autoTransformState.AttemptElapsed = autoTransformState.RetryDelay
 	autoTransformState.Dropdown.Visible = false
 	for optionName, button in pairs(autoTransformState.OptionButtons) do
@@ -16773,6 +16918,7 @@ function autoTransformState.Select(formName)
 end
 
 function autoTransformState.SetEnabled(enabled)
+	autoTransformState.CancelPending()
 	if enabled == true and qolState.FormMastery.Enabled and qolState.FormMastery.SetEnabled then
 		qolState.FormMastery.SetEnabled(false)
 	end
@@ -16873,46 +17019,25 @@ function autoTransformState.RefreshForms()
 end
 
 function autoTransformState.Update(deltaTime)
-	autoTransformState.Render()
-	if not autoTransformState.Enabled or not autoTransformState.Selected or npcSafety.LootMode then
-		autoTransformState.AttemptElapsed = 0
-		return
-	end
-	autoTransformState.AttemptElapsed += deltaTime
-	if autoTransformState.AttemptElapsed < autoTransformState.RetryDelay then return end
-
-	local character = localPlayer.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local playerStats = localPlayer:FindFirstChild("PlayerStats")
-	local statData = playerStats and playerStats:FindFirstChild("StatData")
-	local coreStats = statData and statData:FindFirstChild("CoreStats")
-	local misc = statData and statData:FindFirstChild("Misc")
-	local formValue = coreStats and coreStats:FindFirstChild("Form")
-	local configuredValue = misc and misc:FindFirstChild("Transformation")
-	if not character or not humanoid or humanoid.Health <= 0 or not formValue or not configuredValue then
-		return
-	end
-
-	local activeForm = tostring(formValue.Value)
-	-- A successful transform can report a variant name rather than the selected
-	-- form name. Any active form is therefore a success state: hold it and never
-	-- issue a de-transform/retry request while auto form is active.
-	if activeForm ~= "None" and activeForm ~= "" then
-		autoTransformState.AttemptElapsed = 0
-		return
-	end
-	autoTransformState.AttemptElapsed = 0
-
-	local canTransform = false
-	pcall(function()
-		local stateManager = require(ReplicatedStorage.Modules.Metadata.ControlData.StateManager)
-		canTransform = stateManager.CanPerformAction(character, "Transform") == true
-	end)
-	if not canTransform then return end
-
+	if unloaded or not autoTransformState.Enabled or not autoTransformState.Selected then return end
+	autoTransformState.AttemptElapsed = math.min(autoTransformState.RetryDelay, autoTransformState.AttemptElapsed + deltaTime)
+	autoTransformState.CheckElapsed += deltaTime
+	if autoTransformState.CheckElapsed < 0.1 or autoTransformState.Pending then return end
+	autoTransformState.CheckElapsed = 0
 	local selected = autoTransformState.Selected
+	autoTransformState.RequestSerial += 1
+	local serial = autoTransformState.RequestSerial
+	autoTransformState.Pending = true
+	local character, configuredValue, reason = autoTransformState.GetReadyCharacter(selected)
+	if serial ~= autoTransformState.RequestSerial then return end
+	autoTransformState.Pending = false
+	autoTransformState.Status = reason
+	autoTransformState.Render()
+	if not character or autoTransformState.AttemptElapsed < autoTransformState.RetryDelay then return end
+	autoTransformState.AttemptElapsed = 0
+	autoTransformState.Pending = true
 	local now = os.clock()
-	pcall(function()
+	local setOk = pcall(function()
 		if tostring(configuredValue.Value) ~= selected or now - autoTransformState.LastSetAt >= 10 then
 			serverRemote:FireServer(nil, {
 				Module = "TransformationHandler",
@@ -16922,11 +17047,23 @@ function autoTransformState.Update(deltaTime)
 			autoTransformState.LastSetAt = now
 		end
 	end)
+	if not setOk then
+		autoTransformState.Pending = false
+		autoTransformState.Status = "Set failed; retrying"
+		autoTransformState.Render()
+		return
+	end
 	task.delay(0.15, function()
-		if unloaded or not autoTransformState.Enabled or localPlayer.Character ~= character then
+		if serial ~= autoTransformState.RequestSerial then return end
+		local readyCharacter, _, currentReason = autoTransformState.GetReadyCharacter(selected)
+		if serial ~= autoTransformState.RequestSerial then return end
+		autoTransformState.Pending = false
+		if readyCharacter ~= character then
+			autoTransformState.Status = currentReason
+			autoTransformState.Render()
 			return
 		end
-		pcall(function()
+		local ok = pcall(function()
 			serverRemote:FireServer("Run", {Action = "Terminate"})
 			serverRemote:FireServer("Charge", {
 				Action = "Execute",
@@ -16934,6 +17071,8 @@ function autoTransformState.Update(deltaTime)
 				ThirdAction = "Transform",
 			})
 		end)
+		autoTransformState.Status = ok and "Activation requested" or "Request failed; retrying"
+		autoTransformState.Render()
 	end)
 end
 
@@ -17524,6 +17663,7 @@ connect(localPlayer.CharacterAdded, function()
 	npcSafety.LastHideRetargetAt = 0
 	autoTransformState.AttemptElapsed = autoTransformState.RetryDelay
 	autoTransformState.LastSetAt = 0
+	autoTransformState.CancelPending()
 	if npcTargetingEnabled then
 		npcAcquireElapsed = 1
 		setNpcStatus("Character respawned; reacquiring " .. tostring(selectedNpcType) .. "...", colors.Success)
@@ -21238,6 +21378,7 @@ function controller.Unload()
 		qolState.StatAllocate.ReleaseAutoBuildHold()
 	end)
 	autoTransformState.Enabled = false
+	autoTransformState.CancelPending()
 	qolState.FormMastery.Enabled = false
 	step("ki camera", restoreKiControlCamera)
 	step("auto food", function() qolState.AutoFood.SetEnabled(false) end)

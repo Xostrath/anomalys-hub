@@ -2549,7 +2549,7 @@ local configStore = {
 		DistanceSliderDragging = false,
 	},
 	DragonBallESP = {
-		Enabled = true,
+		Enabled = false,
 		Settings = {Distance = true, Highlight = true, Alerts = true},
 		Entries = {},
 		Buttons = {},
@@ -4271,7 +4271,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -180, 0, 28),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
-	Text = "World balls only; scans every 15 seconds. New arrivals alert; carried balls ignored.",
+	Text = "Off by default. When enabled: world balls every 15 seconds; carried balls ignored.",
 	TextColor3 = colors.Muted,
 	TextSize = 9,
 	TextWrapped = true,
@@ -4286,7 +4286,7 @@ configStore.DragonBallESP.MasterButton = create("TextButton", {
 	BackgroundColor3 = colors.Surface,
 	BorderSizePixel = 0,
 	Font = Enum.Font.GothamBold,
-	Text = "SCANNER: ALWAYS ON",
+	Text = "SCANNER: OFF",
 	TextColor3 = colors.Muted,
 	TextSize = 9,
 }, configStore.DragonBallESP.Card)
@@ -10057,7 +10057,7 @@ function configStore.DragonBallESP.StartTracking()
 		end
 	end
 	table.insert(configStore.DragonBallESP.WorldConnections, connect(Players.DescendantAdded,function(descendant)
-		if not unloaded then configStore.DragonBallESP.Consider(descendant,true) end
+		if not unloaded and configStore.DragonBallESP.Enabled then configStore.DragonBallESP.Consider(descendant,true) end
 	end))
 	table.insert(configStore.DragonBallESP.WorldConnections, connect(workspace.DescendantAdded, function(descendant)
 		if configStore.DragonBallESP.Enabled then
@@ -10086,8 +10086,8 @@ end
 function configStore.DragonBallESP.RenderButtons()
 	local master = configStore.DragonBallESP.MasterButton
 	local enabled = configStore.DragonBallESP.Enabled
-	master.Text = "SCANNER: ALWAYS ON"
-	master.Active = false
+	master.Text = enabled and "SCANNER: ON" or "SCANNER: OFF"
+	master.Active = true
 	master.BackgroundColor3 = enabled and colors.Accent or colors.Surface
 	master.TextColor3 = enabled and colors.Background or colors.Muted
 	for key, button in pairs(configStore.DragonBallESP.Buttons) do
@@ -10106,12 +10106,23 @@ function configStore.DragonBallESP.RenderButtons()
 end
 
 function configStore.DragonBallESP.SetEnabled(enabled)
-	-- Always on for this hub lifetime, even when loading an older OFF preset.
 	if unloaded then return false end
-	configStore.DragonBallESP.Enabled = true
-	configStore.DragonBallESP.StartTracking()
-	configStore.DragonBallESP.RenderButtons()
-	return configStore.DragonBallESP.Enabled
+	local state=configStore.DragonBallESP
+	state.Enabled = enabled == true
+	if state.Enabled then
+		if not state.Tracking then state.UpdateElapsed=0 end
+		state.StartTracking()
+	else
+		state.DisconnectWorld()
+		state.Tracking=false
+		state.UpdateElapsed=0
+		state.Clear()
+		table.clear(state.Tracked)
+		table.clear(state.AlertedBalls)
+		table.clear(state.SuppressedBalls)
+	end
+	state.RenderButtons()
+	return state.Enabled
 end
 
 function configStore.DragonBallESP.SetSetting(key, enabled)
@@ -10225,8 +10236,11 @@ for key, button in pairs(configStore.DragonBallESP.Buttons) do
 	end)
 end
 connect(configStore.DragonBallESP.ScanButton.Activated, configStore.DragonBallESP.Scan)
+connect(configStore.DragonBallESP.MasterButton.Activated,function()
+	configStore.DragonBallESP.SetEnabled(not configStore.DragonBallESP.Enabled)
+end)
 connect(RunService.Heartbeat, configStore.DragonBallESP.Update)
-configStore.DragonBallESP.SetEnabled(true)
+configStore.DragonBallESP.SetEnabled(false)
 
 function npcSafety.IsExcludedFarmName(name)
 	return type(name) == "string" and string.find(string.lower(name):gsub("[^%w]", ""), "vegeta", 1, true) ~= nil
@@ -21774,6 +21788,7 @@ function configStore.Capture()
 		AutoBodyRingEnabled = configStore.BodyRing.Enabled,
 		AutoMazeEnabled = configStore.AutoMaze.Enabled,
 		DragonBallESPEnabled = configStore.DragonBallESP.Enabled,
+		DragonBallScannerToggleVersion = 1,
 		DragonBallESPSettings = table.clone(configStore.DragonBallESP.Settings),
 		NpcESPMaxDistance = configStore.NpcESP.MaxDistance,
 		NpcPlayerRange = npcSafety.PlayerRange,
@@ -21929,7 +21944,8 @@ function configStore.Apply(data)
 		end
 	end
 	if type(data.DragonBallESPEnabled) == "boolean" then
-		configStore.DragonBallESP.SetEnabled(data.DragonBallESPEnabled)
+		-- Older always-on builds saved true without the user opting in.
+		configStore.DragonBallESP.SetEnabled(data.DragonBallScannerToggleVersion==1 and data.DragonBallESPEnabled)
 	else
 		configStore.DragonBallESP.RenderButtons()
 	end

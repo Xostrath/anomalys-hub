@@ -127,12 +127,15 @@ function capture.Install()
 				local serial=capture.Active and not capture.Closed and capture.Serial
 				local valid,method=pcall(getMethod)
 				if serial and valid and typeof(self)=="Instance" and (method=="InvokeServer" or method=="FireServer") then
-					pcall(capture.Observe,self,"OUT "..method,table.pack(...),serial)
+					-- Forward before any Instance method used by logging. Some executors
+					-- let nested GetFullName/IsDescendantOf calls replace namecall dispatch.
+					local arguments=table.pack(...)
+					local values=table.pack(original(self,...))
+					pcall(capture.Observe,self,"OUT "..method,arguments,serial)
 					if method=="InvokeServer" then
-						local values=table.pack(original(self,...))
 						pcall(capture.Observe,self,"RETURN namecall",values,serial)
-						return table.unpack(values,1,values.n)
 					end
+					return table.unpack(values,1,values.n)
 				end
 				return original(self,...)
 			end))
@@ -148,8 +151,9 @@ function capture.Install()
 			original=hookFunction(remote.InvokeServer,wrap(function(self,...)
 				local serial=capture.Active and not capture.Closed and capture.Serial
 				if not serial then return original(self,...) end
-				pcall(capture.Observe,self,"OUT direct InvokeServer",table.pack(...),serial)
+				local arguments=table.pack(...)
 				local values=table.pack(original(self,...))
+				pcall(capture.Observe,self,"OUT direct InvokeServer",arguments,serial)
 				pcall(capture.Observe,self,"RETURN direct",values,serial)
 				return table.unpack(values,1,values.n)
 			end))
@@ -166,8 +170,9 @@ function capture.Start()
 	capture.Serial+=1
 	capture.Lines,capture.Samples,capture.Bytes,capture.Limited={},{},0,false
 	capture.File="GohanHub/server_list_capture_"..tostring(os.time()).."_"..HttpService:GenerateGUID(false):gsub("[^%w]",""):sub(1,12)..".txt"
-	capture.Log("SERVER LIST CAPTURE // passive v1 place="..tostring(game.PlaceId).." universe="..tostring(game.GameId))
+	capture.Log("SERVER LIST CAPTURE // passive v2 place="..tostring(game.PlaceId).." universe="..tostring(game.GameId))
 	capture.Log("No remotes invoked/replayed, no join requests, no game script execution. Samples may be capped. Declarations are not proof of server behavior.")
+	capture.Log("Requests forwarded before observation; OUT/RETURN logged after completion. Failed or still-pending requests are not logged.")
 	capture.Log("Coverage: "..capture.Install())
 	capture.Active=true
 	local serial=capture.Serial;local events=0

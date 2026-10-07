@@ -20320,7 +20320,6 @@ function configStore.BodyRing.Update()
 		or math.abs(width - state.Width) > 0.5 then
 		state = {Spin = spin, Center = center, Width = width}
 		body.State = state
-		body.Sample = nil
 	end
 	local angle = spin.Rotation % 360
 	local sample = body.Sample
@@ -20330,25 +20329,11 @@ function configStore.BodyRing.Update()
 		and body.AngleDelta(angle, sample.Angle) / elapsed or nil
 	-- Render polling must not replace an unchanged movement sample just before
 	-- the game's rotation signal arrives (which would inflate measured speed).
-	if not sample or moved then
-		local stable = speed and sample.Speed and speed * sample.Speed > 0
-			and math.abs(speed - sample.Speed) <= math.max(1, math.abs(sample.Speed) * 0.05)
-		body.Sample = {Angle = angle, At = now, Speed = speed, Interval = elapsed,
-			Stable = stable and (sample.Stable or 0) + 1 or 0}
-	end
+	if not sample or moved then body.Sample = {Angle = angle, At = now} end
+	-- React to the actual rotation update, not the following render poll. No
+	-- speculative pre-boundary input or projected-angle veto of a valid hit.
 	local halfWindow = width / 2
 	local inside = math.abs(body.AngleDelta(angle, center)) <= halfWindow
-	-- ContestClient timestamps Space with the current server clock, not its
-	-- last displayed rotation. Between renders, advance only by time already
-	-- elapsed, with two consistent velocity comparisons and a one-frame cap.
-	-- Do not lead the estimated boundary, extrapolate stale/erratic movement,
-	-- or let an estimate veto an actually visible valid angle.
-	if not moved and sample and (sample.Stable or 0) >= 2 and sample.Speed
-		and elapsed > 0 and elapsed <= math.min(sample.Interval, 1 / 30) then
-		speed = sample.Speed
-		local currentAngle = angle + speed * elapsed
-		inside = inside or math.abs(body.AngleDelta(currentAngle, center)) <= halfWindow
-	end
 	if not state.Pressed and not body.KeyHeld and speed
 		and math.abs(speed) >= 1 and math.abs(speed) <= 1440 and inside then
 		-- Reserve before dispatch so synchronous input side effects cannot send twice.
@@ -20373,7 +20358,6 @@ connect(configStore.BodyRing.Button.Activated, function()
 	configStore.BodyRing.SetEnabled(not configStore.BodyRing.Enabled)
 end)
 connect(RunService.RenderStepped, configStore.BodyRing.Update)
-connect(RunService.Heartbeat, configStore.BodyRing.Update)
 
 -- Read the circuit's current UI, then search private copies of the game's
 -- CircuitRouter state. Actual moves always go through ordinary WASD input.

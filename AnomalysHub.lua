@@ -7346,7 +7346,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -190, 0, 30),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
-	Text = "Clash prompts, predictive W/S Pong controls, and maximum-speed confirmed maze moves. Enable helpers separately.",
+	Text = "Clash prompts, predictive W/S Pong controls, and fast paced maze moves. Enable helpers separately.",
 	TextColor3 = colors.Muted,
 	TextSize = 9,
 	TextWrapped = true,
@@ -20518,7 +20518,7 @@ function configStore.AutoMaze.Update()
 	if not session or session.Grid ~= grid or session.Head ~= head then
 		maze.Generation += 1
 		maze.Release()
-		session = {Grid = grid, Head = head, ResetCount = 0}
+		session = {Grid = grid, Head = head, ResetCount = 0, StartAt = now + math.random(350, 500) / 1650}
 		maze.Session = session
 	end
 	if session.Planning then status("CALCULATING ROUTE"); return end
@@ -20529,10 +20529,12 @@ function configStore.AutoMaze.Update()
 		maze.Generation += 1
 		maze.Release()
 		session.Route, session.Pending, session.ResetCount = nil, nil, 0
+		session.StartAt = now + math.random(350, 500) / 1650
 	end
 	session.Signature = model.Signature
 	local x, y = model.Layout.Start[1], model.Layout.Start[2]
 	if x == model.Layout.Goal[1] and y == model.Layout.Goal[2] then maze.Release(); status("CORE REACHED"); return end
+	if now < session.StartAt then status("GETTING READY"); return end
 	local trail = grid:FindFirstChild("Trail")
 	local hasTrail = trail and #trail:GetChildren() > 0
 	if session.ResetAt then
@@ -20557,8 +20559,8 @@ function configStore.AutoMaze.Update()
 	end
 	local pending = session.Pending
 	if pending then
-		-- No artificial pacing: only the observed slide endpoint can advance
-		-- the route. A slow or dropped move must still wait/replan safely.
+		-- Short randomized pacing, then require the actual slide endpoint.
+		if now < pending.Until then return end
 		if x == pending.X and y == pending.Y then
 			session.Index += 1
 			session.Pending = nil
@@ -20583,7 +20585,8 @@ function configStore.AutoMaze.Update()
 	if not move then status("WAITING FOR RESULT"); return end
 	local keys = {U = "W", D = "S", L = "A", R = "D"}
 	if maze.Press(keys[move.Key]) then
-		session.Pending = {X = move.X, Y = move.Y, SentAt = now}
+		session.Pending = {X = move.X, Y = move.Y, SentAt = now,
+			Until = now + (math.clamp(move.Cells * 0.025, 0.04, 0.22) + math.random(120, 180) / 1000) / 1.65}
 		status(string.format("%s // MOVE %d/%d", keys[move.Key], session.Index, #session.Route))
 	else
 		session.Error = "KEYBOARD INPUT UNAVAILABLE"

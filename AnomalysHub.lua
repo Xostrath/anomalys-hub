@@ -20111,12 +20111,14 @@ end
 function configStore.AutoClash.Update()
 	local clash = configStore.AutoClash
 	if not clash.Enabled or unloaded then
+		table.clear(clash.PromptState)
 		return
 	end
 	-- Dedicated minigames must not receive generic clash/mash input.
 	local contest = playerGui:FindFirstChild("MindContest")
 	local contestRoot = contest and contest:FindFirstChild("Root")
 	if contestRoot and contestRoot:IsA("GuiObject") and isGuiVisible(contestRoot) then
+		table.clear(clash.PromptState)
 		local board = contestRoot:FindFirstChild("Board", true)
 		if board and board:FindFirstChild("Grid") then
 			if not configStore.AutoMaze.Enabled then
@@ -20128,7 +20130,13 @@ function configStore.AutoClash.Update()
 		return
 	end
 	if activeTrainingButton then
+		table.clear(clash.PromptState)
 		clash.SetStatus("CLASH // PAUSED WHILE AUTO TRAINING RUNS", colors.Muted)
+		return
+	end
+	if UserInputService:GetFocusedTextBox() then
+		table.clear(clash.PromptState)
+		clash.SetStatus("CLASH // PAUSED WHILE TYPING", colors.Muted)
 		return
 	end
 	local now = os.clock()
@@ -20137,12 +20145,20 @@ function configStore.AutoClash.Update()
 	local hud = clashGui and clashGui:FindFirstChild("ClashHUD")
 	local keyPrompt = hud and hud:FindFirstChild("KeyPrompt")
 	local letter = keyPrompt and keyPrompt:FindFirstChild("Letter")
+	-- The native HUD also shows preview letters. They are not simultaneous
+	-- prompts: only KeyPrompt.Letter is actionable. While this HUD is visible,
+	-- fail closed if its active letter disappears instead of pressing a hint.
+	local nativeClashVisible = hud and hud:IsA("GuiObject") and isGuiVisible(hud)
 	if letter and letter:IsA("TextLabel") then
 		clash.Candidates[letter] = "named"
 	end
 	for object, scope in pairs(clash.Candidates) do
 		if not object.Parent then
 			clash.Candidates[object] = nil
+			clash.PromptState[object] = nil
+			continue
+		end
+		if nativeClashVisible and object ~= letter then
 			clash.PromptState[object] = nil
 			continue
 		end
@@ -20953,7 +20969,7 @@ function configStore.MinigameTrace.FindPanels()
 			local name = string.lower(layer.Name)
 			if trace.Baseline[layer] ~= true or string.find(name, "maze", 1, true)
 				or string.find(name, "labyrinth", 1, true) or string.find(name, "minigame", 1, true)
-				or string.find(name, "pong", 1, true) or name == "mindcontest" then layers[layer] = true end
+				or string.find(name, "pong", 1, true) or name == "mindcontest" or name == "clashgui" then layers[layer] = true end
 		end
 	end
 	for _, descendant in ipairs(playerGui:GetDescendants()) do

@@ -20108,6 +20108,37 @@ function configStore.AutoClash.SetStatus(text, color)
 	label.TextColor3 = color or colors.Muted
 end
 
+function configStore.AutoClash.CurrentLetter(keyPrompt)
+	if not keyPrompt or not keyPrompt:IsA("GuiObject") or not isGuiVisible(keyPrompt) then return nil end
+	local width, height = keyPrompt.AbsoluteSize.X, keyPrompt.AbsoluteSize.Y
+	if width <= 0 or height <= 0 then return nil end
+	local hasTrack, centered, ambiguous = false, nil, false
+	for _, child in ipairs(keyPrompt:GetChildren()) do
+		if child.Name == "TrackLetter" and child:IsA("TextLabel") then
+			hasTrack = true
+			if isGuiVisible(child) then
+				-- Recorded layout: current center .5, preview 1.75, completed -.75.
+				-- Read each Instance, not FindFirstChild: all track labels share a name.
+				-- Use current local geometry so rendered positions cannot lag a tween.
+				local x = child.Position.X.Scale + child.Position.X.Offset / width
+					+ (0.5 - child.AnchorPoint.X) * (child.Size.X.Scale + child.Size.X.Offset / width)
+				local y = child.Position.Y.Scale + child.Position.Y.Offset / height
+					+ (0.5 - child.AnchorPoint.Y) * (child.Size.Y.Scale + child.Size.Y.Offset / height)
+				if math.abs(x - 0.5) <= 0.08 and math.abs(y - 0.5) <= 0.08 then
+					if centered then ambiguous = true else centered = child end
+				end
+			end
+		end
+	end
+	if hasTrack then
+		if ambiguous then return nil end
+		return centered
+	end
+	-- Older layout only; the new track layout leaves this stale label hidden.
+	local legacy = keyPrompt:FindFirstChild("Letter")
+	return legacy and legacy:IsA("TextLabel") and isGuiVisible(legacy) and legacy or nil
+end
+
 function configStore.AutoClash.Update()
 	local clash = configStore.AutoClash
 	if not clash.Enabled or unloaded then
@@ -20144,10 +20175,9 @@ function configStore.AutoClash.Update()
 	local clashGui = playerGui:FindFirstChild("ClashGui")
 	local hud = clashGui and clashGui:FindFirstChild("ClashHUD")
 	local keyPrompt = hud and hud:FindFirstChild("KeyPrompt")
-	local letter = keyPrompt and keyPrompt:FindFirstChild("Letter")
-	-- The native HUD also shows preview letters. They are not simultaneous
-	-- prompts: only KeyPrompt.Letter is actionable. While this HUD is visible,
-	-- fail closed if its active letter disappears instead of pressing a hint.
+	local letter = clash.CurrentLetter(keyPrompt)
+	-- Only the centered current letter is actionable, never a track preview.
+	-- Fail closed during transitions instead of falling back to unrelated hints.
 	local nativeClashVisible = hud and hud:IsA("GuiObject") and isGuiVisible(hud)
 	if letter and letter:IsA("TextLabel") then
 		clash.Candidates[letter] = "named"

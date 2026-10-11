@@ -20245,6 +20245,19 @@ function configStore.AutoPong.Steer(key)
 	return ok
 end
 
+function configStore.AutoPong.MovementKey(difference, deltaTime, heldKey)
+	-- Stop near the intercept, but require a larger error to start again.
+	-- This hysteresis leaves room inside the .11 paddle half-height and avoids
+	-- alternating W/S for small prediction/position fluctuations. No time delay.
+	local stop = math.clamp(1.25 * math.clamp(deltaTime or 1/60, 0, 0.05) * 0.75, 0.012, 0.05)
+	local restart = math.max(0.045, stop + 0.02)
+	if heldKey == Enum.KeyCode.W and difference < -stop then return Enum.KeyCode.W end
+	if heldKey == Enum.KeyCode.S and difference > stop then return Enum.KeyCode.S end
+	if difference < -restart then return Enum.KeyCode.W end
+	if difference > restart then return Enum.KeyCode.S end
+	return nil
+end
+
 function configStore.AutoPong.Update(deltaTime)
 	local pong = configStore.AutoPong
 	if not pong.Enabled or unloaded then pong.Release(); return end
@@ -20300,11 +20313,8 @@ function configStore.AutoPong.Update(deltaTime)
 		session.Aim = pong.Aim(x, y, vx, vy)
 	end
 	if not session.Aim then pong.Release(); return end
-	-- Approximately one frame of paddle travel prevents W/S chatter around
-	-- the intercept. Movement remains at the game's unmodified paddle speed.
-	local deadband = math.clamp(1.25 * math.clamp(deltaTime or 1/60, 0, 0.05) * 0.75, 0.012, 0.05)
 	local difference = session.Aim - pad
-	local key = difference < -deadband and Enum.KeyCode.W or difference > deadband and Enum.KeyCode.S or nil
+	local key = pong.MovementKey(difference, deltaTime, pong.HeldKey)
 	if not pong.Steer(key) then
 		pong.SetEnabled(false)
 		configStore.AutoClash.SetStatus("PONG // KEYBOARD INPUT UNAVAILABLE", colors.DangerHover)

@@ -7307,10 +7307,10 @@ configStore.AutoClash = {
 	Recording = false,
 	MashInterval = 0.09,
 	RetryInterval = 0.35,
-	ReactionMean = 0.36,
-	ReactionSpread = 0.08,
-	ReactionMin = 0.27,
-	ReactionMax = 0.56,
+	ReactionMean = 0.18,
+	ReactionSpread = 0.04,
+	ReactionMin = 0.135,
+	ReactionMax = 0.28,
 	ScopeWords = {"clash", "struggle", "tug"},
 	-- Strong tables: Roblox can collect an Instance's Lua handle from a weak
 	-- table while the Instance still exists. Removed objects are pruned in Update.
@@ -15106,6 +15106,60 @@ function qolState.ServerNavigation.RunJoinFriend(rawIdentifier)
 end
 
 -- BEGIN SERVER BROWSER LOGIC
+-- Record confirmed arrivals only, never a click or a teleport request. Keep
+-- one day of local history across reloads/hops, bounded independently of saves.
+function qolState.ServerNavigation.PruneRecentServers(entries, now)
+	local rows, clean = {}, {}
+	if type(entries) ~= "table" then return clean end
+	for key, stamp in pairs(entries) do
+		if type(key) == "string" and #key <= 150 and key:match("^%d+:[%w%-]+$")
+			and type(stamp) == "number" and stamp == stamp and stamp <= now and stamp > now - 86400 then
+			table.insert(rows, {Key=key, Stamp=stamp})
+		end
+	end
+	table.sort(rows, function(a,b) return a.Stamp > b.Stamp end)
+	for index=1,math.min(#rows,200) do clean[rows[index].Key] = rows[index].Stamp end
+	return clean
+end
+
+function qolState.ServerNavigation.LoadRecentServers()
+	local nav = qolState.ServerNavigation
+	local now = os.time()
+	local entries = {}
+	local reader = configStore.GetFunction("readfile")
+	local path = configStore.Root .. "/recent_servers.json"
+	if reader then
+		local ok, data = pcall(function()
+			local body = reader(path)
+			if type(body) ~= "string" or #body > 65536 then return nil end
+			return HttpService:JSONDecode(body)
+		end)
+		if ok and type(data) == "table" and data.Version == 1 then entries = data.Entries end
+	end
+	entries = nav.PruneRecentServers(entries, now)
+	if type(game.JobId) == "string" and #game.JobId > 0 and #game.JobId <= 128
+		and game.JobId:match("^[%w%-]+$") then
+		entries[tostring(game.PlaceId) .. ":" .. game.JobId] = now
+	end
+	nav.RecentServers = nav.PruneRecentServers(entries, now)
+	local writer = configStore.GetFunction("writefile")
+	if writer then
+		pcall(function()
+			if configStore.EnsureFolders() then
+				writer(path, HttpService:JSONEncode({Version=1, Entries=nav.RecentServers}))
+			end
+		end)
+	end
+end
+
+function qolState.ServerNavigation.WasRecentlyJoined(placeId, jobId)
+	local stamp = (qolState.ServerNavigation.RecentServers or {})[tostring(placeId) .. ":" .. jobId]
+	local now = os.time()
+	return type(stamp) == "number" and stamp <= now and stamp > now - 86400
+end
+
+qolState.ServerNavigation.LoadRecentServers()
+
 -- Native GetServerInfo("Get") returns {key=serverId,value={Name,Planet,...}}.
 -- Names only decorate exact public-API IDs; native capacity/ordering is not trusted.
 function qolState.ServerNavigation.ParseServerNames(records, planet)
@@ -15176,7 +15230,8 @@ function qolState.ServerNavigation.RenderServers()
 		local full = row.playing >= row.maxPlayers
 		local metadata=b.Names and b.Names[row.id]
 		local title=metadata and metadata.Name or (b.NameState=="loading" and "Loading server name..." or "Name unavailable")
-		local detail=string.format("%s // %d/%d players // %s",metadata and metadata.Region or "Region unknown",row.playing,row.maxPlayers,row.id:sub(1,8))
+		local detail=string.format("%s // %d/%d players",metadata and metadata.Region or "Region unknown",row.playing,row.maxPlayers)
+		if nav.WasRecentlyJoined(game.PlaceId,row.id) then detail ..= " // Recently joined" end
 		local frame = create("Frame", {Name="Server", LayoutOrder=index, Size=UDim2.new(1,-8,0,52),
 			BackgroundColor3=colors.SurfaceRaised, BorderSizePixel=0}, b.List)
 		create("UICorner", {CornerRadius=UDim.new(0,5)}, frame)
@@ -20088,14 +20143,13 @@ function configStore.AutoClash.Press(key, object)
 	end)
 end
 
--- Reaction delay modelled on a recorded manual clash (0.40-0.57s per letter),
--- tuned slightly quicker with natural spread and the odd slow press.
+-- Half the previous reaction timing; retain spread and one press per prompt.
 function configStore.AutoClash.HumanDelay()
 	local clash = configStore.AutoClash
 	local spread = (math.random() + math.random() + math.random() - 1.5) / 1.5
 	local delay = clash.ReactionMean + spread * clash.ReactionSpread
 	if math.random() < 0.08 then
-		delay += 0.08 + math.random() * 0.1
+		delay += 0.04 + math.random() * 0.05
 	end
 	return math.clamp(delay, clash.ReactionMin, clash.ReactionMax)
 end

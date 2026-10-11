@@ -7346,7 +7346,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -190, 0, 30),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
-	Text = "Clash prompts and maximum-speed confirmed maze moves. Use Record clash UI to capture the new Pong game.",
+	Text = "Clash prompts, predictive W/S Pong controls, and maximum-speed confirmed maze moves. Enable helpers separately.",
 	TextColor3 = colors.Muted,
 	TextSize = 9,
 	TextWrapped = true,
@@ -7378,6 +7378,9 @@ configStore.AutoClash.MashButton = configStore.AutoClash.MakeButton("Mash", "Mas
 configStore.AutoClash.RecordButton = configStore.AutoClash.MakeButton("Record", "Record clash UI: OFF",
 	UDim2.new(1, -180, 0, 104), UDim2.fromOffset(160, 28))
 configStore.AutoMaze = {Enabled = false, Generation = 0, Presses = 0}
+configStore.AutoPong = {Enabled = false}
+configStore.AutoPong.Button = configStore.AutoClash.MakeButton("AutoPong", "Auto Pong: OFF",
+	UDim2.new(1, -180, 0, 72), UDim2.fromOffset(160, 28))
 configStore.AutoMaze.Button = configStore.AutoClash.MakeButton("AutoMaze", "Auto Maze: OFF",
 	UDim2.new(1, -12, 0, 72), UDim2.fromOffset(160, 28))
 configStore.AutoClash.StatusLabel = create("TextLabel", {
@@ -20119,8 +20122,8 @@ function configStore.AutoClash.Update()
 			if not configStore.AutoMaze.Enabled then
 				clash.SetStatus("MAZE // ENABLE AUTO MAZE TO SOLVE THIS BOARD", colors.Muted)
 			end
-		else
-			clash.SetStatus("MINIGAME // USE RECORD CLASH UI TO CAPTURE PONG; AUTO PONG NOT YET AVAILABLE", colors.Muted)
+		elseif not configStore.AutoPong.Enabled then
+			clash.SetStatus("PONG // ENABLE AUTO PONG TO CONTROL YOUR PADDLE", colors.Muted)
 		end
 		return
 	end
@@ -20197,6 +20200,123 @@ function configStore.AutoClash.Update()
 	end
 end
 
+
+-- Observed MindContest.Court geometry; ordinary held W/S input only.
+-- Constants match the captured PongCourt: wall edges .03/.97, paddle half
+-- height .11, speed 1.25, and local collision line .07 / world width 1.6.
+function configStore.AutoPong.Fold(y)
+	local folded = (y - 0.03) % 1.88
+	return 0.03 + (folded <= 0.94 and folded or 1.88 - folded)
+end
+
+function configStore.AutoPong.Aim(x, y, vx, vy)
+	if vx >= -0.001 then return 0.5 end
+	local arrival = (0.07 / 1.6 - x) / vx
+	if arrival < 0 or arrival > 4 then return math.clamp(y, 0.11, 0.89) end
+	return math.clamp(configStore.AutoPong.Fold(y + vy * arrival), 0.11, 0.89)
+end
+
+function configStore.AutoPong.Release()
+	local pong = configStore.AutoPong
+	if pong.HeldKey then
+		local ok = pcall(VirtualInputManager.SendKeyEvent, VirtualInputManager, false, pong.HeldKey, false, game)
+		if not ok then return false end
+		pong.HeldKey = nil
+	end
+	return true
+end
+
+function configStore.AutoPong.SetEnabled(enabled)
+	local pong = configStore.AutoPong
+	pong.Release()
+	pong.Enabled, pong.Session = enabled == true, nil
+	pong.Button.Text = pong.Enabled and "Auto Pong: ON" or "Auto Pong: OFF"
+	pong.Button.BackgroundColor3 = pong.Enabled and colors.Accent or colors.Surface
+	pong.Button.TextColor3 = pong.Enabled and colors.Background or colors.Muted
+end
+
+function configStore.AutoPong.Steer(key)
+	local pong = configStore.AutoPong
+	if pong.HeldKey == key then return true end
+	if not pong.Release() then return false end
+	if not key then return true end
+	local ok = pcall(VirtualInputManager.SendKeyEvent, VirtualInputManager, true, key, false, game)
+	if ok then pong.HeldKey = key end
+	return ok
+end
+
+function configStore.AutoPong.Update(deltaTime)
+	local pong = configStore.AutoPong
+	if not pong.Enabled or unloaded then pong.Release(); return end
+	local function pause(message)
+		pong.Release(); pong.Session = nil
+		configStore.AutoClash.SetStatus("PONG // " .. message, colors.Muted)
+	end
+	local contest = playerGui:FindFirstChild("MindContest")
+	local root = contest and contest:FindFirstChild("Root")
+	local card = root and root:FindFirstChild("Card")
+	local court = card and card:FindFirstChild("Court")
+	local ball = court and court:FindFirstChild("Ball")
+	local mine = court and court:FindFirstChild("Mine")
+	local note = card and card:FindFirstChild("Note")
+	if not court or not court:IsA("GuiObject") or not isGuiVisible(court)
+		or not ball or not ball:IsA("GuiObject") or not isGuiVisible(ball)
+		or not mine or not mine:IsA("GuiObject") or not isGuiVisible(mine) then
+		pause("WAITING FOR COURT"); return
+	end
+	local status = note and note:IsA("TextLabel") and string.upper(note.Text) or ""
+	-- Only recorded active-round messages are eligible; fail closed on new states.
+	if status ~= "" and not status:match("^SPEED X[%d%.]+$") then
+		pause(status); return
+	end
+	if activeTrainingButton or UserInputService:GetFocusedTextBox() then
+		pause("PAUSED FOR TRAINING OR TEXT INPUT"); return
+	end
+	local size, origin = court.AbsoluteSize, court.AbsolutePosition
+	if size.X <= 0 or size.Y <= 0 then pause("WAITING FOR COURT SIZE"); return end
+	local x = (ball.AbsolutePosition.X + ball.AbsoluteSize.X / 2 - origin.X) / size.X
+	local y = (ball.AbsolutePosition.Y + ball.AbsoluteSize.Y / 2 - origin.Y) / size.Y
+	local pad = (mine.AbsolutePosition.Y + mine.AbsoluteSize.Y / 2 - origin.Y) / size.Y
+	local padX = (mine.AbsolutePosition.X + mine.AbsoluteSize.X / 2 - origin.X) / size.X
+	if x ~= x or y ~= y or pad ~= pad or x < -0.05 or x > 1.05 or y < 0 or y > 1
+		or pad < 0 or pad > 1 or padX > 0.15 then pause("UNSUPPORTED COURT"); return end
+	local now = os.clock()
+	local session = pong.Session
+	if not session or session.Court ~= court or session.Ball ~= ball or session.Mine ~= mine then
+		pong.Release()
+		pong.Session = {Court=court, Ball=ball, Mine=mine, X=x, Y=y, At=now}
+		return
+	end
+	local dt = now - session.At
+	if dt > 0.15 or dt < 0 then pause("WAITING FOR FRESH BALL MOVEMENT"); return end
+	if x ~= session.X or y ~= session.Y then
+		if dt <= 0 then return end
+		local vx, vy = (x-session.X)/dt, (y-session.Y)/dt
+		session.X, session.Y, session.At = x, y, now
+		-- Reject teleports/corrections outside the recorded maximum speed.
+		if (vx * 1.6)^2 + vy^2 > 3.2^2 then
+			session.Aim = nil; pong.Release(); return
+		end
+		session.Aim = pong.Aim(x, y, vx, vy)
+	end
+	if not session.Aim then pong.Release(); return end
+	-- Approximately one frame of paddle travel prevents W/S chatter around
+	-- the intercept. Movement remains at the game's unmodified paddle speed.
+	local deadband = math.clamp(1.25 * math.clamp(deltaTime or 1/60, 0, 0.05) * 0.75, 0.012, 0.05)
+	local difference = session.Aim - pad
+	local key = difference < -deadband and Enum.KeyCode.W or difference > deadband and Enum.KeyCode.S or nil
+	if not pong.Steer(key) then
+		pong.SetEnabled(false)
+		configStore.AutoClash.SetStatus("PONG // KEYBOARD INPUT UNAVAILABLE", colors.DangerHover)
+		return
+	end
+	configStore.AutoClash.SetStatus("PONG // " .. (key and "TRACKING INTERCEPT" or "PADDLE ALIGNED"), colors.Success)
+end
+
+connect(configStore.AutoPong.Button.Activated, function()
+	configStore.AutoPong.SetEnabled(not configStore.AutoPong.Enabled)
+end)
+connect(RunService.RenderStepped, configStore.AutoPong.Update)
 
 -- Read the circuit's current UI, then search private copies of the game's
 -- CircuitRouter state. Actual moves always go through ordinary WASD input.
@@ -21731,6 +21851,7 @@ function configStore.Capture()
 		AutoClashEnabled = configStore.AutoClash.Enabled,
 		AutoClashMash = configStore.AutoClash.Mash,
 		AutoMazeEnabled = configStore.AutoMaze.Enabled,
+		AutoPongEnabled = configStore.AutoPong.Enabled,
 		DragonBallESPEnabled = configStore.DragonBallESP.Enabled,
 		DragonBallScannerToggleVersion = 1,
 		DragonBallESPSettings = table.clone(configStore.DragonBallESP.Settings),
@@ -21875,6 +21996,7 @@ function configStore.Apply(data)
 	end
 	-- Legacy AutoBodyRingEnabled profiles are ignored; the helper is archived.
 	configStore.AutoMaze.SetEnabled(data.AutoMazeEnabled == true)
+	configStore.AutoPong.SetEnabled(data.AutoPongEnabled == true)
 	if type(data.AutoClashEnabled) == "boolean" then
 		configStore.AutoClash.SetEnabled(data.AutoClashEnabled)
 	else
@@ -22193,6 +22315,7 @@ function controller.Unload()
 		configStore.AutoClash.Enabled = false
 		configStore.AutoClash.Recording = false
 		configStore.AutoMaze.SetEnabled(false)
+		configStore.AutoPong.SetEnabled(false)
 		configStore.MinigameTrace.Flush()
 		configStore.AutoClash.FlushLog()
 	end)

@@ -7346,7 +7346,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -190, 0, 30),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
-	Text = "Clash prompts, ring timing, and a fresh route through each maze. Enable each helper separately.",
+	Text = "Clash prompts and maximum-speed confirmed maze moves. Use Record clash UI to capture the new Pong game.",
 	TextColor3 = colors.Muted,
 	TextSize = 9,
 	TextWrapped = true,
@@ -7377,12 +7377,9 @@ configStore.AutoClash.MashButton = configStore.AutoClash.MakeButton("Mash", "Mas
 	UDim2.new(1, -12, 0, 104), UDim2.fromOffset(160, 28))
 configStore.AutoClash.RecordButton = configStore.AutoClash.MakeButton("Record", "Record clash UI: OFF",
 	UDim2.new(1, -180, 0, 104), UDim2.fromOffset(160, 28))
-configStore.BodyRing = {Enabled = false, Presses = 0, KeyHeld = false}
-configStore.BodyRing.Button = configStore.AutoClash.MakeButton("BodyRing", "Auto Body Ring: OFF",
-	UDim2.new(1, -12, 0, 72), UDim2.fromOffset(160, 28))
 configStore.AutoMaze = {Enabled = false, Generation = 0, Presses = 0}
 configStore.AutoMaze.Button = configStore.AutoClash.MakeButton("AutoMaze", "Auto Maze: OFF",
-	UDim2.new(1, -180, 0, 72), UDim2.fromOffset(160, 28))
+	UDim2.new(1, -12, 0, 72), UDim2.fromOffset(160, 28))
 configStore.AutoClash.StatusLabel = create("TextLabel", {
 	Name = "Status",
 	Position = UDim2.fromOffset(14, 142),
@@ -20113,16 +20110,17 @@ function configStore.AutoClash.Update()
 	if not clash.Enabled or unloaded then
 		return
 	end
-	-- The ring requires angular timing; generic clash retries must not press it.
+	-- Dedicated minigames must not receive generic clash/mash input.
 	local contest = playerGui:FindFirstChild("MindContest")
 	local contestRoot = contest and contest:FindFirstChild("Root")
 	if contestRoot and contestRoot:IsA("GuiObject") and isGuiVisible(contestRoot) then
-		if contestRoot:FindFirstChild("Board", true) then
+		local board = contestRoot:FindFirstChild("Board", true)
+		if board and board:FindFirstChild("Grid") then
 			if not configStore.AutoMaze.Enabled then
 				clash.SetStatus("MAZE // ENABLE AUTO MAZE TO SOLVE THIS BOARD", colors.Muted)
 			end
-		elseif not configStore.BodyRing.Enabled then
-			clash.SetStatus("BODY RING // ENABLE AUTO BODY RING TO TIME SPACE", colors.Muted)
+		else
+			clash.SetStatus("MINIGAME // USE RECORD CLASH UI TO CAPTURE PONG; AUTO PONG NOT YET AVAILABLE", colors.Muted)
 		end
 		return
 	end
@@ -20199,165 +20197,6 @@ function configStore.AutoClash.Update()
 	end
 end
 
--- Ring coordinates come directly from the recorded MindContest GUI. The arc
--- wraps around zero, so use its largest empty gap to find the occupied interval.
-function configStore.BodyRing.AngleDelta(angle, origin)
-	return (angle - origin + 180) % 360 - 180
-end
-
-function configStore.BodyRing.ArcWindow(angles)
-	if #angles < 2 then return nil end
-	table.sort(angles)
-	local largest, start = -1, 0
-	for index, angle in ipairs(angles) do
-		local nextAngle = angles[index + 1] or angles[1] + 360
-		if nextAngle - angle > largest then
-			largest, start = nextAngle - angle, nextAngle % 360
-		end
-	end
-	local width = 360 - largest
-	if width < 4 or width >= 180 then return nil end
-	return (start + width / 2) % 360, width
-end
-
-function configStore.BodyRing.Release()
-	local body = configStore.BodyRing
-	if body.KeyHeld then
-		pcall(VirtualInputManager.SendKeyEvent, VirtualInputManager, false, Enum.KeyCode.Space, false, game)
-		body.KeyHeld = false
-	end
-end
-
--- Own these short-lived connections separately from the hub's permanent ones.
-function configStore.BodyRing.WatchSpin(spin)
-	local body = configStore.BodyRing
-	if body.WatchedSpin == spin then return end
-	if body.RotationConnection then body.RotationConnection:Disconnect() end
-	if body.VisibilityConnection then body.VisibilityConnection:Disconnect() end
-	body.RotationConnection, body.VisibilityConnection = nil, nil
-	body.WatchedSpin, body.Sample, body.State = spin, nil, nil
-	body.Release()
-	if not spin then return end
-	body.RotationConnection = spin:GetPropertyChangedSignal("Rotation"):Connect(function()
-		if body.Enabled and not unloaded and body.WatchedSpin == spin then body.Update() end
-	end)
-	body.VisibilityConnection = spin:GetPropertyChangedSignal("Visible"):Connect(function()
-		-- A check can reuse the same arc. Observe its hidden phase even when it
-		-- falls between two render polls; don't read stale rotation on showing.
-		if body.WatchedSpin == spin and not spin.Visible then
-			body.State, body.Sample = nil, nil
-			body.Release()
-		end
-	end)
-end
-
-function configStore.BodyRing.SetEnabled(enabled)
-	local body = configStore.BodyRing
-	body.Release()
-	body.WatchSpin(nil)
-	body.Enabled = enabled == true
-	body.State = nil
-	body.Button.Text = body.Enabled and "Auto Body Ring: ON" or "Auto Body Ring: OFF"
-	body.Button.BackgroundColor3 = body.Enabled and colors.Accent or colors.Surface
-	body.Button.TextColor3 = body.Enabled and colors.Background or colors.Muted
-end
-
-function configStore.BodyRing.Update()
-	local body = configStore.BodyRing
-	if not body.Enabled or unloaded then return end
-	local now = os.clock()
-	if body.KeyHeld and now >= body.ReleaseAt then body.Release() end
-	local contest = playerGui:FindFirstChild("MindContest")
-	local root = contest and contest:FindFirstChild("Root")
-	local card = root and root:FindFirstChild("Card")
-	local ring = card and card:FindFirstChild("Ring")
-	if card and card:FindFirstChild("Board") then
-		body.WatchSpin(nil)
-		body.State = nil
-		body.Release()
-		return
-	end
-	local spin = ring and ring:FindFirstChild("Spin")
-	local arc = ring and ring:FindFirstChild("Arc")
-	local note = card and card:FindFirstChild("Note")
-	if not card or not card:IsA("GuiObject") or not isGuiVisible(card) then
-		body.WatchSpin(nil)
-		body.State = nil
-		body.Release()
-		return
-	end
-	body.WatchSpin(spin and spin:IsA("GuiObject") and spin or nil)
-	local status = note and note:IsA("TextLabel") and string.upper(note.Text) or ""
-	if not spin or not spin:IsA("GuiObject") or not isGuiVisible(spin) or not arc
-		or string.find(status, "GET READY", 1, true) or string.find(status, "WON", 1, true)
-		or string.find(status, "LOST", 1, true) or status == "HIT" or status == "MISSED" then
-		body.State, body.Sample = nil, nil
-		body.Release()
-		configStore.AutoClash.SetStatus("BODY RING // " .. (status ~= "" and status or "WAITING FOR NEEDLE"), colors.Muted)
-		return
-	end
-	if activeTrainingButton or UserInputService:GetFocusedTextBox() then
-		body.State, body.Sample = nil, nil
-		body.Release()
-		configStore.AutoClash.SetStatus("BODY RING // PAUSED FOR TRAINING OR TEXT INPUT", colors.Muted)
-		return
-	end
-	local angles = {}
-	for _, segment in ipairs(arc:GetChildren()) do
-		if segment:IsA("GuiObject") and segment.Visible then
-			table.insert(angles, segment.Rotation % 360)
-		end
-	end
-	local center, width = body.ArcWindow(angles)
-	if not center then
-		body.State, body.Sample = nil, nil
-		body.Release()
-		configStore.AutoClash.SetStatus("BODY RING // WAITING FOR TARGET ARC", colors.Muted)
-		return
-	end
-	local state = body.State
-	if not state or state.Spin ~= spin or math.abs(body.AngleDelta(center, state.Center)) > 0.5
-		or math.abs(width - state.Width) > 0.5 then
-		state = {Spin = spin, Center = center, Width = width}
-		body.State = state
-	end
-	local angle = spin.Rotation % 360
-	local sample = body.Sample
-	local elapsed = sample and now - sample.At or 0
-	local moved = sample and body.AngleDelta(angle, sample.Angle) ~= 0
-	local speed = moved and elapsed > 0 and elapsed <= 0.12
-		and body.AngleDelta(angle, sample.Angle) / elapsed or nil
-	-- Render polling must not replace an unchanged movement sample just before
-	-- the game's rotation signal arrives (which would inflate measured speed).
-	if not sample or moved then body.Sample = {Angle = angle, At = now} end
-	-- React to the actual rotation update, not the following render poll. No
-	-- speculative pre-boundary input or projected-angle veto of a valid hit.
-	local halfWindow = width / 2
-	local inside = math.abs(body.AngleDelta(angle, center)) <= halfWindow
-	if not state.Pressed and not body.KeyHeld and speed
-		and math.abs(speed) >= 1 and math.abs(speed) <= 1440 and inside then
-		-- Reserve before dispatch so synchronous input side effects cannot send twice.
-		state.Pressed = true
-		local ok = pcall(VirtualInputManager.SendKeyEvent, VirtualInputManager, true, Enum.KeyCode.Space, false, game)
-		if ok then
-			state.Pressed = true
-			body.Presses += 1
-			body.KeyHeld = true
-			body.ReleaseAt = now + 0.045
-		else
-			body.SetEnabled(false)
-			configStore.AutoClash.SetStatus("BODY RING // KEYBOARD INPUT UNAVAILABLE", colors.DangerHover)
-			return
-		end
-	end
-	configStore.AutoClash.SetStatus(string.format("BODY RING // %s // %d PRESSES",
-		state.Pressed and "WAITING FOR NEXT ROUND" or "TIMING ARC ENTRY", body.Presses), colors.Success)
-end
-
-connect(configStore.BodyRing.Button.Activated, function()
-	configStore.BodyRing.SetEnabled(not configStore.BodyRing.Enabled)
-end)
-connect(RunService.RenderStepped, configStore.BodyRing.Update)
 
 -- Read the circuit's current UI, then search private copies of the game's
 -- CircuitRouter state. Actual moves always go through ordinary WASD input.
@@ -20559,7 +20398,7 @@ function configStore.AutoMaze.Update()
 	if not session or session.Grid ~= grid or session.Head ~= head then
 		maze.Generation += 1
 		maze.Release()
-		session = {Grid = grid, Head = head, ResetCount = 0, StartAt = now + math.random(350, 500) / 1320}
+		session = {Grid = grid, Head = head, ResetCount = 0}
 		maze.Session = session
 	end
 	if session.Planning then status("CALCULATING ROUTE"); return end
@@ -20570,16 +20409,14 @@ function configStore.AutoMaze.Update()
 		maze.Generation += 1
 		maze.Release()
 		session.Route, session.Pending, session.ResetCount = nil, nil, 0
-		session.StartAt = now + math.random(350, 500) / 1320
 	end
 	session.Signature = model.Signature
 	local x, y = model.Layout.Start[1], model.Layout.Start[2]
 	if x == model.Layout.Goal[1] and y == model.Layout.Goal[2] then maze.Release(); status("CORE REACHED"); return end
-	if now < session.StartAt then status("GETTING READY"); return end
 	local trail = grid:FindFirstChild("Trail")
 	local hasTrail = trail and #trail:GetChildren() > 0
 	if session.ResetAt then
-		if not hasTrail and now - session.ResetAt >= 0.12 then
+		if not hasTrail then
 			session.ResetAt = nil
 		elseif now - session.ResetAt > 1.5 then
 			session.Error = "RESET NOT CONFIRMED; TOGGLE AUTO MAZE TO RETRY"
@@ -20600,7 +20437,8 @@ function configStore.AutoMaze.Update()
 	end
 	local pending = session.Pending
 	if pending then
-		if now < pending.Until then return end
+		-- No artificial pacing: only the observed slide endpoint can advance
+		-- the route. A slow or dropped move must still wait/replan safely.
 		if x == pending.X and y == pending.Y then
 			session.Index += 1
 			session.Pending = nil
@@ -20625,8 +20463,7 @@ function configStore.AutoMaze.Update()
 	if not move then status("WAITING FOR RESULT"); return end
 	local keys = {U = "W", D = "S", L = "A", R = "D"}
 	if maze.Press(keys[move.Key]) then
-		session.Pending = {X = move.X, Y = move.Y, SentAt = now,
-			Until = now + (math.clamp(move.Cells * 0.025, 0.04, 0.22) + math.random(120, 180) / 1000) / 1.32}
+		session.Pending = {X = move.X, Y = move.Y, SentAt = now}
 		status(string.format("%s // MOVE %d/%d", keys[move.Key], session.Index, #session.Route))
 	else
 		session.Error = "KEYBOARD INPUT UNAVAILABLE"
@@ -20983,7 +20820,7 @@ function configStore.MinigameTrace.FindPanels()
 			local name = string.lower(layer.Name)
 			if trace.Baseline[layer] ~= true or string.find(name, "maze", 1, true)
 				or string.find(name, "labyrinth", 1, true) or string.find(name, "minigame", 1, true)
-				or name == "mindcontest" then layers[layer] = true end
+				or string.find(name, "pong", 1, true) or name == "mindcontest" then layers[layer] = true end
 		end
 	end
 	for _, descendant in ipairs(playerGui:GetDescendants()) do
@@ -20992,7 +20829,8 @@ function configStore.MinigameTrace.FindPanels()
 			local text = string.upper((string.gsub(descendant.Text, "<[^>]->", "")))
 			if string.find(text, "KEEP THE BODY", 1, true) or string.find(text, "HIT THE MARK", 1, true)
 				or string.find(text, "MAZE", 1, true) or string.find(text, "LABYRINTH", 1, true)
-				or string.find(text, "REACH THE EXIT", 1, true) then
+				or string.find(text, "REACH THE EXIT", 1, true)
+				or string.find(text, "FIGHT IT OFF", 1, true) or string.find(text, "PING PONG", 1, true) then
 				local layer = descendant:FindFirstAncestorWhichIsA("LayerCollector")
 				if layer then layers[layer] = true end
 			end
@@ -21056,7 +20894,8 @@ function configStore.MinigameTrace.Dump(layer)
 					or string.find(lowerName, "resist", 1, true) or string.find(lowerName, "minigame", 1, true)
 					or string.find(lowerName, "possess", 1, true) or string.find(lowerName, "grab", 1, true)
 					or string.find(lowerName, "contest", 1, true) or string.find(lowerName, "maze", 1, true)
-					or string.find(lowerName, "labyrinth", 1, true) or lowerName == "circuitrouter") then
+					or string.find(lowerName, "labyrinth", 1, true) or string.find(lowerName, "pong", 1, true)
+					or lowerName == "circuitrouter") then
 				table.insert(scripts, descendant)
 			end
 		end
@@ -21891,7 +21730,6 @@ function configStore.Capture()
 		NpcESPSettings = table.clone(configStore.NpcESP.Settings),
 		AutoClashEnabled = configStore.AutoClash.Enabled,
 		AutoClashMash = configStore.AutoClash.Mash,
-		AutoBodyRingEnabled = configStore.BodyRing.Enabled,
 		AutoMazeEnabled = configStore.AutoMaze.Enabled,
 		DragonBallESPEnabled = configStore.DragonBallESP.Enabled,
 		DragonBallScannerToggleVersion = 1,
@@ -22035,7 +21873,7 @@ function configStore.Apply(data)
 	if type(data.AutoClashMash) == "boolean" then
 		configStore.AutoClash.Mash = data.AutoClashMash
 	end
-	configStore.BodyRing.SetEnabled(data.AutoBodyRingEnabled == true)
+	-- Legacy AutoBodyRingEnabled profiles are ignored; the helper is archived.
 	configStore.AutoMaze.SetEnabled(data.AutoMazeEnabled == true)
 	if type(data.AutoClashEnabled) == "boolean" then
 		configStore.AutoClash.SetEnabled(data.AutoClashEnabled)
@@ -22354,7 +22192,6 @@ function controller.Unload()
 	step("auto clash", function()
 		configStore.AutoClash.Enabled = false
 		configStore.AutoClash.Recording = false
-		configStore.BodyRing.SetEnabled(false)
 		configStore.AutoMaze.SetEnabled(false)
 		configStore.MinigameTrace.Flush()
 		configStore.AutoClash.FlushLog()

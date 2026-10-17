@@ -19304,6 +19304,41 @@ function autoTransformState.ResourceReady(selected, forceScan)
 	return true, "Fatigue ready"
 end
 
+function autoTransformState.CaptureKaiokenStatus(character,coreStats,misc,activeForm)
+	if type(writefile)~="function" or os.clock()<(autoTransformState.NextKaiokenReportAt or 0) then return end
+	autoTransformState.NextKaiokenReportAt=os.clock()+2
+	-- Local, bounded state observations only; never query remotes or change combat state.
+	pcall(function()
+		local function text(value)return tostring(value):gsub("[\r\n]"," "):sub(1,100)end
+		local fatigue,visible=autoTransformState.ReadFatiguePercent(false)
+		local lines={"Form="..text(activeForm),"Fatigue="..text(fatigue).." visible="..text(visible),
+			"CycleLatched="..text(autoTransformState.KaiokenRequestedCharacter==character)}
+		local function relevant(name)
+			name=name:lower()
+			return name:find("kaio",1,true)or name:find("fatigue",1,true)or name:find("form",1,true)
+		end
+		for _,entry in ipairs({{"Character",character},{"CoreStats",coreStats},{"Misc",misc}})do
+			for name,value in pairs(entry[2]:GetAttributes())do
+				if relevant(name)and #lines<80 then lines[#lines+1]=entry[1]..".@"..text(name).."="..text(value)end
+			end
+			for index,object in ipairs(entry[2]:GetChildren())do
+				if index>100 or #lines>=80 then break end
+				if relevant(object.Name)then
+					lines[#lines+1]=entry[1].."."..text(object.Name).." ["..object.ClassName.."]="..text(object:IsA("ValueBase")and object.Value or "present")
+				end
+			end
+		end
+		local snapshot=table.concat(lines,"\n")
+		if snapshot==autoTransformState.LastKaiokenReport then return end
+		local history=autoTransformState.KaiokenReportHistory or {}
+		history[#history+1]="t="..string.format("%.2f",os.clock()).."\n"..snapshot
+		while #history>12 do table.remove(history,1)end
+		autoTransformState.KaiokenReportHistory=history
+		writefile("GohanHub/auto_form_latest.txt","AUTO FORM // local passive state v1 // client observations, not server acceptance\n"..table.concat(history,"\n---\n"))
+		autoTransformState.LastKaiokenReport=snapshot
+	end)
+end
+
 function autoTransformState.GetReadyCharacter(selected, forceScan)
 	if unloaded or not autoTransformState.Enabled or autoTransformState.Selected ~= selected or npcSafety.LootMode then
 		return nil, nil, "Paused"
@@ -19320,11 +19355,14 @@ function autoTransformState.GetReadyCharacter(selected, forceScan)
 		return nil, nil, "Waiting for character"
 	end
 	local activeForm = tostring(formValue.Value)
+	if string.lower(selected):gsub("[^%a]", "")=="kaioken" then
+		autoTransformState.CaptureKaiokenStatus(character,coreStats,misc,activeForm)
+	end
 	if activeForm ~= "None" and activeForm ~= "" then
 		-- An actual active form is also an acknowledgement; the active-form
 		-- guard now prevents repeats until it ends and resources are ready.
 		autoTransformState.KaiokenRequestedCharacter=nil
-		return nil, nil, "Form active"
+		return nil, nil, "Active: "..activeForm:sub(1,32)
 	end
 	local ready, reason = autoTransformState.ResourceReady(selected, forceScan)
 	if not ready then return nil, nil, reason end
@@ -19336,7 +19374,7 @@ function autoTransformState.GetReadyCharacter(selected, forceScan)
 	if unloaded or not autoTransformState.Enabled or autoTransformState.Selected ~= selected
 		or localPlayer.Character ~= character or humanoid.Health <= 0 or npcSafety.LootMode then return nil, nil, "Paused" end
 	activeForm = tostring(formValue.Value)
-	if activeForm ~= "None" and activeForm ~= "" then return nil, nil, "Form active" end
+	if activeForm ~= "None" and activeForm ~= "" then return nil, nil, "Active: "..activeForm:sub(1,32) end
 	ready, reason = autoTransformState.ResourceReady(selected)
 	if not ready then return nil, nil, reason end
 	return character, configuredValue, reason

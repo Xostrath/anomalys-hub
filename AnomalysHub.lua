@@ -12614,6 +12614,13 @@ local function enforceNpcUndergroundCeiling(character, characterRoot, clearance)
 		return false
 	end
 	local correction = maximumY - characterRoot.Position.Y
+	-- Only snap small surfacings. Starting high above the ground (timeline:
+	-- 1,400 studs over Vinterra) this used to drop ~690 studs in one frame; the
+	-- server rejected it and reset the character every ~0.5 s, forever. Large
+	-- drops are left to the rate-limited Descend phase.
+	if correction < -15 then
+		return false
+	end
 	character:PivotTo(character:GetPivot() + Vector3.new(0, correction, 0))
 	local velocity = characterRoot.AssemblyLinearVelocity
 	characterRoot.AssemblyLinearVelocity = Vector3.new(velocity.X, math.min(velocity.Y, 0), velocity.Z)

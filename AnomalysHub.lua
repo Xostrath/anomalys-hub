@@ -8330,16 +8330,24 @@ do
     -- First punch: earlier user-confirmed sequence began with F ~0.003s after the cue;
     -- attribution was less certain because later taps followed. Second punch: one confirmed
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
-    local p={Enabled=false,Held=false,Rows={},Cooldown=0,Profiles={
+    local p={Enabled=false,Held=false,Rows={},Cooldown=0,Build='combo-recovery-v1',
+        BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
         ['99346182354558']={phase=0,hold=0.12,reach=12,facing=0.25,label='first punch / provisional'},
         ['137006829454244']={phase=0.31,hold=0.16,reach=12,facing=0.25,label='second punch / confirmed manual example'},
+        -- Experimental input windows, NOT proven parry timings. At the observed
+        -- speed 1.40759 these span ~0.18-0.32, ~0.16-0.31 and ~0.09-0.23s.
+        -- Captured damage followed at ~0.35-0.40, ~0.33-0.39 and ~0.24-0.29s.
+        -- Scale phases using the CURRENT track; never assume a fixed agility.
+        ['97963169752956']={phase=0.25,hold=0.04,reach=12,facing=0.25,burst=true,label='third punch / provisional window'},
+        ['111254461845322']={phase=0.23,hold=0.04,reach=12,facing=0.25,burst=true,label='fourth punch / provisional window'},
+        ['90063307770851']={phase=0.12,hold=0.04,reach=12,facing=0.25,burst=true,label='fifth punch / provisional window'},
     }}
     d.Parry=p
     function p.Render()
         if p.Button then p.Button.Text='Auto Parry: '..(p.Enabled and 'ON (TEST)' or 'OFF (TEST)')end
     end
     function p.Log(event,data)
-        if #p.Rows>=300 then return end
+        if #p.Rows>=900 then p.DroppedRows=(p.DroppedRows or 0)+1;p.Dirty=true;return end
         p.Rows[#p.Rows+1]={t=os.clock()-(p.Started or os.clock()),event=event,data=data};p.Dirty=true
     end
     function p.Save()
@@ -8348,9 +8356,10 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=3,place=game.PlaceId,run=p.RunId,
+            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=4,build=p.Build,place=game.PlaceId,run=p.RunId,
+                burstLimit=p.BurstLimit,burstSpan=p.BurstSpan,burstPhaseStep=p.BurstPhaseStep,droppedRows=p.DroppedRows or 0,
                 observationsFile='defense_parry_observed_latest.json',
-                note='Experimental two-punch parry attempts, NOT confirmed successes. One locked attacker; no network reporting.',rows=p.Rows}))
+                note='Experimental five-punch profiles and bounded recovery taps, NOT confirmed successes. One locked attacker; no network reporting.',rows=p.Rows}))
         end)
         p.SaveFailed=not ok
     end
@@ -8416,7 +8425,15 @@ do
     function p.Release(reason)
         if not p.Held then return true end
         local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,false,Enum.KeyCode.F,false,game)
-        if ok then p.Held=false;if d.KeyOwner==p then d.KeyOwner=nil end;p.Log('F_up',reason)end
+        if ok then
+            p.Held=false;if d.KeyOwner==p then d.KeyOwner=nil end
+            -- A slow frame must still leave a real key-up gap; never catch up by
+            -- releasing and repressing F in the same update.
+            if p.Pending and p.Pending.burst and p.Pending.taps>0 then
+                p.Pending.notBefore=math.max(p.Pending.notBefore or 0,os.clock()+p.BurstGap)
+            end
+            p.Log('F_up',reason)
+        end
         return ok
     end
     function p.Skip(reason,details)
@@ -8446,11 +8463,11 @@ do
         local targetHum=target:FindFirstChildOfClass('Humanoid')
         local animator=targetHum and targetHum:FindFirstChildOfClass('Animator')
         if not animator then d.Status('PARRY TEST // attacker animation cues unavailable.');return end
-        p.Character=char;p.Target=target;p.Rows={};p.Started=os.clock();p.Cooldown=0;p.SaveFailed=false
+        p.Character=char;p.Target=target;p.Rows={};p.DroppedRows=0;p.Started=os.clock();p.Cooldown=0;p.SaveFailed=false
         p.Pending=nil;p.LastTrack=nil;p.Enabled=true
         p.RunId=tostring(p.Started);p.ObservationError=nil;p.ObservationSaveFailed=false
         p.ObservedTrack=nil;p.ObservedAt=nil;p.LastObservationFrame=nil;p.LastObservationSave=p.Started
-        p.Observations={version=1,run=p.RunId,place=game.PlaceId,framesPerSecond=20,
+        p.Observations={version=1,build=p.Build,run=p.RunId,place=game.PlaceId,framesPerSecond=20,
             note='Passive observations during Auto Parry, NOT confirmed attacks, hit times, parries or Sonic Sways. Unknown animations may be idle/locomotion. One locked attacker; local file only.',
             frames={},animations={},droppedFrames=0,droppedAnimations=0}
         p.ObservationDirty=true;p.SaveObservations()
@@ -8459,8 +8476,8 @@ do
             local ok,err=pcall(p.OnAnimation,track)
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
-        p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12});p.Save();p.Render()
-        d.Status('PARRY TEST // locked: '..d.Text(target.Name)..' // 60 seconds; unknown animations logged locally.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
+        d.Status('PARRY TEST // 5 combo profiles; max 3 recovery taps // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -8500,7 +8517,8 @@ do
         if distance<0.1 or distance>reach then return false,'outside_melee_range' end
         if other.CFrame.LookVector:Dot(delta.Unit)<facing then return false,'attacker_not_facing_you' end
         if own.CFrame.LookVector:Dot(-delta.Unit)<facing then return false,'not_facing_attacker' end
-        if p.Character:GetAttribute('State_Stunned')then return false,'stunned_reported' end
+        -- Reported local stun does not prove F cannot be accepted in recovery.
+        -- It selects a bounded tap window at dispatch, rather than a blanket veto.
         if p.Target:GetAttribute('State_Stunned')then return false,'attacker_stunned' end
         if p.Target:GetAttribute('State_FiringBeam')or p.Target:GetAttribute('State_ChargingBeam')then return false,'beam_not_melee' end
         return true,nil,false,distance,hum.Health
@@ -8510,15 +8528,14 @@ do
         local id=track.Animation and tostring(track.Animation.AnimationId):match('%d+$')
         local profile=id and p.Profiles[id]
         p.SafeObservation(p.ObserveAnimation,track,id,profile~=nil)
-        if not profile then return end -- Locomotion, later combo hits, heavy attacks and other styles are not mapped.
+        if not profile then return end -- Other styles/heavies/locomotion remain observation-only.
         local now=os.clock()
         if p.LastTrack==track and now-p.LastTrackAt<0.1 then return end
         p.LastTrack=track;p.LastTrackAt=now
         if p.Pending then p.Skip('new_attack_replaced_pending',{animation=p.Pending.id});p.Pending=nil end
         defenseQueue.Cancel(p)
         local allowed,reason,fatal=p.Check()
-        -- Recovery can occur between the cue and the timed press (as in the confirmed capture).
-        if not allowed and reason~='stunned_reported'and reason~='outside_melee_range'
+        if not allowed and reason~='outside_melee_range'
             and reason~='attacker_not_facing_you'and reason~='not_facing_attacker'then
             if fatal then p.Stop(reason)else p.Skip(reason,{animation=id})end;return
         end
@@ -8526,7 +8543,8 @@ do
         local position=track.TimePosition
         if type(speed)~='number'or speed<=0 or type(position)~='number'or position<0 then p.Skip('invalid_animation_clock',{animation=id});return end
         if position>profile.phase+0.1 then p.Skip('late_animation_cue',{animation=id,position=position});return end
-        p.Pending={id=id,track=track,profile=profile,started=now,speed=speed,position=position,clockAt=now,
+        p.Pending={id=id,track=track,profile=profile,phase=profile.phase,taps=0,burst=profile.burst==true,
+            started=now,speed=speed,position=position,clockAt=now,
             at=now+math.max(0,(profile.phase-position)/speed)}
         p.Log('attack',{animation=id,speed=speed,position=position,delay=p.Pending.at-now,profile=profile.label})
         p.Update() -- The provisional first-punch profile has no added delay.
@@ -8542,18 +8560,24 @@ do
         if now-p.Started>=60 then p.Stop('60-second test finished');return end
         local pending=p.Pending
         if pending and not p.SwayActive()then
+            if pending.expires and now>pending.expires then
+                p.Pending=nil;defenseQueue.Cancel(p)
+                if p.Held and not p.Release('recovery window ended')then p.Stop('F release failed; automation stopped');return end
+                p.Skip('recovery_window_expired',{animation=pending.id,taps=pending.taps});return
+            end
             local speed,position=pending.track.Speed,pending.track.TimePosition
             if pending.track.IsPlaying==false or type(speed)~='number'or speed<=0
                 or type(position)~='number'or position<pending.position-0.02 then
                 p.Pending=nil;defenseQueue.Cancel(p);p.Skip('attack_cancelled_or_clock_reset',{animation=pending.id});return
             end
             if position~=pending.position then pending.clockAt=now
-            elseif now-pending.clockAt>0.25 and pending.profile.phase>0 then
+            elseif now-pending.clockAt>0.25 and pending.phase>0 then
                 p.Pending=nil;defenseQueue.Cancel(p);p.Skip('animation_clock_stalled',{animation=pending.id});return
             end
-            if not pending.dueAt and pending.profile.phase>0 then
-                pending.at=now+(pending.profile.phase-position)/speed
+            if not pending.dueAt and pending.phase>0 then
+                pending.at=math.max(now+(pending.phase-position)/speed,pending.notBefore or -math.huge)
             end
+            if pending.notBefore then pending.at=math.max(pending.at,pending.notBefore)end
             pending.position=position;pending.speed=speed
             if now>=pending.at and not pending.dueAt then pending.dueAt=pending.at end
         end
@@ -8564,7 +8588,7 @@ do
                 if not p.Release(reason)then p.Stop('F release failed; automation stopped');return end
                 p.Save()
             end
-            if pending and now<pending.at and(reason=='stunned_reported'or reason=='outside_melee_range'
+            if pending and pending.taps==0 and now<pending.at and(reason=='outside_melee_range'
                 or reason=='attacker_not_facing_you'or reason=='not_facing_attacker')then
                 defenseQueue.Cancel(p);return
             end
@@ -8575,16 +8599,29 @@ do
         defenseQueue.Request(p,pending.at,pending.at+0.1)
         if not dispatch then return end
         if now<pending.at then return end
-        p.Pending=nil;defenseQueue.Cancel(p) -- No retries on the same swing.
+        p.Pending=nil;defenseQueue.Cancel(p) -- Only explicitly bounded bursts may schedule another tap.
+        local stunned=p.Character:GetAttribute('State_Stunned')==true
+        pending.burst=pending.burst or stunned
         local details={animation=pending.id,sinceAnimation=now-pending.started,lateness=now-pending.at,
-            distance=distance,health=health,speed=pending.speed}
+            distance=distance,health=health,speed=pending.speed,phase=pending.phase,
+            stunnedReported=stunned,burst=pending.burst,tap=pending.taps+1,profile=pending.profile.label}
         local skip=details.lateness>0.1 and 'late_frame' or d.KeyOwner and 'F_owned_by_defense'
-            or now<p.Cooldown and 'cooldown' or UserInputService:IsKeyDown(Enum.KeyCode.F)and 'F_already_down'
+            or(pending.taps==0 and now<p.Cooldown)and 'cooldown' or UserInputService:IsKeyDown(Enum.KeyCode.F)and 'F_already_down'
             or p.Character:GetAttribute('State_Blocking')and 'blocking_reported'
         if skip then p.Skip(skip,details);return end
-        d.KeyOwner=p;p.Held=true;p.ReleaseAt=now+pending.profile.hold;p.Cooldown=now+0.3
+        local hold=pending.burst and p.BurstHold or pending.profile.hold
+        d.KeyOwner=p;p.Held=true;p.ReleaseAt=now+hold
+        if pending.taps==0 then p.Cooldown=now+0.3 end
         local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,true,Enum.KeyCode.F,false,game)
         if not ok then p.Stop('F input unavailable');return end
+        pending.taps+=1
+        if pending.burst and pending.taps<p.BurstLimit then
+            pending.expires=pending.expires or(now+p.BurstSpan)
+            pending.phase+=p.BurstPhaseStep;pending.dueAt=nil
+            pending.notBefore=now+hold+p.BurstGap
+            pending.at=math.max(now+(pending.phase-pending.position)/pending.speed,pending.notBefore)
+            p.Pending=pending
+        end
         p.Log('F_down',details);p.Save()
         d.Status('PARRY TEST // F sent; outcome unverified'..(p.SaveFailed and ' // Log save failed' or ''))
     end

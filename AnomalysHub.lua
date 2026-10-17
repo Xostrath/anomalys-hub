@@ -8024,7 +8024,7 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function' and type(makefolder)=='function' and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_beam_auto_latest.json',HttpService:JSONEncode({version=1,place=game.PlaceId,
+            writefile(configStore.Root..'/defense_beam_auto_latest.json',HttpService:JSONEncode({version=2,place=game.PlaceId,
                 note='Experimental wave-beam input attempts, NOT confirmed deflections. One locked attacker. No network reporting.',
                 delay=b.Delay,hold=b.Hold,rows=b.Rows}))
         end)
@@ -8070,23 +8070,32 @@ do
         return object==playerGui
     end
     function b.Busy()
-        if d.Active or activeTrainingButton or UserInputService:GetFocusedTextBox()then return true end
+        if d.Active then return true,'manual_recording' end
+        if activeTrainingButton then return true,'auto_training' end
+        if UserInputService:GetFocusedTextBox()then return true,'typing' end
         for _,spec in ipairs({{'MindContest','Root'},{'ClashGui','ClashHUD'}})do
             local gui=playerGui:FindFirstChild(spec[1]);local root=gui and gui:FindFirstChild(spec[2])
-            if root and b.Visible(root)then return true end
+            if root and b.Visible(root)then return true,'minigame_'..spec[1] end
         end
         return false
     end
     function b.Aimed()
         local own,other=d.Root(b.Character),d.Root(b.Target)
-        if not own or not other then return false end
+        if not own or not other then return false,nil,{reason='missing_root'}end
         local delta=own.Position-other.Position
         local distance=delta.Magnitude
-        if distance<1 or distance>100 then return false end
+        if distance<1 or distance>100 then return false,distance,{reason='outside_1_to_100_studs',distance=distance}end
         local along=delta:Dot(other.CFrame.LookVector)
         local miss=(delta-other.CFrame.LookVector*along).Magnitude
+        local facing=own.CFrame.LookVector:Dot(-delta.Unit)
+        local reason=along<=0 and 'behind_attacker' or miss>8 and 'outside_beam_aim' or facing<0.6 and 'not_facing_attacker' or 'aim_ok'
         -- Facing is a conservative proxy, not proof of beam geometry or line of sight.
-        return along>0 and miss<=8 and own.CFrame.LookVector:Dot(-delta.Unit)>=0.6,distance
+        return reason=='aim_ok',distance,{reason=reason,distance=distance,along=along,miss=miss,facing=facing}
+    end
+    function b.Skip(stage,reasons,details)
+        details=details or {};details.stage=stage;details.reasons=reasons
+        b.Log('skip',details);b.Save()
+        d.Status('BEAM TEST // SKIPPED: '..table.concat(reasons,', ')..(b.SaveFailed and ' // Log save failed' or ''))
     end
     function b.KnownBeam()
         local hum=b.Target:FindFirstChildOfClass('Humanoid')
@@ -8118,25 +8127,49 @@ do
         end
         if b.Armed and now-b.Armed>10 then b.Armed=nil end
         if firing and not b.LastFire then
-            local aimed,distance=b.Aimed()
-            if b.Armed and b.KnownBeam()and aimed and not b.Busy()then
-                b.Pending={at=now+b.Delay,fire=now};b.Log('firing',{distance=distance})
-            else b.Log('skip','Uncalibrated, unarmed, not aimed, or busy')end
+            local aimed,distance,aim=b.Aimed()
+            local busy,busyReason=b.Busy()
+            local known=b.KnownBeam()
+            if b.Armed and known and aimed and not busy then
+                b.Pending={at=now+b.Delay,fire=now,aim=aim};b.Log('firing',{distance=distance,aim=aim,chargeDuration=now-b.Armed})
+            else
+                local reasons={}
+                if not b.Armed then table.insert(reasons,'no_observed_charge')end
+                if not known then table.insert(reasons,'unknown_animation')end
+                if not aimed then table.insert(reasons,aim.reason)end
+                if busy then table.insert(reasons,busyReason)end
+                b.Skip('firing',reasons,{aim=aim})
+            end
             b.Armed=nil
         end
         b.LastCharge=charge;b.LastFire=firing
         local pending=b.Pending
-        if pending and (not firing or b.Busy())then b.Pending=nil;b.Log('skip','Cancelled or busy');b.Save();return end
+        local busy,busyReason=b.Busy()
+        if pending and (not firing or busy)then
+            b.Pending=nil;b.Skip('pending',{not firing and 'cast_ended' or busyReason});return
+        end
         if pending and now>=pending.at then
             b.Pending=nil -- Consume the attempt even if unsafe; never retry/spam the same beam.
-            local aimed,distance=b.Aimed()
-            if now-pending.at>0.15 or not aimed or b.Held or now<b.Cooldown
-                or UserInputService:IsKeyDown(Enum.KeyCode.F)or b.Character:GetAttribute('State_Blocking')
-                or b.Character:GetAttribute('State_Stunned')then b.Log('skip','Late, manual block, stun, cooldown, or aim changed');b.Save();return end
+            local aimed,distance,aim=b.Aimed()
+            local details={aimAtFire=pending.aim,aimAtPress=aim,lateness=now-pending.at,
+                sinceFiring=now-pending.fire,heldByTest=b.Held,cooldownRemaining=math.max(0,b.Cooldown-now),
+                fAlreadyDown=UserInputService:IsKeyDown(Enum.KeyCode.F),
+                blockingReported=b.Character:GetAttribute('State_Blocking')or false,
+                stunnedReported=b.Character:GetAttribute('State_Stunned')or false}
+            local reasons={}
+            if details.lateness>0.15 then table.insert(reasons,'late_frame')end
+            if not aimed then table.insert(reasons,aim.reason)end
+            if b.Held then table.insert(reasons,'test_already_holding_F')end
+            if now<b.Cooldown then table.insert(reasons,'cooldown')end
+            if details.fAlreadyDown then table.insert(reasons,'F_already_down')end
+            if details.blockingReported then table.insert(reasons,'blocking_reported')end
+            if details.stunnedReported then table.insert(reasons,'stunned_reported')end
+            if #reasons>0 then b.Skip('press',reasons,details);return end
             b.Held=true;b.ReleaseAt=now+b.Hold;b.Cooldown=now+1
             local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,true,Enum.KeyCode.F,false,game)
             if not ok then b.Stop('F input unavailable');return end
-            b.Log('F_down',{sinceFiring=now-pending.fire,distance=distance,health=hum.Health});b.Save()
+            details.health=hum.Health;details.distance=distance
+            b.Log('F_down',details);b.Save()
             d.Status('BEAM TEST // F sent; outcome unverified'..(b.SaveFailed and ' // Log save failed' or ''))
         end
     end

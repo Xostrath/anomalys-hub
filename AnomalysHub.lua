@@ -8367,8 +8367,9 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v10-dash-recognition',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v11-dash-defense',RecoveryOpportunitySpan=0.75,
         DashAnimation='88929057646501',DashPairWindow=0.15,
+        DashDefense=true,DashMaxAge=0.65,DashNearRange=8,DashContactRange=6,DashLead=0.18,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
@@ -8517,8 +8518,8 @@ do
             p.Log('observation_error',p.ObservationError) -- Diagnostics cannot disable defense.
         end
     end
-    -- Recognition ONLY. Dash arrival varies with distance; this observed cue
-    -- can arrive after close-range damage. Do not reuse an M1 timing profile.
+    -- Recognition is separate from defense scheduling. This cue can arrive
+    -- after close-range damage; neither recognition nor prediction proves a parry.
     function p.ObserveDash(track,id)
         if not p.Enabled or not p.Target then return end
         local now=os.clock()
@@ -8546,8 +8547,66 @@ do
         p.Log('forward_q_dash_recognized',{animation=p.DashAnimation,speed=cue.speed,
             sinceAnimation=now-cue.at,stateEdgeOffset=p.ForwardDashEdge-cue.at,
             distance=own and other and (own.Position-other.Position).Magnitude or nil,
-            attackerMotion=p.Motion(p.Target),recognitionOnly=true})
-        d.Status('PARRY TEST // Forward Q dash recognized // timing not calibrated; no dash F sent.')
+            attackerMotion=p.Motion(p.Target),recognitionOnly=not p.DashDefense})
+        if p.DashDefense then p.DashReady=cue
+        else d.Status('PARRY TEST // Forward Q dash recognized // recognition only.')end
+    end
+    function p.ArmDash(now)
+        local cue=p.DashReady;p.DashReady=nil
+        if not cue or not p.Enabled or not p.DashDefense then return end
+        if now-cue.at>p.DashPairWindow then p.Skip('dash_cue_stale',{animation=p.DashAnimation});return end
+        local speed,position=cue.track.Speed,cue.track.TimePosition
+        if type(speed)~='number'or speed~=speed or speed<=0 or speed==math.huge
+            or type(position)~='number'or position~=position or position<0 or position==math.huge then
+            p.Skip('invalid_dash_clock',{animation=p.DashAnimation});return
+        end
+        if p.Pending then p.Skip('dash_replaced_pending',{animation=p.Pending.id})end
+        defenseQueue.Cancel(p)
+        p.Pending={dash=true,id=p.DashAnimation,track=cue.track,started=cue.at,expires=cue.at+p.DashMaxAge,
+            profile={phase=0,hold=0.16,reach=40,facing=0.25,label='forward Q dash / experimental approach'},
+            phase=0,taps=0,burst=false,speed=cue.track.Speed,position=cue.track.TimePosition,clockAt=now,at=now+0.05}
+        p.Log('attack',{animation=p.DashAnimation,kind='forward_q_dash',maxAge=p.DashMaxAge,
+            nearRange=p.DashNearRange,contactRange=p.DashContactRange,lead=p.DashLead})
+    end
+    function p.DashThreat(pending,now)
+        if not p.Target then return false,'missing_target' end
+        if p.Target:GetAttribute('State_Dashing')~=true or p.Target:GetAttribute('State_ForwardDashing')~=true then
+            return false,'dash_ended'
+        end
+        local own,other=d.Root(p.Character),d.Root(p.Target)
+        if not own or not other then return false,'missing_root' end
+        local delta=own.Position-other.Position
+        local distance=delta.Magnitude
+        if distance~=distance or distance==math.huge then return false,'invalid_dash_geometry' end
+        local measured
+        if pending.motionAt and now-pending.motionAt>=0.008 then
+            measured=(pending.motionDelta-delta)/(now-pending.motionAt)
+            pending.motionVelocity=measured
+        end
+        if not pending.motionAt or measured then pending.motionAt=now;pending.motionDelta=delta end
+        local details={distance=distance,method='near',arrival=0}
+        if distance<=p.DashNearRange then return true,nil,details end
+        local best
+        local function predict(velocity,method)
+            if not velocity then return end
+            local speed2=velocity:Dot(velocity)
+            if speed2~=speed2 or speed2<=1 or speed2==math.huge then return end
+            local closing=velocity:Dot(delta.Unit)
+            if closing<=1 then return end
+            local arrival=(distance-p.DashContactRange)/closing
+            local closest=delta:Dot(velocity)/speed2
+            local miss=(delta-velocity*closest).Magnitude
+            if arrival<=p.DashLead and miss<=p.DashContactRange and(not best or arrival<best.arrival)then
+                best={distance=distance,method=method,arrival=arrival,closingSpeed=closing,missDistance=miss}
+            end
+        end
+        if own.AssemblyLinearVelocity and other.AssemblyLinearVelocity then
+            predict(other.AssemblyLinearVelocity-own.AssemblyLinearVelocity,'relative_velocity')
+        end
+        -- The shared scheduler revalidates within the same heartbeat. Preserve
+        -- that sample briefly instead of treating zero elapsed time as no motion.
+        predict(now-pending.motionAt<=0.05 and pending.motionVelocity or nil,'observed_positions')
+        return best~=nil,nil,best
     end
     function p.CancelReleaseWatch(reason)
         if not p.ReleaseWatch then return end
@@ -8689,7 +8748,7 @@ do
         if not p.Held then return true end
         local ok=p.SendF(false,reason)
         if ok then
-            p.Held=false;if d.KeyOwner==p then d.KeyOwner=nil end
+            p.Held=false;p.HeldProfile=nil;if d.KeyOwner==p then d.KeyOwner=nil end
             p.NextPressAt=os.clock()+(p.HoldGap or p.BurstGap)
             p.HoldGap=nil
             if p.Enabled and p.Character then
@@ -8766,7 +8825,7 @@ do
             p.PrepareSerial=(p.PrepareSerial or 0)+1;p.Preparing=false
             if p.RuleWorker then pcall(task.cancel,p.RuleWorker);p.RuleWorker=nil end
             defenseQueue.Cancel(p)
-            p.Enabled=false;p.Pending=nil;p.Rules=nil;p.DashCandidate=nil;p.LastDashTrack=nil;p.ForwardDashEdge=nil
+            p.Enabled=false;p.Pending=nil;p.Rules=nil;p.DashCandidate=nil;p.DashReady=nil;p.LastDashTrack=nil;p.ForwardDashEdge=nil
             if p.Connection then pcall(function()p.Connection:Disconnect()end);p.Connection=nil end
             p.Release('disabled');p.Target=nil;p.Character=nil;p.LastTrack=nil
             if p.Started then p.Log('stop','Disabled');p.Save()end
@@ -8797,7 +8856,7 @@ do
         p.Rules=rules
         p.Character=char;p.Target=target;p.Rows={};p.DroppedRows=0;p.Started=os.clock();p.SaveFailed=false
         p.Pending=nil;p.LastTrack=nil;p.ReleaseWatch=nil;p.Enabled=true
-        p.DashCandidate=nil;p.LastDashTrack=nil;p.LastDashAt=nil;p.ForwardDashEdge=nil
+        p.DashCandidate=nil;p.DashReady=nil;p.LastDashTrack=nil;p.LastDashAt=nil;p.ForwardDashEdge=nil
         p.LastForwardDash=target:GetAttribute('State_ForwardDashing')==true
         p.InputSerial=0;p.LastInputRequest=nil
         p.InputHistory={};p.ResponseStates={State_Blocking=char:GetAttribute('State_Blocking')==true,
@@ -8816,7 +8875,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v10 Q-dash recognition // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v11 experimental Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -8842,13 +8901,13 @@ do
         if not own or not other then return false,'missing_root' end
         local delta=own.Position-other.Position
         local distance=delta.Magnitude
-        local profile=pending and pending.profile
+        local profile=(pending and pending.profile)or(p.Held and p.HeldProfile)
         local reach=profile and profile.reach or 12
         local facing=profile and profile.facing or 0.25
         -- Short relative-motion forecast to the scheduled input, not a claim about
         -- server hitboxes. Re-evaluate on every frame; do not reject a future swing
         -- just because the attacker is currently outside its conservative envelope.
-        if pending and pending.at>os.clock()and own.AssemblyLinearVelocity and other.AssemblyLinearVelocity then
+        if pending and not pending.dash and pending.at>os.clock()and own.AssemblyLinearVelocity and other.AssemblyLinearVelocity then
             local horizon=math.min(0.12,pending.at-os.clock())
             delta=delta+(own.AssemblyLinearVelocity-other.AssemblyLinearVelocity)*horizon
             distance=delta.Magnitude
@@ -8868,10 +8927,14 @@ do
         local profile=id and p.Profiles[id]
         p.SafeObservation(p.ObserveAnimation,track,id,profile~=nil)
         p.SafeObservation(p.ObserveDash,track,id)
-        if not profile then return end -- Other styles/heavies/locomotion remain observation-only.
+        if not profile then
+            if id==p.DashAnimation then p.Update();defenseQueue.Drain()end
+            return -- Other styles/heavies/locomotion remain observation-only.
+        end
         local now=os.clock()
         if p.LastTrack==track and now-p.LastTrackAt<0.1 then return end
         p.LastTrack=track;p.LastTrackAt=now
+        p.DashCandidate=nil;p.DashReady=nil -- A newer melee cue supersedes an unarmed dash.
         if p.Pending then p.Skip('new_attack_replaced_pending',{animation=p.Pending.id});p.Pending=nil end
         defenseQueue.Cancel(p)
         local allowed,reason,fatal=p.Check()
@@ -8898,6 +8961,8 @@ do
         end
         if not p.Enabled then return end
         if now-p.Started>=60 then p.Stop('60-second test finished');return end
+        p.SafeObservation(p.ObserveDash)
+        p.ArmDash(now)
         p.CheckRelease(now)
         if not p.Enabled then return end
         local pending=p.Pending
@@ -8913,7 +8978,7 @@ do
                 p.Pending=nil;defenseQueue.Cancel(p);p.Skip('attack_cancelled_or_clock_reset',{animation=pending.id});return
             end
             if position~=pending.position then pending.clockAt=now
-            elseif now-pending.clockAt>0.25 and(pending.phase>0 or pending.recoveryUntil)then
+            elseif now-pending.clockAt>0.25 and(pending.phase>0 or pending.recoveryUntil or pending.dash)then
                 p.Pending=nil;defenseQueue.Cancel(p);p.Skip('animation_clock_stalled',{animation=pending.id});return
             end
             if pending.recoveryUntil then
@@ -8933,6 +8998,15 @@ do
             if pending.notBefore then pending.at=math.max(pending.at,pending.notBefore)end
             pending.position=position;pending.speed=speed
             if now>=pending.at and not pending.dueAt then pending.dueAt=pending.at end
+        end
+        if pending and pending.dash then
+            local ready,reason,prediction=p.DashThreat(pending,now)
+            if reason or(pending.dashDue and not ready)then
+                p.Pending=nil;defenseQueue.Cancel(p);p.Skip(reason or 'dash_no_longer_approaching',{animation=pending.id});return
+            end
+            if ready then
+                pending.dashDue=pending.dashDue or now;pending.at=pending.dashDue;pending.prediction=prediction
+            else pending.at=now+0.05;pending.dueAt=nil end
         end
         local allowed,reason,fatal,distance,health=p.Check(pending)
         if not allowed then
@@ -8968,7 +9042,7 @@ do
                     p.Pending=nil;defenseQueue.Cancel(p);p.Skip('recovery_knocked',{animation=pending.id});return
                 end
                 local length=pending.track.Length
-                if not pending.recoveryUntil and pending.taps==0 and gate=='state_disallows_block'
+                if not pending.dash and not pending.recoveryUntil and pending.taps==0 and gate=='state_disallows_block'
                     and inStun and not knocked and now<=pending.at+0.1
                     and type(length)=='number'and length==length and length<math.huge and length>pending.position then
                     local deadline=math.min(pending.started+p.RecoveryOpportunitySpan,now+(length-pending.position)/pending.speed)
@@ -8998,8 +9072,8 @@ do
         if now<pending.at or now<p.NextPressAt then return end
         p.Pending=nil;defenseQueue.Cancel(p) -- Only explicitly bounded bursts may schedule another tap.
         local stunned=p.Character:GetAttribute('State_Stunned')==true
-        pending.recovery=pending.recovery or stunned
-        pending.burst=pending.burst or stunned
+        pending.recovery=not pending.dash and(pending.recovery or stunned)
+        pending.burst=not pending.dash and(pending.burst or stunned)
         local limit=pending.recovery and p.RecoveryLimit or p.BurstLimit
         local hold=pending.recovery and p.RecoveryHold or(pending.burst and p.BurstHold or pending.profile.hold)
         pending.gap=pending.recovery and p.RecoveryGap or p.BurstGap
@@ -9007,14 +9081,14 @@ do
             distance=distance,health=health,speed=pending.speed,phase=pending.phase,
             stunnedReported=stunned,recovery=pending.recovery or false,plannedHold=hold,
             burst=pending.burst,tap=pending.taps+1,profile=pending.profile.label,clientEligibility=pending.eligibility,
-            recoveryOpportunity=pending.recoveryUntil~=nil}
+            recoveryOpportunity=pending.recoveryUntil~=nil,dash=pending.dash or false,dashPrediction=pending.prediction}
         local skip=pending.taps>=limit and 'recovery_tap_limit'
             or(not pending.recoveryUntil and details.lateness>0.1)and 'late_frame' or d.KeyOwner and 'F_owned_by_defense'
             or UserInputService:IsKeyDown(Enum.KeyCode.F)and 'F_already_down'
             or p.Character:GetAttribute('State_Blocking')and 'blocking_reported'
         if skip then p.Skip(skip,details);return end
         p.CancelReleaseWatch('new_parry_input')
-        d.KeyOwner=p;p.Held=true;p.ReleaseAt=now+hold;p.HoldGap=pending.gap
+        d.KeyOwner=p;p.Held=true;p.HeldProfile=pending.profile;p.ReleaseAt=now+hold;p.HoldGap=pending.gap
         local ok=p.SendF(true,'parry_press')
         if not ok then p.Stop('F input unavailable');return end
         pending.taps+=1

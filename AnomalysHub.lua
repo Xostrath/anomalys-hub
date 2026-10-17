@@ -23817,8 +23817,15 @@ function controller.Reload()
 				return reader("GohanHub_dev.lua")
 			end
 			local url=environment.__GohanHubLoaderUrl
-			if type(url)=="string" and url:match("^https://") then return game:HttpGet(url) end
-			return environment.__GohanHubSource
+			if type(url)~="string" or not url:match("^https://") then
+				url="https://raw.githubusercontent.com/Xostrath/anomalys-hub/main/AnomalysHub.lua"
+			end
+			-- A fixed HttpGet URL can return the executor's previous download.
+			-- Request a fresh URL each time; never silently reuse the injected source.
+			url=url:gsub("#.*$", "")
+			local separator=url:find("?",1,true) and "&" or "?"
+			local freshUrl=url..separator.."anomaly_reload="..HttpService:GenerateGUID(false)
+			return game:HttpGet(freshUrl)
 		end)
 		if not alive() then return end
 		if not ok or type(source)~="string" or source=="" then failed("Could not read hub source: "..tostring(source));return end

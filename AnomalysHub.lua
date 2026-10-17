@@ -8466,6 +8466,10 @@ do
         p.Log('stop_reason',reason);p.SetEnabled(false)
         d.Status('PARRY TEST // '..reason..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
+    function p.SwayActive()
+        return (p.Character and p.Character:GetAttribute('State_SonicSway')==true)
+            or(p.Target and p.Target:GetAttribute('State_SonicSway')==true)or false
+    end
     function p.Check(pending)
         if unloaded or localPlayer.Character~=p.Character then return false,'character_changed',true end
         local hum=p.Character and p.Character:FindFirstChildOfClass('Humanoid')
@@ -8473,6 +8477,9 @@ do
         if not hum or hum.Health<=0 or not p.Target or not p.Target.Parent or not targetHum or targetHum.Health<=0 then
             return false,'character_or_target_unavailable',true
         end
+        -- Both participants reported this state in the two confirmed sways.
+        -- Ignore new defensive cues during the sequence; do not queue a late F.
+        if p.SwayActive()then return false,'sonic_sway_active' end
         local busy,reason=b.Busy()
         if busy then return false,reason end
         local own,other=d.Root(p.Character),d.Root(p.Target)
@@ -8534,7 +8541,7 @@ do
         if not p.Enabled then return end
         if now-p.Started>=60 then p.Stop('60-second test finished');return end
         local pending=p.Pending
-        if pending then
+        if pending and not p.SwayActive()then
             local speed,position=pending.track.Speed,pending.track.TimePosition
             if pending.track.IsPlaying==false or type(speed)~='number'or speed<=0
                 or type(position)~='number'or position<pending.position-0.02 then
@@ -8553,7 +8560,10 @@ do
         local allowed,reason,fatal,distance,health=p.Check(pending)
         if not allowed then
             if fatal then p.Stop(reason);return end
-            if p.Held then p.Release(reason);p.Save()end
+            if p.Held then
+                if not p.Release(reason)then p.Stop('F release failed; automation stopped');return end
+                p.Save()
+            end
             if pending and now<pending.at and(reason=='stunned_reported'or reason=='outside_melee_range'
                 or reason=='attacker_not_facing_you'or reason=='not_facing_attacker')then
                 defenseQueue.Cancel(p);return

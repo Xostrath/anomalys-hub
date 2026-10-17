@@ -13106,16 +13106,26 @@ local function applyUpdatedAutofarmMovement(characterRoot, desiredPosition, move
 	-- until the jump was accepted (2-7 s), and every hit in between was wasted.
 	-- Cap per-frame travel at the glide speed (the server-tolerated rate the
 	-- normal path already uses); short adjustments (rise/settle) stay instant.
+	-- Second timeline run: 650 studs/s segments never snapped back; 900 studs/s
+	-- (2,500-6,000 stud bucket) snapped back on 2 of 4 trips, once stalling 40 s.
 	local now = os.clock()
 	local frameTime = math.clamp(now - (npcSafety.LastUpdatedMoveAt or now), 0, 0.1)
 	npcSafety.LastUpdatedMoveAt = now
+	-- Snap-back detector: the server resetting us shows up as a large jump away
+	-- from where we placed the character last frame.
+	local lastPlaced = npcSafety.LastUpdatedMovePosition
+	if lastPlaced and (characterRoot.Position - lastPlaced).Magnitude > 50 and npcSafety.FirstHit then
+		npcSafety.FirstHit.Event(string.format("SNAP-BACK %.0f studs during %s", (characterRoot.Position - lastPlaced).Magnitude,
+			tostring(npcApproachPhase)))
+	end
 	local position = desiredPosition
 	if movementDistance > 15 and type(speed) == "number" and speed > 0 then
-		local step = math.max(speed * frameTime, 1)
+		local step = math.max(math.min(speed, 650) * frameTime, 1)
 		if step < movementDistance then
 			position = characterRoot.Position + movementDelta.Unit * step
 		end
 	end
+	npcSafety.LastUpdatedMovePosition = position
 	characterRoot.CFrame = CFrame.new(position) * characterRoot.CFrame.Rotation
 	characterRoot.AssemblyLinearVelocity = Vector3.zero
 	characterRoot.AssemblyAngularVelocity = Vector3.zero

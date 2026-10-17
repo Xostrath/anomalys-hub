@@ -8331,7 +8331,7 @@ do
     -- First punch: earlier user-confirmed sequence began with F ~0.003s after the cue;
     -- attribution was less certain because later taps followed. Second punch: one confirmed
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
-    local p={Enabled=false,Held=false,Rows={},Cooldown=0,Build='combo-recovery-v2-air-context',
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v3-air-finisher',
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
         ['99346182354558']={phase=0,hold=0.12,reach=12,facing=0.25,label='first punch / provisional'},
@@ -8343,6 +8343,9 @@ do
         ['97963169752956']={phase=0.25,hold=0.04,reach=12,facing=0.25,burst=true,label='third punch / provisional window'},
         ['111254461845322']={phase=0.23,hold=0.04,reach=12,facing=0.25,burst=true,label='fourth punch / provisional window'},
         ['90063307770851']={phase=0.12,hold=0.04,reach=12,facing=0.25,burst=true,label='fifth punch / provisional window'},
+        -- Repeated after airborne hit four in run 1702.1613261999737.
+        -- Separate experimental input window; do not reuse the other finisher's phase.
+        ['5931766729']={phase=0.35,hold=0.04,reach=12,facing=0.25,burst=true,label='air finisher / provisional window'},
     }}
     d.Parry=p
     function p.Render()
@@ -8358,11 +8361,11 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=5,build=p.Build,place=game.PlaceId,run=p.RunId,
+            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=6,build=p.Build,place=game.PlaceId,run=p.RunId,
                 recoveryHold=p.RecoveryHold,recoveryGap=p.RecoveryGap,recoveryLimit=p.RecoveryLimit,
                 burstLimit=p.BurstLimit,burstSpan=p.BurstSpan,burstPhaseStep=p.BurstPhaseStep,droppedRows=p.DroppedRows or 0,
                 observationsFile='defense_parry_observed_latest.json',
-                note='Experimental five-punch profiles and bounded recovery taps, NOT confirmed successes. One locked attacker; no network reporting.',rows=p.Rows}))
+                note='Experimental combo/air-finisher profiles and bounded recovery taps, NOT confirmed successes. One locked attacker; no network reporting.',rows=p.Rows}))
         end)
         p.SaveFailed=not ok
     end
@@ -8462,6 +8465,8 @@ do
         local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,false,Enum.KeyCode.F,false,game)
         if ok then
             p.Held=false;if d.KeyOwner==p then d.KeyOwner=nil end
+            p.NextPressAt=os.clock()+(p.HoldGap or p.BurstGap)
+            p.HoldGap=nil
             -- A slow frame must still leave a real key-up gap; never catch up by
             -- releasing and repressing F in the same update.
             if p.Pending and p.Pending.burst and p.Pending.taps>0 then
@@ -8498,7 +8503,7 @@ do
         local targetHum=target:FindFirstChildOfClass('Humanoid')
         local animator=targetHum and targetHum:FindFirstChildOfClass('Animator')
         if not animator then d.Status('PARRY TEST // attacker animation cues unavailable.');return end
-        p.Character=char;p.Target=target;p.Rows={};p.DroppedRows=0;p.Started=os.clock();p.Cooldown=0;p.SaveFailed=false
+        p.Character=char;p.Target=target;p.Rows={};p.DroppedRows=0;p.Started=os.clock();p.SaveFailed=false
         p.Pending=nil;p.LastTrack=nil;p.Enabled=true
         p.InputHistory={};p.ResponseStates={State_Blocking=char:GetAttribute('State_Blocking')==true,
             State_SonicSway=char:GetAttribute('State_SonicSway')==true}
@@ -8514,7 +8519,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // recovery v2: max 2 longer holds; air/dash capture // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // air finisher + recovery v3; max 2 recovery holds // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -8633,9 +8638,12 @@ do
             return
         end
         if not pending then defenseQueue.Cancel(p);return end
-        defenseQueue.Request(p,pending.at,pending.at+0.1)
+        -- Each distinct swing owns its deadline. Only wait for the real key-up
+        -- gap, not a cooldown inherited from a different swing. Do not extend
+        -- the original expiry if that gap would make this attack too late.
+        defenseQueue.Request(p,math.max(pending.at,p.NextPressAt),pending.at+0.1)
         if not dispatch then return end
-        if now<pending.at then return end
+        if now<pending.at or now<p.NextPressAt then return end
         p.Pending=nil;defenseQueue.Cancel(p) -- Only explicitly bounded bursts may schedule another tap.
         local stunned=p.Character:GetAttribute('State_Stunned')==true
         pending.recovery=pending.recovery or stunned
@@ -8648,11 +8656,10 @@ do
             stunnedReported=stunned,recovery=pending.recovery or false,plannedHold=hold,
             burst=pending.burst,tap=pending.taps+1,profile=pending.profile.label}
         local skip=pending.taps>=limit and 'recovery_tap_limit' or details.lateness>0.1 and 'late_frame' or d.KeyOwner and 'F_owned_by_defense'
-            or(pending.taps==0 and now<p.Cooldown)and 'cooldown' or UserInputService:IsKeyDown(Enum.KeyCode.F)and 'F_already_down'
+            or UserInputService:IsKeyDown(Enum.KeyCode.F)and 'F_already_down'
             or p.Character:GetAttribute('State_Blocking')and 'blocking_reported'
         if skip then p.Skip(skip,details);return end
-        d.KeyOwner=p;p.Held=true;p.ReleaseAt=now+hold
-        if pending.taps==0 then p.Cooldown=now+0.3 end
+        d.KeyOwner=p;p.Held=true;p.ReleaseAt=now+hold;p.HoldGap=pending.gap
         local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,true,Enum.KeyCode.F,false,game)
         if not ok then p.Stop('F input unavailable');return end
         pending.taps+=1

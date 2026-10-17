@@ -7969,6 +7969,8 @@ do
         if not hum or hum.Health<=0 or not d.Root(char)then d.Status('Wait for a living character.');return end
         local target=d.FindTarget()
         if not target then d.Status('Stand within 100 studs of ONE test attacker, then record.');return end
+        if d.Beam then d.Beam.SetEnabled(false)end -- Manual calibration never includes automated F input.
+        if d.Beam and d.Beam.Held then d.Status('F release failed; stop automation before recording.');return end
         d.Mode=mode;d.Character=char;d.Target=target;d.Rows={};d.Effects={};d.EffectSeen={}
         d.Started=os.clock();d.Next=0;d.LastSave=d.Started;d.Active=true
         d.File=configStore.Root..'/defense_'..mode:lower()..'_latest.json'
@@ -8003,13 +8005,152 @@ do
         end)
         d.Status('Recording '..mode..' // attacker: '..d.Text(target.Name)..' // manually use F; 60 seconds.')
     end
-    -- No automatic F requests until attack cues and outcomes have been calibrated.
+    -- BEGIN BEAM DEFLECT TEST
+    -- One user-confirmed wave-beam deflection at ~85 studs, not universal beam timing.
+    -- The 20Hz capture first observed firing 0.121s before F; replication/frames add uncertainty.
+    local b={Enabled=false,Held=false,Delay=0.12,Hold=0.30,Rows={},Cooldown=0}
+    d.Beam=b
+    function b.Render()
+        if b.Button then b.Button.Text='Auto Beam Deflect: '..(b.Enabled and 'ON (TEST)' or 'OFF (TEST)')end
+    end
+    function b.Log(event,data)
+        if #b.Rows>=240 then return end
+        b.Rows[#b.Rows+1]={t=os.clock()-(b.Started or os.clock()),event=event,data=data}
+        b.Dirty=true
+    end
+    function b.Save()
+        if not b.Dirty then return end
+        b.Dirty=false
+        local ok=pcall(function()
+            assert(type(writefile)=='function','File writing unavailable')
+            if type(isfolder)=='function' and type(makefolder)=='function' and not isfolder(configStore.Root)then makefolder(configStore.Root)end
+            writefile(configStore.Root..'/defense_beam_auto_latest.json',HttpService:JSONEncode({version=1,place=game.PlaceId,
+                note='Experimental wave-beam input attempts, NOT confirmed deflections. One locked attacker. No network reporting.',
+                delay=b.Delay,hold=b.Hold,rows=b.Rows}))
+        end)
+        b.SaveFailed=not ok
+    end
+    function b.Release(reason)
+        if not b.Held then return true end
+        local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,false,Enum.KeyCode.F,false,game)
+        if ok then b.Held=false;b.Log('F_up',reason)end
+        return ok
+    end
+    function b.SetEnabled(enabled)
+        if not enabled then
+            b.Enabled=false;b.Pending=nil;b.Armed=nil
+            b.Release('disabled');b.Target=nil;b.Character=nil
+            if b.Started then b.Log('stop','Disabled');b.Save()end
+            b.Render();return
+        end
+        if unloaded or b.Enabled or b.Held then return end
+        if d.Active then d.Status('Stop the manual recording before enabling the beam test.');return end
+        local char=localPlayer.Character
+        local hum=char and char:FindFirstChildOfClass('Humanoid')
+        local target=hum and hum.Health>0 and d.FindTarget()
+        if not target then d.Status('Stand within 100 studs of ONE beam attacker, then enable the test.');return end
+        b.Character=char;b.Target=target;b.Rows={};b.Started=os.clock();b.Enabled=true;b.SaveFailed=false
+        b.Pending=nil;b.Armed=nil;b.Cooldown=0
+        -- Enabling midway through a cast must not cause a late block.
+        b.LastCharge=target:GetAttribute('State_ChargingBeam')==true
+        b.LastFire=target:GetAttribute('State_FiringBeam')==true
+        b.Log('start',{target=d.Text(target.Name)});b.Save();b.Render()
+        d.Status('BEAM TEST // locked: '..d.Text(target.Name)..' // face them; waiting for next wave beam.'..(b.SaveFailed and ' // Log save failed' or ''))
+    end
+    function b.Stop(reason)
+        b.Log('stop_reason',reason)
+        b.SetEnabled(false);d.Status('BEAM TEST // '..reason..(b.SaveFailed and ' // Log save failed' or ''))
+    end
+    function b.Visible(object)
+        while object and object~=playerGui do
+            if object:IsA('GuiObject')and not object.Visible then return false end
+            if object:IsA('LayerCollector')and not object.Enabled then return false end
+            object=object.Parent
+        end
+        return object==playerGui
+    end
+    function b.Busy()
+        if d.Active or activeTrainingButton or UserInputService:GetFocusedTextBox()then return true end
+        for _,spec in ipairs({{'MindContest','Root'},{'ClashGui','ClashHUD'}})do
+            local gui=playerGui:FindFirstChild(spec[1]);local root=gui and gui:FindFirstChild(spec[2])
+            if root and b.Visible(root)then return true end
+        end
+        return false
+    end
+    function b.Aimed()
+        local own,other=d.Root(b.Character),d.Root(b.Target)
+        if not own or not other then return false end
+        local delta=own.Position-other.Position
+        local distance=delta.Magnitude
+        if distance<1 or distance>100 then return false end
+        local along=delta:Dot(other.CFrame.LookVector)
+        local miss=(delta-other.CFrame.LookVector*along).Magnitude
+        -- Facing is a conservative proxy, not proof of beam geometry or line of sight.
+        return along>0 and miss<=8 and own.CFrame.LookVector:Dot(-delta.Unit)>=0.6,distance
+    end
+    function b.KnownBeam()
+        local hum=b.Target:FindFirstChildOfClass('Humanoid')
+        local animator=hum and hum:FindFirstChildOfClass('Animator')
+        if animator then
+            for _,track in ipairs(animator:GetPlayingAnimationTracks())do
+                if track.Animation and tostring(track.Animation.AnimationId):match('%d+$')=='10741467461'then return true end
+            end
+        end
+        return false
+    end
+    function b.Update()
+        local now=os.clock()
+        if b.Held and (not b.Enabled or now>=b.ReleaseAt or b.Busy())then
+            if not b.Release('pulse ended')then b.Stop('F release failed; automation stopped');return end
+            b.Save()
+        end
+        if not b.Enabled then return end
+        local hum=b.Character and b.Character:FindFirstChildOfClass('Humanoid')
+        local otherHum=b.Target and b.Target:FindFirstChildOfClass('Humanoid')
+        if unloaded or localPlayer.Character~=b.Character or not hum or hum.Health<=0
+            or not b.Target.Parent or not otherHum or otherHum.Health<=0 then b.Stop('Character or attacker changed');return end
+        if now-b.Started>=60 then b.Stop('60-second test finished');return end
+        if b.Held and b.Character:GetAttribute('State_Stunned')then b.Release('stunned');b.Save()end
+        local charge=b.Target:GetAttribute('State_ChargingBeam')==true
+        local firing=b.Target:GetAttribute('State_FiringBeam')==true
+        if charge and not b.LastCharge then
+            b.Armed=now;b.Pending=nil;b.Log('charge',{})
+        end
+        if b.Armed and now-b.Armed>10 then b.Armed=nil end
+        if firing and not b.LastFire then
+            local aimed,distance=b.Aimed()
+            if b.Armed and b.KnownBeam()and aimed and not b.Busy()then
+                b.Pending={at=now+b.Delay,fire=now};b.Log('firing',{distance=distance})
+            else b.Log('skip','Uncalibrated, unarmed, not aimed, or busy')end
+            b.Armed=nil
+        end
+        b.LastCharge=charge;b.LastFire=firing
+        local pending=b.Pending
+        if pending and (not firing or b.Busy())then b.Pending=nil;b.Log('skip','Cancelled or busy');b.Save();return end
+        if pending and now>=pending.at then
+            b.Pending=nil -- Consume the attempt even if unsafe; never retry/spam the same beam.
+            local aimed,distance=b.Aimed()
+            if now-pending.at>0.15 or not aimed or b.Held or now<b.Cooldown
+                or UserInputService:IsKeyDown(Enum.KeyCode.F)or b.Character:GetAttribute('State_Blocking')
+                or b.Character:GetAttribute('State_Stunned')then b.Log('skip','Late, manual block, stun, cooldown, or aim changed');b.Save();return end
+            b.Held=true;b.ReleaseAt=now+b.Hold;b.Cooldown=now+1
+            local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,true,Enum.KeyCode.F,false,game)
+            if not ok then b.Stop('F input unavailable');return end
+            b.Log('F_down',{sinceFiring=now-pending.fire,distance=distance,health=hum.Health});b.Save()
+            d.Status('BEAM TEST // F sent; outcome unverified'..(b.SaveFailed and ' // Log save failed' or ''))
+        end
+    end
+    connect(RunService.Heartbeat,function()
+        local ok,err=pcall(b.Update)
+        if not ok then b.Stop('Error: '..d.Text(err))end
+    end)
+    -- END BEAM DEFLECT TEST
     -- BEGIN DEFENSE UI
     local card=create('Frame',{Name='CombatDefense',Position=UDim2.fromOffset(16,210),Size=UDim2.new(1,-32,0,228),
         BackgroundColor3=colors.SurfaceRaised,BorderSizePixel=0},configStore.CombatPage)
     create('UICorner',{CornerRadius=UDim.new(0,9)},card)
     create('TextLabel',{Position=UDim2.fromOffset(14,8),Size=UDim2.new(1,-28,0,22),BackgroundTransparency=1,
-        Text='COMBAT DEFENSE // F // CALIBRATION',Font=Enum.Font.GothamBold,TextSize=11,TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Left},card)
+        Text='COMBAT DEFENSE // F // BEAM TEST + CALIBRATION',Font=Enum.Font.GothamBold,TextSize=11,TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Left},card)
     local function button(name,text,x,y,width,callback)
         local result=create('TextButton',{Name=name,Position=UDim2.new(x,14,0,y),Size=UDim2.new(width,-28,0,30),
             BackgroundColor3=colors.Surface,BorderSizePixel=0,Text=text,Font=Enum.Font.GothamSemibold,TextSize=10,TextColor3=colors.Text},card)
@@ -8017,14 +8158,18 @@ do
     end
     for index,entry in ipairs({{'Parry','Auto Parry'},{'SonicSway','Auto Sonic Sway'},{'BeamDeflect','Auto Beam Deflect'}})do
         local mode,title=entry[1],entry[2]
-        button(mode,title..': NEEDS CALIBRATION',0,36+(index-1)*36,0.65,function()d.Status(title..' is not active yet. Record manual examples first; no automatic F is sent.')end)
+        if mode=='BeamDeflect'then
+            b.Button=button(mode,title..': OFF (TEST)',0,36+(index-1)*36,0.65,function()b.SetEnabled(not b.Enabled)end)
+        else
+            button(mode,title..': NEEDS CALIBRATION',0,36+(index-1)*36,0.65,function()d.Status(title..' is not active yet. Record manual examples first; no automatic F is sent.')end)
+        end
         button('Record'..mode,'Record '..mode,0.65,36+(index-1)*36,0.35,function()d.Start(mode)end)
     end
-    button('Stop','Stop / Save',0,148,1/3,function()d.Stop('User stopped')end)
-    button('Success','Mark SUCCESS',1/3,148,1/3,function()d.Log('user_outcome','success')end)
-    button('Miss','Mark MISS',2/3,148,1/3,function()d.Log('user_outcome','miss')end)
+    button('Stop','Stop / Save',0,148,1/3,function()d.Stop('User stopped');b.SetEnabled(false)end)
+    button('Success','Mark SUCCESS',1/3,148,1/3,function()d.Log('user_outcome','success');if b.Enabled then b.Log('user_outcome','success');b.Save()end end)
+    button('Miss','Mark MISS',2/3,148,1/3,function()d.Log('user_outcome','miss');if b.Enabled then b.Log('user_outcome','miss');b.Save()end end)
     d.Label=create('TextLabel',{Position=UDim2.fromOffset(14,184),Size=UDim2.new(1,-28,0,38),BackgroundTransparency=1,
-        Text='Passive recorder only. Three separate actions; automatic timing requires calibration.',Font=Enum.Font.Gotham,TextSize=10,
+        Text='Beam: 60-second, one-attacker test; OFF by default. Parry / Sonic Sway still need calibration.',Font=Enum.Font.Gotham,TextSize=10,
         TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left},card)
 end
 -- END COMBAT DEFENSE CALIBRATION
@@ -22565,7 +22710,7 @@ function controller.Unload()
 		end
 	end
 	step("server browser",qolState.ServerNavigation.StopServerBrowser)
-	step("combat defense recorder",function()configStore.CombatDefense.Stop('Hub unloaded')end)
+	step("combat defense recorder",function()configStore.CombatDefense.Stop('Hub unloaded');configStore.CombatDefense.Beam.Stop('Hub unloaded')end)
 	step("reload request",function()
 		local state=configStore.Reload
 		state.Serial+=1;state.Busy=false

@@ -19290,6 +19290,12 @@ function autoTransformState.ResourceReady(selected, forceScan)
 		return true, "Ki full"
 	end
 	local fatigue, visibleBar = autoTransformState.ReadFatiguePercent(forceScan)
+	-- An absent fatigue bar is ready, including after a rejected request.
+	-- Kaioken's separate live active-state guard prevents level-up requests.
+	if not visibleBar then
+		if string.lower(selected):gsub("[^%a]", "")=="kaioken" then autoTransformState.KaiokenRequestedCharacter=nil end
+		return true, "No fatigue bar; ready"
+	end
 	if string.lower(selected):gsub("[^%a]", "")=="kaioken"
 		and autoTransformState.KaiokenRequestedCharacter==localPlayer.Character then
 		if visibleBar and fatigue and fatigue>1 then
@@ -19298,7 +19304,6 @@ function autoTransformState.ResourceReady(selected, forceScan)
 			return false, "Kaioken: waiting for fatigue cycle"
 		end
 	end
-	if not visibleBar then return true, "No fatigue bar; ready" end
 	if fatigue == nil then return false, "Fatigue unavailable" end
 	if fatigue > 1 then return false, string.format("Fatigue %.1f%% > 1%%", fatigue) end
 	return true, "Fatigue ready"
@@ -19348,13 +19353,24 @@ function autoTransformState.FormBlockReason(selected,character,coreStats,activeF
 	local sub=coreStats:FindFirstChild("SubForm")
 	local subForm=sub and tostring(sub.Value)
 	local run=autoTransformState.FiniteNumber(character:GetAttribute("KaiokenRun"))
-	if isKaioken(activeForm)or(subForm and isKaioken(subForm))or(run and run>0)then
+	local levelValue=character:FindFirstChild("Kaioken")
+	local level=levelValue and levelValue:IsA("ValueBase")and autoTransformState.FiniteNumber(levelValue.Value)
+	if isKaioken(activeForm)or(subForm and isKaioken(subForm))or(run and run>0)
+		or character:GetAttribute("State_Kaioken")==true or(level and level>0)then
 		-- Observing Kaioken active acknowledges the previous request. Once its
 		-- own state clears, fatigue gates the next activation, not the main form.
 		autoTransformState.KaiokenRequestedCharacter=nil
 		return "Active: Kaioken"
 	end
 	if subForm and subForm~="None" and subForm~="" then return "Subform: "..subForm:sub(1,30)end
+	-- A sent request can be rejected (e.g. during collapse). Retry only after
+	-- the normal cooldown AND explicit inactive signals, never on timeout alone.
+	if run==0 and subForm and(subForm=="None"or subForm=="")
+		and(not levelValue or(level and level<=0))
+		and autoTransformState.KaiokenRequestedCharacter==character
+		and os.clock()-(autoTransformState.KaiokenRequestedAt or os.clock())>=autoTransformState.RetryDelay then
+		autoTransformState.KaiokenRequestedCharacter=nil
+	end
 	if activeForm~="None" and activeForm~="" and(run~=0 or subForm==nil)then
 		return "Waiting for Kaioken state"
 	end
@@ -19593,6 +19609,7 @@ function autoTransformState.Update(deltaTime)
 		-- cannot stack before fatigue rises; keep Auto Form enabled throughout.
 		if ok and string.lower(selected):gsub("[^%a]", "")=="kaioken" then
 			autoTransformState.KaiokenRequestedCharacter=character
+			autoTransformState.KaiokenRequestedAt=os.clock()
 			autoTransformState.Status = "Kaioken: waiting for fatigue cycle"
 		end
 		autoTransformState.Render()

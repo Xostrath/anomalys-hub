@@ -8008,8 +8008,10 @@ do
     end
     -- BEGIN BEAM DEFLECT TEST
     -- One user-confirmed wave-beam deflection at ~85 studs, not universal beam timing.
-    -- The 20Hz capture first observed firing 0.121s before F; replication/frames add uncertainty.
-    local b={Enabled=false,Held=false,Delay=0.12,Hold=0.30,Rows={},Cooldown=0}
+    -- Wave End moved ~249-251 studs/sec in the captured wave beam. This is a
+    -- per-beam starting estimate, refined by live motion, not a universal attack speed.
+    local b={Enabled=false,Held=false,Delay=0,Hold=0.30,Rows={},Cooldown=0,
+        Predictive=true,WaveSpeed=250,BlockLag=0.15,Margin=0.08,Radius=7,MaxBeamHold=3.5,Waves={}}
     d.Beam=b
     function b.Render()
         if b.Button then b.Button.Text='Auto Beam Deflect: '..(b.Enabled and 'ON (TEST)' or 'OFF (TEST)')end
@@ -8025,9 +8027,9 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function' and type(makefolder)=='function' and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_beam_auto_latest.json',HttpService:JSONEncode({version=2,place=game.PlaceId,
+            writefile(configStore.Root..'/defense_beam_auto_latest.json',HttpService:JSONEncode({version=3,place=game.PlaceId,
                 note='Experimental wave-beam input attempts, NOT confirmed deflections. One locked attacker. No network reporting.',
-                delay=b.Delay,hold=b.Hold,rows=b.Rows}))
+                delay=b.Delay,hold=b.Hold,maxBeamHold=b.MaxBeamHold,predictive=b.Predictive,waveSpeed=b.WaveSpeed,blockLag=b.BlockLag,margin=b.Margin,rows=b.Rows}))
         end)
         b.SaveFailed=not ok
     end
@@ -8040,6 +8042,8 @@ do
     function b.SetEnabled(enabled)
         if not enabled then
             b.Enabled=false;b.Pending=nil;b.Armed=nil
+            if b.EffectConnection then pcall(function()b.EffectConnection:Disconnect()end);b.EffectConnection=nil end
+            b.Waves={};b.AckAt=nil
             b.Release('disabled');b.Target=nil;b.Character=nil
             if b.Started then b.Log('stop','Disabled');b.Save()end
             b.Render();return
@@ -8052,6 +8056,16 @@ do
         if not target then d.Status('Stand within 100 studs of ONE beam attacker, then enable the test.');return end
         b.Character=char;b.Target=target;b.Rows={};b.Started=os.clock();b.Enabled=true;b.SaveFailed=false
         b.Pending=nil;b.Armed=nil;b.Cooldown=0
+        b.Waves={};b.AckAt=nil
+        b.EffectConnection=workspace.DescendantAdded:Connect(function(object)
+            if not b.Enabled or not b.Predictive then return end
+            local ok=pcall(function()
+                if object:IsA('BasePart')and object.Name=='Wave End'and #b.Waves<8 then
+                    b.Waves[#b.Waves+1]={object=object,born=os.clock()}
+                end
+            end)
+            if not ok then b.Log('effect_ignored','Unreadable Wave End')end
+        end)
         -- Enabling midway through a cast must not cause a late block.
         b.LastCharge=target:GetAttribute('State_ChargingBeam')==true
         b.LastFire=target:GetAttribute('State_FiringBeam')==true
@@ -8108,10 +8122,83 @@ do
         end
         return false
     end
+    function b.ArrivalDelay(distance,speed)
+        return math.max(0,(distance-b.Radius)/speed-b.BlockLag-b.Margin)
+    end
+    function b.SampleWaves(now)
+        if not b.Predictive then return end
+        local targetRoot=d.Root(b.Target)
+        for index=#b.Waves,1,-1 do
+            local wave=b.Waves[index]
+            local object=wave.object
+            if not object.Parent or now-wave.born>5 then table.remove(b.Waves,index)
+            else
+                local position=object.Position
+                if not wave.origin then
+                    -- Only newly spawned tips beside the locked attacker's origin qualify.
+                    if targetRoot and (position-targetRoot.Position).Magnitude<=20 then wave.origin=position
+                    elseif now-wave.born>0.15 then table.remove(b.Waves,index)end
+                end
+                if wave.origin then
+                    if wave.position and now>wave.time and now-wave.time<=0.15 then
+                        local velocity=(position-wave.position)/(now-wave.time)
+                        local speed=velocity.Magnitude
+                        if speed>=20 and speed<=2000 then wave.velocity=velocity;wave.samples=(wave.samples or 0)+1
+                        else wave.velocity=nil end
+                    else wave.velocity=nil end
+                    wave.position=position;wave.time=now
+                end
+            end
+        end
+    end
+    function b.RefineArrival(pending,now)
+        if not b.Predictive then return end
+        local own=d.Root(b.Character)
+        if not own then return end
+        if not pending.wave then
+            for _,wave in ipairs(b.Waves)do
+                if wave.origin and wave.born>=pending.fire-0.25 and wave.born<=pending.fire+0.25 then
+                    pending.wave=wave;break
+                end
+            end
+        end
+        local wave=pending.wave
+        if wave and not wave.object.Parent then pending.flight={reason='beam_effect_removed'};return end
+        if not wave or not wave.object.Parent or not wave.velocity or now-wave.time>0.1 then return end
+        local delta=own.Position-wave.position
+        local velocity=wave.velocity
+        -- Account for the local character moving toward/away from the projectile.
+        local ownVelocity=own.AssemblyLinearVelocity
+        if ownVelocity then velocity=velocity-ownVelocity end
+        local speed=velocity.Magnitude
+        if speed<20 then return end
+        local along=delta:Dot(velocity.Unit)
+        local miss=(delta-velocity.Unit*along).Magnitude
+        local facing=own.CFrame.LookVector:Dot(-wave.velocity.Unit)
+        local remaining=(along-b.Radius)/speed
+        local reason=along< -b.Radius and 'beam_already_passed' or miss>b.Radius and 'beam_trajectory_misses'
+            or facing<0.6 and 'not_facing_beam' or 'aim_ok'
+        pending.flight={reason=reason,distance=delta.Magnitude,along=along,miss=miss,facing=facing,
+            speed=speed,remaining=remaining,samples=wave.samples}
+        -- Recompute each frame; never count a visual intersection as a confirmed game hit.
+        pending.at=now+math.max(0,remaining-b.BlockLag-b.Margin)
+        pending.estimate='live_wave_motion'
+    end
     function b.Update()
         local now=os.clock()
-        if b.Held and (not b.Enabled or now>=b.ReleaseAt or b.Busy())then
-            if not b.Release('pulse ended')then b.Stop('F release failed; automation stopped');return end
+        if b.Enabled and b.AckAt and b.Character then
+            if b.Character:GetAttribute('State_Blocking')then
+                local observed=now-b.AckAt
+                if observed>=0.02 and observed<=0.4 then
+                    b.BlockLag=math.clamp(b.BlockLag*0.75+observed*0.25,0.04,0.3)
+                    b.Log('block_ack',{observed=observed,estimate=b.BlockLag})
+                end
+                b.AckAt=nil
+            elseif now-b.AckAt>0.5 then b.AckAt=nil end
+        end
+        local castEnded=b.Predictive and b.Held and b.Target and b.Target:GetAttribute('State_FiringBeam')~=true
+        if b.Held and (not b.Enabled or now>=b.ReleaseAt or b.Busy()or castEnded)then
+            if not b.Release(castEnded and 'beam ended' or 'hold ended')then b.Stop('F release failed; automation stopped');return end
             b.Save()
         end
         if not b.Enabled then return end
@@ -8120,6 +8207,7 @@ do
         if unloaded or localPlayer.Character~=b.Character or not hum or hum.Health<=0
             or not b.Target.Parent or not otherHum or otherHum.Health<=0 then b.Stop('Character or attacker changed');return end
         if now-b.Started>=60 then b.Stop('60-second test finished');return end
+        b.SampleWaves(now)
         if b.Held and b.Character:GetAttribute('State_Stunned')then b.Release('stunned');b.Save()end
         local charge=b.Target:GetAttribute('State_ChargingBeam')==true
         local firing=b.Target:GetAttribute('State_FiringBeam')==true
@@ -8132,7 +8220,9 @@ do
             local busy,busyReason=b.Busy()
             local known=b.KnownBeam()
             if b.Armed and known and aimed and not busy then
-                b.Pending={at=now+b.Delay,fire=now,aim=aim};b.Log('firing',{distance=distance,aim=aim,chargeDuration=now-b.Armed})
+                local delay=b.Predictive and b.ArrivalDelay(distance,b.WaveSpeed)or b.Delay
+                b.Pending={at=now+delay,fire=now,aim=aim,estimate=b.Predictive and 'recorded_wave_speed' or 'fixed_test_delay'}
+                b.Log('firing',{distance=distance,aim=aim,chargeDuration=now-b.Armed,plannedDelay=delay,estimate=b.Pending.estimate})
             else
                 local reasons={}
                 if not b.Armed then table.insert(reasons,'no_observed_charge')end
@@ -8149,10 +8239,18 @@ do
         if pending and (not firing or busy)then
             b.Pending=nil;b.Skip('pending',{not firing and 'cast_ended' or busyReason});return
         end
+        if pending then
+            b.RefineArrival(pending,now)
+            if pending.flight and pending.flight.reason~='aim_ok'then
+                b.Pending=nil;b.Skip('trajectory',{pending.flight.reason},{flight=pending.flight});return
+            end
+        end
         if pending and now>=pending.at then
             b.Pending=nil -- Consume the attempt even if unsafe; never retry/spam the same beam.
             local aimed,distance,aim=b.Aimed()
+            if pending.flight then aim=pending.flight;aimed=aim.reason=='aim_ok';distance=aim.distance end
             local details={aimAtFire=pending.aim,aimAtPress=aim,lateness=now-pending.at,
+                estimate=pending.estimate,flight=pending.flight,blockLag=b.BlockLag,
                 sinceFiring=now-pending.fire,heldByTest=b.Held,cooldownRemaining=math.max(0,b.Cooldown-now),
                 fAlreadyDown=UserInputService:IsKeyDown(Enum.KeyCode.F),
                 blockingReported=b.Character:GetAttribute('State_Blocking')or false,
@@ -8167,9 +8265,10 @@ do
             if details.blockingReported then table.insert(reasons,'blocking_reported')end
             if details.stunnedReported then table.insert(reasons,'stunned_reported')end
             if #reasons>0 then b.Skip('press',reasons,details);return end
-            d.KeyOwner=b;b.Held=true;b.ReleaseAt=now+b.Hold;b.Cooldown=now+1
+            d.KeyOwner=b;b.Held=true;b.ReleaseAt=now+(b.Predictive and b.MaxBeamHold or b.Hold);b.Cooldown=now+1
             local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,true,Enum.KeyCode.F,false,game)
             if not ok then b.Stop('F input unavailable');return end
+            b.AckAt=now
             details.health=hum.Health;details.distance=distance
             b.Log('F_down',details);b.Save()
             d.Status('BEAM TEST // F sent; outcome unverified'..(b.SaveFailed and ' // Log save failed' or ''))

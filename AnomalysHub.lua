@@ -13493,7 +13493,7 @@ function npcSafety.UpdateDirectLightTelemetry()
 		settingSummary = diagnostic.LastBenchmarkSummary .. (diagnostic.BenchmarkReportSaved and " | REPORT SAVED" or " | REPORT UNSAVED")
 	end
 	if diagnostic.Startup and diagnostic.Startup.OriginalLevel then
-		settingSummary = string.format("FIRST HIT RETRY | %.2fs swing delay x%d", diagnostic.SwingDelay, diagnostic.Pairs)
+		settingSummary = string.format("FIRST HIT OPENER | %.2fs swing delay x%d", diagnostic.SwingDelay, diagnostic.Pairs)
 	end
 	diagnostic.TelemetryLabel.Text = string.format(
 		"%s | %d req (%.1f/s) | %.3fs interval | %.1fs\nHP %s -> %s | loss %.1f | %d damage events (%.1f/s)\n%s",
@@ -14116,6 +14116,18 @@ function npcSafety.SetDirectLightTarget(target)
 		Confirmed=false, ProbeUsed=false, ReadyElapsed=0, RequestsAtStart=diagnostic.RequestsSent,
 	} or nil
 	if not diagnostic.BenchmarkRunning then npcSafety.FirstHit.Begin(target, humanoid) end
+	-- First-hit opener (timeline evidence 2026-10-17): with a 0.30 s swing->hit
+	-- gap (level 1) the very first request landed on 6/6 fresh targets ~0.5 s
+	-- after READY; with 0-delay presets it took 14-119 requests (up to 8.8 s).
+	-- The real client also waits the swing windup (~0.3 s) before the hit.
+	-- Open every fresh Below target at level 1, then restore the held preset on
+	-- the first observed HP loss (RestoreDirectLightStartup). Not saved as a preset.
+	local startup = diagnostic.Startup
+	if startup and npcSafety.PositionMode == "Below" and diagnostic.Level ~= 1 then
+		startup.ProbeUsed, startup.OriginalLevel = true, diagnostic.Level
+		npcSafety.ApplyDirectLightLevel(1)
+		npcSafety.FirstHit.Event("OPENER level 1 (0.30s windup) until first damage; then level " .. tostring(startup.OriginalLevel))
+	end
 	diagnostic.StartHealth = humanoid.Health
 	diagnostic.CurrentHealth = humanoid.Health
 	diagnostic.LastHealth = humanoid.Health

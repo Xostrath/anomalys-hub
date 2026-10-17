@@ -8386,7 +8386,7 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v12-close-dash-lead',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v13-dash-animation-pause',RecoveryOpportunitySpan=0.75,
         DashAnimation='88929057646501',DashPairWindow=0.15,
         -- v11's three 10-17 stud starts waited 150-200ms before F and took damage.
         -- Try earlier close-cue coverage; keep successful far-approach settings.
@@ -8577,7 +8577,7 @@ do
         if not cue or not p.Enabled or not p.DashDefense then return end
         if now-cue.at>p.DashPairWindow then p.Skip('dash_cue_stale',{animation=p.DashAnimation});return end
         local speed,position=cue.track.Speed,cue.track.TimePosition
-        if type(speed)~='number'or speed~=speed or speed<=0 or speed==math.huge
+        if type(speed)~='number'or speed~=speed or speed<0 or speed==math.huge
             or type(position)~='number'or position~=position or position<0 or position==math.huge then
             p.Skip('invalid_dash_clock',{animation=p.DashAnimation});return
         end
@@ -8994,12 +8994,20 @@ do
                 p.Skip('recovery_window_expired',{animation=pending.id,taps=pending.taps});return
             end
             local speed,position=pending.track.Speed,pending.track.TimePosition
-            if pending.track.IsPlaying==false or type(speed)~='number'or speed<=0
-                or type(position)~='number'or position<pending.position-0.02 then
+            if pending.track.IsPlaying==false or type(speed)~='number'or speed~=speed or speed==math.huge
+                or speed<0 or(speed==0 and not pending.dash)
+                or type(position)~='number'or position~=position or position==math.huge or position<pending.position-0.02 then
                 p.Pending=nil;defenseQueue.Cancel(p);p.Skip('attack_cancelled_or_clock_reset',{animation=pending.id});return
             end
+            -- Captured DashModule pauses Fly Charge at Boost while hit scans
+            -- continue. For dash ONLY, live dash states/motion and the existing
+            -- absolute expiry govern validity, not advancement of this pose.
+            if pending.dash and (speed==0)~=(pending.dashPaused==true)then
+                pending.dashPaused=speed==0
+                p.Log('dash_animation_pause',{paused=pending.dashPaused,position=position,speed=speed})
+            end
             if position~=pending.position then pending.clockAt=now
-            elseif now-pending.clockAt>0.25 and(pending.phase>0 or pending.recoveryUntil or pending.dash)then
+            elseif not pending.dash and now-pending.clockAt>0.25 and(pending.phase>0 or pending.recoveryUntil)then
                 p.Pending=nil;defenseQueue.Cancel(p);p.Skip('animation_clock_stalled',{animation=pending.id});return
             end
             if pending.recoveryUntil then

@@ -7895,7 +7895,8 @@ do
             if stateCount>=24 then break end
             local lower=key:lower()
             if lower:find('block') or lower:find('parry') or lower:find('sway') or lower:find('attack') or lower:find('stun')
-                or lower:find('beam') or lower:find('evad') or lower:find('deflect') or lower:find('posture')then
+                or lower:find('beam') or lower:find('evad') or lower:find('deflect') or lower:find('posture')
+                or lower:find('dash') or lower:find('airborne') or lower:find('grounded')then
                 if type(value)=='boolean' or type(value)=='number' then result.states[d.Text(key)]=value
                 elseif type(value)=='string' then result.states[d.Text(key)]=d.Text(value)end
                 stateCount+=1
@@ -8330,7 +8331,8 @@ do
     -- First punch: earlier user-confirmed sequence began with F ~0.003s after the cue;
     -- attribution was less certain because later taps followed. Second punch: one confirmed
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
-    local p={Enabled=false,Held=false,Rows={},Cooldown=0,Build='combo-recovery-v1',
+    local p={Enabled=false,Held=false,Rows={},Cooldown=0,Build='combo-recovery-v2-air-context',
+        RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
         ['99346182354558']={phase=0,hold=0.12,reach=12,facing=0.25,label='first punch / provisional'},
         ['137006829454244']={phase=0.31,hold=0.16,reach=12,facing=0.25,label='second punch / confirmed manual example'},
@@ -8356,7 +8358,8 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=4,build=p.Build,place=game.PlaceId,run=p.RunId,
+            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=5,build=p.Build,place=game.PlaceId,run=p.RunId,
+                recoveryHold=p.RecoveryHold,recoveryGap=p.RecoveryGap,recoveryLimit=p.RecoveryLimit,
                 burstLimit=p.BurstLimit,burstSpan=p.BurstSpan,burstPhaseStep=p.BurstPhaseStep,droppedRows=p.DroppedRows or 0,
                 observationsFile='defense_parry_observed_latest.json',
                 note='Experimental five-punch profiles and bounded recovery taps, NOT confirmed successes. One locked attacker; no network reporting.',rows=p.Rows}))
@@ -8392,20 +8395,52 @@ do
             distance=own and other and (own.Position-other.Position).Magnitude or nil,
             selfStunned=p.Character:GetAttribute('State_Stunned')==true,
             attackerStunned=p.Target:GetAttribute('State_Stunned')==true,
+            selfMotion=p.Motion(p.Character),attackerMotion=p.Motion(p.Target),
             lightAttacking=p.Target:GetAttribute('State_LightAttacking')==true,
             chainAttacking=p.Target:GetAttribute('State_ChainAttacking')==true}
         p.ObservationDirty=true
     end
+    function p.Motion(model)
+        local root=d.Root(model)
+        local hum=model and model:FindFirstChildOfClass('Humanoid')
+        if not root or not hum then return nil end
+        local state=type(hum.GetState)=='function'and hum:GetState()or nil
+        return {velocity=root.AssemblyLinearVelocity and d.Vector(root.AssemblyLinearVelocity)or nil,
+            humanoidState=state and d.Text(state.Name)or nil,
+            floorMaterial=hum.FloorMaterial and d.Text(hum.FloorMaterial.Name)or nil}
+    end
+    function p.ObserveResponses(now)
+        for _,name in ipairs({'State_Blocking','State_SonicSway'})do
+            local active=p.Character:GetAttribute(name)==true
+            if active and not p.ResponseStates[name]then
+                local candidates={}
+                for _,press in ipairs(p.InputHistory)do
+                    local age=now-press.at
+                    if age>=0 and age<=0.75 then
+                        candidates[#candidates+1]={animation=press.id,tap=press.tap,age=age,
+                            recovery=press.recovery,hold=press.hold}
+                    end
+                end
+                -- These are possible preceding inputs, not a unique causal match,
+                -- server acceptance timestamp, or one-way latency measurement.
+                p.Log('defense_state_observed',{state=name,candidateInputs=candidates,
+                    held=p.Held,stunnedReported=p.Character:GetAttribute('State_Stunned')==true})
+            end
+            p.ResponseStates[name]=active
+        end
+    end
     function p.Observe()
         if not p.Enabled or not p.Observations or p.ObservationError then return end
         local now=os.clock()
+        p.ObserveResponses(now)
         if now-(p.LastObservationFrame or -math.huge)>=0.05 then
             p.LastObservationFrame=now
             local capture=p.Observations
             if #capture.frames<1200 then
                 capture.frames[#capture.frames+1]={t=now-p.Started,self=d.Actor(p.Character),attacker=d.Actor(p.Target),
                     inputHeld=p.Held,manualOrSyntheticF=UserInputService:IsKeyDown(Enum.KeyCode.F),
-                    pending=p.Pending and p.Pending.id or nil}
+                    pending=p.Pending and p.Pending.id or nil,
+                    selfMotion=p.Motion(p.Character),attackerMotion=p.Motion(p.Target)}
             else capture.droppedFrames+=1 end
             p.ObservationDirty=true
         end
@@ -8430,7 +8465,7 @@ do
             -- A slow frame must still leave a real key-up gap; never catch up by
             -- releasing and repressing F in the same update.
             if p.Pending and p.Pending.burst and p.Pending.taps>0 then
-                p.Pending.notBefore=math.max(p.Pending.notBefore or 0,os.clock()+p.BurstGap)
+                p.Pending.notBefore=math.max(p.Pending.notBefore or 0,os.clock()+(p.Pending.gap or p.BurstGap))
             end
             p.Log('F_up',reason)
         end
@@ -8465,6 +8500,8 @@ do
         if not animator then d.Status('PARRY TEST // attacker animation cues unavailable.');return end
         p.Character=char;p.Target=target;p.Rows={};p.DroppedRows=0;p.Started=os.clock();p.Cooldown=0;p.SaveFailed=false
         p.Pending=nil;p.LastTrack=nil;p.Enabled=true
+        p.InputHistory={};p.ResponseStates={State_Blocking=char:GetAttribute('State_Blocking')==true,
+            State_SonicSway=char:GetAttribute('State_SonicSway')==true}
         p.RunId=tostring(p.Started);p.ObservationError=nil;p.ObservationSaveFailed=false
         p.ObservedTrack=nil;p.ObservedAt=nil;p.LastObservationFrame=nil;p.LastObservationSave=p.Started
         p.Observations={version=1,build=p.Build,run=p.RunId,place=game.PlaceId,framesPerSecond=20,
@@ -8477,7 +8514,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // 5 combo profiles; max 3 recovery taps // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // recovery v2: max 2 longer holds; air/dash capture // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -8601,24 +8638,30 @@ do
         if now<pending.at then return end
         p.Pending=nil;defenseQueue.Cancel(p) -- Only explicitly bounded bursts may schedule another tap.
         local stunned=p.Character:GetAttribute('State_Stunned')==true
+        pending.recovery=pending.recovery or stunned
         pending.burst=pending.burst or stunned
+        local limit=pending.recovery and p.RecoveryLimit or p.BurstLimit
+        local hold=pending.recovery and p.RecoveryHold or(pending.burst and p.BurstHold or pending.profile.hold)
+        pending.gap=pending.recovery and p.RecoveryGap or p.BurstGap
         local details={animation=pending.id,sinceAnimation=now-pending.started,lateness=now-pending.at,
             distance=distance,health=health,speed=pending.speed,phase=pending.phase,
-            stunnedReported=stunned,burst=pending.burst,tap=pending.taps+1,profile=pending.profile.label}
-        local skip=details.lateness>0.1 and 'late_frame' or d.KeyOwner and 'F_owned_by_defense'
+            stunnedReported=stunned,recovery=pending.recovery or false,plannedHold=hold,
+            burst=pending.burst,tap=pending.taps+1,profile=pending.profile.label}
+        local skip=pending.taps>=limit and 'recovery_tap_limit' or details.lateness>0.1 and 'late_frame' or d.KeyOwner and 'F_owned_by_defense'
             or(pending.taps==0 and now<p.Cooldown)and 'cooldown' or UserInputService:IsKeyDown(Enum.KeyCode.F)and 'F_already_down'
             or p.Character:GetAttribute('State_Blocking')and 'blocking_reported'
         if skip then p.Skip(skip,details);return end
-        local hold=pending.burst and p.BurstHold or pending.profile.hold
         d.KeyOwner=p;p.Held=true;p.ReleaseAt=now+hold
         if pending.taps==0 then p.Cooldown=now+0.3 end
         local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,true,Enum.KeyCode.F,false,game)
         if not ok then p.Stop('F input unavailable');return end
         pending.taps+=1
-        if pending.burst and pending.taps<p.BurstLimit then
+        p.InputHistory[#p.InputHistory+1]={at=now,id=pending.id,tap=pending.taps,recovery=pending.recovery or false,hold=hold}
+        if #p.InputHistory>8 then table.remove(p.InputHistory,1)end
+        if pending.burst and pending.taps<limit then
             pending.expires=pending.expires or(now+p.BurstSpan)
             pending.phase+=p.BurstPhaseStep;pending.dueAt=nil
-            pending.notBefore=now+hold+p.BurstGap
+            pending.notBefore=now+hold+pending.gap
             pending.at=math.max(now+(pending.phase-pending.position)/pending.speed,pending.notBefore)
             p.Pending=pending
         end

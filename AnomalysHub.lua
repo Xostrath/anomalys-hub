@@ -10423,7 +10423,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -28, 0, 17),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
-	Text = "Applies to normal flight and Left Shift + W boost flight.",
+	Text = "Only affects Left Shift + W boost flight; slow flight stays native.",
 	TextColor3 = colors.Muted,
 	TextSize = 10,
 	TextXAlignment = Enum.TextXAlignment.Left,
@@ -10758,13 +10758,13 @@ local function applyFlightSpeed()
 		controller.FlightWasBoosting = true
 		return true
 	end
-	-- Normal (unboosted) flight also flies at the slider speed (user request,
-	-- 2026-10-17; previously forced back to the native 15). currentSpeed drives
-	-- unboosted flight, so hold both fields at the chosen speed.
-	session.speed = flightSpeed
-	session.currentSpeed = flightSpeed
+	-- Repair sessions affected by older versions and preserve native slow flight.
+	-- (User confirmed 2026-10-17: only boosted flight uses the slider speed.)
+	if controller.FlightWasBoosting or tonumber(session.currentSpeed) and session.currentSpeed > 15 then
+		session.currentSpeed = 15
+	end
 	controller.FlightWasBoosting = false
-	return true
+	return false
 end
 
 local function setFlightSpeed(value)
@@ -13101,7 +13101,22 @@ local function applyUpdatedAutofarmMovement(characterRoot, desiredPosition, move
 		return false
 	end
 	npcLinearVelocity.VectorVelocity = Vector3.zero
-	characterRoot.CFrame = CFrame.new(desiredPosition) * characterRoot.CFrame.Rotation
+	-- The server rubber-bands long instant teleports: the first-hit timeline
+	-- showed the character snapped back ~1,440 studs to its start every ~0.5 s
+	-- until the jump was accepted (2-7 s), and every hit in between was wasted.
+	-- Cap per-frame travel at the glide speed (the server-tolerated rate the
+	-- normal path already uses); short adjustments (rise/settle) stay instant.
+	local now = os.clock()
+	local frameTime = math.clamp(now - (npcSafety.LastUpdatedMoveAt or now), 0, 0.1)
+	npcSafety.LastUpdatedMoveAt = now
+	local position = desiredPosition
+	if movementDistance > 15 and type(speed) == "number" and speed > 0 then
+		local step = math.max(speed * frameTime, 1)
+		if step < movementDistance then
+			position = characterRoot.Position + movementDelta.Unit * step
+		end
+	end
+	characterRoot.CFrame = CFrame.new(position) * characterRoot.CFrame.Rotation
 	characterRoot.AssemblyLinearVelocity = Vector3.zero
 	characterRoot.AssemblyAngularVelocity = Vector3.zero
 	return true
@@ -13617,7 +13632,7 @@ end
 
 function npcSafety.FirstHit.Event(text)
 	local current = npcSafety.FirstHit.Current
-	if not current or #current.Lines >= 40 then return end
+	if not current or #current.Lines >= 80 then return end
 	table.insert(current.Lines, string.format("+%.2fs %s", os.clock() - current.StartedAt, text))
 end
 

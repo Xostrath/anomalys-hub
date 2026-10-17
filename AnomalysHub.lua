@@ -8007,6 +8007,45 @@ do
         d.Status('Recording '..mode..' // attacker: '..d.Text(target.Name)..' // manually use F; 60 seconds.')
     end
     -- BEGIN BEAM DEFLECT TEST
+    -- One bounded request per mode. Earliest expiring due request wins; an active
+    -- hold is never interrupted to manufacture another block edge. Each winner
+    -- runs its full validation again before input. No ping subtraction for M1s:
+    -- their recorded phases already include the observed client timing.
+    local defenseQueue={Requests={},Serial=0}
+    d.Scheduler=defenseQueue
+    function defenseQueue.Cancel(owner)
+        defenseQueue.Requests[owner]=nil
+    end
+    function defenseQueue.Request(owner,at,expires)
+        local entry=defenseQueue.Requests[owner]
+        if not entry then
+            defenseQueue.Serial=defenseQueue.Serial+1
+            entry={owner=owner,serial=defenseQueue.Serial}
+            defenseQueue.Requests[owner]=entry
+        end
+        entry.at=at;entry.expires=expires
+        if d.KeyOwner and d.KeyOwner~=owner and os.clock()>=at and not entry.reported then
+            entry.reported=true
+            owner.Log('queued',{reason='F_owned_by_other_defense',expiresIn=math.max(0,expires-os.clock())})
+        end
+    end
+    function defenseQueue.Drain()
+        local now=os.clock()
+        local nextRequest
+        for owner,entry in pairs(defenseQueue.Requests)do
+            if not owner.Enabled or not owner.Pending or unloaded then
+                defenseQueue.Cancel(owner)
+            elseif now>=entry.at and (not d.KeyOwner or now>entry.expires)then
+                if not nextRequest or entry.expires<nextRequest.expires
+                    or(entry.expires==nextRequest.expires and entry.serial<nextRequest.serial)then nextRequest=entry end
+            end
+        end
+        if not nextRequest then return end
+        local owner=nextRequest.owner
+        defenseQueue.Cancel(owner)
+        local ok,err=pcall(owner.Update,true)
+        if not ok then owner.Stop('Error: '..d.Text(err))end
+    end
     -- One user-confirmed wave-beam deflection at ~85 studs, not universal beam timing.
     -- Wave End moved ~249-251 studs/sec in the captured wave beam. This is a
     -- per-beam starting estimate, refined by live motion, not a universal attack speed.
@@ -8041,6 +8080,7 @@ do
     end
     function b.SetEnabled(enabled)
         if not enabled then
+            defenseQueue.Cancel(b)
             b.Enabled=false;b.Pending=nil;b.Armed=nil
             if b.EffectConnection then pcall(function()b.EffectConnection:Disconnect()end);b.EffectConnection=nil end
             b.Waves={};b.AckAt=nil
@@ -8153,25 +8193,32 @@ do
     end
     function b.RefineArrival(pending,now)
         if not b.Predictive then return end
+        pending.flight=nil -- Never act on geometry retained from a stale velocity sample.
         local own=d.Root(b.Character)
         if not own then return end
-        if not pending.wave then
-            for _,wave in ipairs(b.Waves)do
-                if wave.origin and wave.born>=pending.fire-0.25 and wave.born<=pending.fire+0.25 then
-                    pending.wave=wave;break
-                end
+        local candidate,count=nil,0
+        for _,wave in ipairs(b.Waves)do
+            if wave.origin and wave.object.Parent and wave.born>=pending.fire-0.25 and wave.born<=pending.fire+0.25 then
+                candidate=wave;count=count+1
             end
         end
+        if count>1 then pending.flight={reason='beam_origin_ambiguous'};return end
+        if not pending.wave then pending.wave=candidate end
         local wave=pending.wave
         if wave and not wave.object.Parent then pending.flight={reason='beam_effect_removed'};return end
-        if not wave or not wave.object.Parent or not wave.velocity or now-wave.time>0.1 then return end
+        if not wave or not wave.object.Parent or not wave.velocity or now-wave.time>0.1 then
+            -- Before any live sample, retain the recorded-speed estimate. Once
+            -- measured flight is lost, do not silently reuse its stale deadline.
+            if pending.estimate=='live_wave_motion'then pending.flight={reason='beam_motion_unavailable'}end
+            return
+        end
         local delta=own.Position-wave.position
         local velocity=wave.velocity
         -- Account for the local character moving toward/away from the projectile.
         local ownVelocity=own.AssemblyLinearVelocity
         if ownVelocity then velocity=velocity-ownVelocity end
         local speed=velocity.Magnitude
-        if speed<20 then return end
+        if speed<20 then pending.flight={reason='beam_relative_motion_uncertain'};return end
         local along=delta:Dot(velocity.Unit)
         local miss=(delta-velocity.Unit*along).Magnitude
         local facing=own.CFrame.LookVector:Dot(-wave.velocity.Unit)
@@ -8181,10 +8228,10 @@ do
         pending.flight={reason=reason,distance=delta.Magnitude,along=along,miss=miss,facing=facing,
             speed=speed,remaining=remaining,samples=wave.samples}
         -- Recompute each frame; never count a visual intersection as a confirmed game hit.
-        pending.at=now+math.max(0,remaining-b.BlockLag-b.Margin)
+        if not pending.dueAt then pending.at=now+math.max(0,remaining-b.BlockLag-b.Margin)end
         pending.estimate='live_wave_motion'
     end
-    function b.Update()
+    function b.Update(dispatch)
         local now=os.clock()
         if b.Enabled and b.AckAt and b.Character then
             if b.Character:GetAttribute('State_Blocking')then
@@ -8207,7 +8254,7 @@ do
         if unloaded or localPlayer.Character~=b.Character or not hum or hum.Health<=0
             or not b.Target.Parent or not otherHum or otherHum.Health<=0 then b.Stop('Character or attacker changed');return end
         if now-b.Started>=60 then b.Stop('60-second test finished');return end
-        b.SampleWaves(now)
+        if not dispatch then b.SampleWaves(now)end
         if b.Held and b.Character:GetAttribute('State_Stunned')then b.Release('stunned');b.Save()end
         local charge=b.Target:GetAttribute('State_ChargingBeam')==true
         local firing=b.Target:GetAttribute('State_FiringBeam')==true
@@ -8245,8 +8292,12 @@ do
                 b.Pending=nil;b.Skip('trajectory',{pending.flight.reason},{flight=pending.flight});return
             end
         end
+        if not pending then defenseQueue.Cancel(b);return end
+        if now>=pending.at and not pending.dueAt then pending.dueAt=pending.at end
+        defenseQueue.Request(b,pending.at,pending.at+0.15)
+        if not dispatch then return end
         if pending and now>=pending.at then
-            b.Pending=nil -- Consume the attempt even if unsafe; never retry/spam the same beam.
+            b.Pending=nil;defenseQueue.Cancel(b) -- One attempt per cast, including expired requests.
             local aimed,distance,aim=b.Aimed()
             if pending.flight then aim=pending.flight;aimed=aim.reason=='aim_ok';distance=aim.distance end
             local details={aimAtFire=pending.aim,aimAtPress=aim,lateness=now-pending.at,
@@ -8274,18 +8325,14 @@ do
             d.Status('BEAM TEST // F sent; outcome unverified'..(b.SaveFailed and ' // Log save failed' or ''))
         end
     end
-    connect(RunService.Heartbeat,function()
-        local ok,err=pcall(b.Update)
-        if not ok then b.Stop('Error: '..d.Text(err))end
-    end)
     -- END BEAM DEFLECT TEST
     -- BEGIN AUTO PARRY TEST
     -- First punch: earlier user-confirmed sequence began with F ~0.003s after the cue;
     -- attribution was less certain because later taps followed. Second punch: one confirmed
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     local p={Enabled=false,Held=false,Rows={},Cooldown=0,Profiles={
-        ['99346182354558']={phase=0,hold=0.12,label='first punch / provisional'},
-        ['137006829454244']={phase=0.31,hold=0.16,label='second punch / confirmed manual example'},
+        ['99346182354558']={phase=0,hold=0.12,reach=12,facing=0.25,label='first punch / provisional'},
+        ['137006829454244']={phase=0.31,hold=0.16,reach=12,facing=0.25,label='second punch / confirmed manual example'},
     }}
     d.Parry=p
     function p.Render()
@@ -8301,7 +8348,7 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=1,place=game.PlaceId,
+            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=2,place=game.PlaceId,
                 note='Experimental two-punch parry attempts, NOT confirmed successes. One locked attacker; no network reporting.',rows=p.Rows}))
         end)
         p.SaveFailed=not ok
@@ -8318,6 +8365,7 @@ do
     end
     function p.SetEnabled(enabled)
         if not enabled then
+            defenseQueue.Cancel(p)
             p.Enabled=false;p.Pending=nil
             if p.Connection then pcall(function()p.Connection:Disconnect()end);p.Connection=nil end
             p.Release('disabled');p.Target=nil;p.Character=nil;p.LastTrack=nil
@@ -8350,7 +8398,7 @@ do
         p.Log('stop_reason',reason);p.SetEnabled(false)
         d.Status('PARRY TEST // '..reason..(p.SaveFailed and ' // Log save failed' or ''))
     end
-    function p.Check()
+    function p.Check(pending)
         if unloaded or localPlayer.Character~=p.Character then return false,'character_changed',true end
         local hum=p.Character and p.Character:FindFirstChildOfClass('Humanoid')
         local targetHum=p.Target and p.Target:FindFirstChildOfClass('Humanoid')
@@ -8363,9 +8411,20 @@ do
         if not own or not other then return false,'missing_root' end
         local delta=own.Position-other.Position
         local distance=delta.Magnitude
-        if distance<0.1 or distance>12 then return false,'outside_melee_range' end
-        if other.CFrame.LookVector:Dot(delta.Unit)<0.25 then return false,'attacker_not_facing_you' end
-        if own.CFrame.LookVector:Dot(-delta.Unit)<0.25 then return false,'not_facing_attacker' end
+        local profile=pending and pending.profile
+        local reach=profile and profile.reach or 12
+        local facing=profile and profile.facing or 0.25
+        -- Short relative-motion forecast to the scheduled input, not a claim about
+        -- server hitboxes. Re-evaluate on every frame; do not reject a future swing
+        -- just because the attacker is currently outside its conservative envelope.
+        if pending and pending.at>os.clock()and own.AssemblyLinearVelocity and other.AssemblyLinearVelocity then
+            local horizon=math.min(0.12,pending.at-os.clock())
+            delta=delta+(own.AssemblyLinearVelocity-other.AssemblyLinearVelocity)*horizon
+            distance=delta.Magnitude
+        end
+        if distance<0.1 or distance>reach then return false,'outside_melee_range' end
+        if other.CFrame.LookVector:Dot(delta.Unit)<facing then return false,'attacker_not_facing_you' end
+        if own.CFrame.LookVector:Dot(-delta.Unit)<facing then return false,'not_facing_attacker' end
         if p.Character:GetAttribute('State_Stunned')then return false,'stunned_reported' end
         if p.Target:GetAttribute('State_Stunned')then return false,'attacker_stunned' end
         if p.Target:GetAttribute('State_FiringBeam')or p.Target:GetAttribute('State_ChargingBeam')then return false,'beam_not_melee' end
@@ -8380,18 +8439,24 @@ do
         if p.LastTrack==track and now-p.LastTrackAt<0.1 then return end
         p.LastTrack=track;p.LastTrackAt=now
         if p.Pending then p.Skip('new_attack_replaced_pending',{animation=p.Pending.id});p.Pending=nil end
+        defenseQueue.Cancel(p)
         local allowed,reason,fatal=p.Check()
         -- Recovery can occur between the cue and the timed press (as in the confirmed capture).
-        if not allowed and reason~='stunned_reported'then if fatal then p.Stop(reason)else p.Skip(reason,{animation=id})end;return end
+        if not allowed and reason~='stunned_reported'and reason~='outside_melee_range'
+            and reason~='attacker_not_facing_you'and reason~='not_facing_attacker'then
+            if fatal then p.Stop(reason)else p.Skip(reason,{animation=id})end;return
+        end
         local speed=track.Speed
         local position=track.TimePosition
         if type(speed)~='number'or speed<=0 or type(position)~='number'or position<0 then p.Skip('invalid_animation_clock',{animation=id});return end
         if position>profile.phase+0.1 then p.Skip('late_animation_cue',{animation=id,position=position});return end
-        p.Pending={id=id,track=track,profile=profile,started=now,speed=speed,at=now+math.max(0,(profile.phase-position)/speed)}
+        p.Pending={id=id,track=track,profile=profile,started=now,speed=speed,position=position,clockAt=now,
+            at=now+math.max(0,(profile.phase-position)/speed)}
         p.Log('attack',{animation=id,speed=speed,position=position,delay=p.Pending.at-now,profile=profile.label})
         p.Update() -- The provisional first-punch profile has no added delay.
+        defenseQueue.Drain()
     end
-    function p.Update()
+    function p.Update(dispatch)
         local now=os.clock()
         if p.Held and (not p.Enabled or now>=p.ReleaseAt or b.Busy())then
             if not p.Release('pulse ended')then p.Stop('F release failed; automation stopped');return end
@@ -8399,21 +8464,39 @@ do
         end
         if not p.Enabled then return end
         if now-p.Started>=60 then p.Stop('60-second test finished');return end
-        local allowed,reason,fatal,distance,health=p.Check()
+        local pending=p.Pending
+        if pending then
+            local speed,position=pending.track.Speed,pending.track.TimePosition
+            if pending.track.IsPlaying==false or type(speed)~='number'or speed<=0
+                or type(position)~='number'or position<pending.position-0.02 then
+                p.Pending=nil;defenseQueue.Cancel(p);p.Skip('attack_cancelled_or_clock_reset',{animation=pending.id});return
+            end
+            if position~=pending.position then pending.clockAt=now
+            elseif now-pending.clockAt>0.25 and pending.profile.phase>0 then
+                p.Pending=nil;defenseQueue.Cancel(p);p.Skip('animation_clock_stalled',{animation=pending.id});return
+            end
+            if not pending.dueAt and pending.profile.phase>0 then
+                pending.at=now+(pending.profile.phase-position)/speed
+            end
+            pending.position=position;pending.speed=speed
+            if now>=pending.at and not pending.dueAt then pending.dueAt=pending.at end
+        end
+        local allowed,reason,fatal,distance,health=p.Check(pending)
         if not allowed then
             if fatal then p.Stop(reason);return end
             if p.Held then p.Release(reason);p.Save()end
-            if reason=='stunned_reported'and p.Pending and now<p.Pending.at then return end
-            if p.Pending then local id=p.Pending.id;p.Pending=nil;p.Skip(reason,{animation=id})end
+            if pending and now<pending.at and(reason=='stunned_reported'or reason=='outside_melee_range'
+                or reason=='attacker_not_facing_you'or reason=='not_facing_attacker')then
+                defenseQueue.Cancel(p);return
+            end
+            if p.Pending then local id=p.Pending.id;p.Pending=nil;defenseQueue.Cancel(p);p.Skip(reason,{animation=id})end
             return
         end
-        local pending=p.Pending
-        if not pending then return end
-        if pending.track.IsPlaying==false or pending.track.Speed<=0 or math.abs(pending.track.Speed-pending.speed)>0.02 then
-            p.Pending=nil;p.Skip('attack_cancelled_or_speed_changed',{animation=pending.id});return
-        end
+        if not pending then defenseQueue.Cancel(p);return end
+        defenseQueue.Request(p,pending.at,pending.at+0.1)
+        if not dispatch then return end
         if now<pending.at then return end
-        p.Pending=nil -- No retries on the same swing.
+        p.Pending=nil;defenseQueue.Cancel(p) -- No retries on the same swing.
         local details={animation=pending.id,sinceAnimation=now-pending.started,lateness=now-pending.at,
             distance=distance,health=health,speed=pending.speed}
         local skip=details.lateness>0.1 and 'late_frame' or d.KeyOwner and 'F_owned_by_defense'
@@ -8427,8 +8510,13 @@ do
         d.Status('PARRY TEST // F sent; outcome unverified'..(p.SaveFailed and ' // Log save failed' or ''))
     end
     connect(RunService.Heartbeat,function()
-        local ok,err=pcall(p.Update)
-        if not ok then p.Stop('Error: '..d.Text(err))end
+        -- Refresh both deadlines and process releases before choosing a request.
+        -- This avoids callback registration order deciding which mode gets F.
+        for _,mode in ipairs({b,p})do
+            local ok,err=pcall(mode.Update)
+            if not ok then mode.Stop('Error: '..d.Text(err))end
+        end
+        defenseQueue.Drain()
     end)
     -- END AUTO PARRY TEST
     -- BEGIN DEFENSE UI

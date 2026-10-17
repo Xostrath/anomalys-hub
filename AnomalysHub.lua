@@ -2774,9 +2774,11 @@ function configStore.ListNames()
 	local names = {}
 	if ok and type(files) == "table" then
 		for _, path in ipairs(files) do
-			local name = type(path) == "string" and path:match("([^/\\]+)%.json$") or nil
-			name = configStore.NormalizeName(name)
-			if name then
+			local raw = type(path) == "string" and path:match("([^/\\]+)%.json$") or nil
+			local name = configStore.NormalizeName(raw)
+			-- A file whose name normalizes differently ("my build.json") can't be
+			-- loaded by its listed name, so don't list a phantom entry.
+			if name and name == raw then
 				table.insert(names, name)
 			end
 		end
@@ -3207,9 +3209,25 @@ end
 
 environment[controllerKey] = controller
 
+-- Rebuilt lists (TP search, NPC dropdown refresh) destroy their buttons, which
+-- disconnects those connections but left them in this table forever. Compact
+-- dead entries whenever the table doubles; unload still disconnects the rest.
+local connectionsCompactAt = 2000
 local function connect(signal, callback)
 	local connection = signal:Connect(callback)
 	table.insert(connections, connection)
+	if #connections >= connectionsCompactAt then
+		local live = 0
+		for index = 1, #connections do
+			local entry = connections[index]
+			if typeof(entry) ~= "RBXScriptConnection" or entry.Connected then
+				live += 1
+				connections[live] = entry
+			end
+		end
+		for index = #connections, live + 1, -1 do connections[index] = nil end
+		connectionsCompactAt = math.max(2000, live * 2)
+	end
 	return connection
 end
 
@@ -3425,6 +3443,26 @@ function configStore.UpdateWindowScale()
 	local scale = math.clamp(math.min((viewport.X - 24) / 780, (viewport.Y - 24) / 600), 0.62, 1)
 	configStore.WindowScale.Scale = scale
 	configStore.ShadowScale.Scale = scale
+	if configStore.ClampWindowToScreen then task.defer(configStore.ClampWindowToScreen) end
+end
+-- Keep the title bar reachable: after a drag, a config load from a bigger
+-- screen, or a viewport resize, pull the window back so at least 80 px of it
+-- (and its whole top edge) stays on screen. Offsets are screen pixels here
+-- (IgnoreGuiInset, and the UIScale lives inside the window).
+function configStore.ClampWindowToScreen()
+	local camera = workspace.CurrentCamera
+	if unloaded or not camera or not window.Parent then return end
+	local viewport, position, size = camera.ViewportSize, window.AbsolutePosition, window.AbsoluteSize
+	local margin = 80
+	local dx, dy = 0, 0
+	if position.X > viewport.X - margin then dx = viewport.X - margin - position.X end
+	if position.X + size.X < margin then dx = margin - (position.X + size.X) end
+	if position.Y > viewport.Y - margin then dy = viewport.Y - margin - position.Y end
+	if position.Y < 0 then dy = -position.Y end
+	if dx == 0 and dy == 0 then return end
+	local p = window.Position
+	window.Position = UDim2.new(p.X.Scale, p.X.Offset + dx, p.Y.Scale, p.Y.Offset + dy)
+	configStore.WindowShadow.Position = UDim2.new(p.X.Scale, p.X.Offset + dx + 8, p.Y.Scale, p.Y.Offset + dy + 10)
 end
 configStore.UpdateWindowScale()
 if workspace.CurrentCamera then
@@ -3921,8 +3959,9 @@ connect(configStore.ChatLog.NativeChatButton.Activated, function()
 end)
 configStore.ChatLog.UpdateToggleVisuals()
 configStore.ChatLog.ApplyNativeChatVisibility()
+-- Re-assert the chosen state (SHOW or HIDE) once a second: the game re-enables
+-- chat on respawn/menus, which used to leave HIDE showing native chat.
 connect(RunService.Heartbeat, function(deltaTime)
-	if not configStore.ChatLog.NativeChatVisible then return end
 	configStore.ChatLog.NativeChatElapsed += deltaTime
 	if configStore.ChatLog.NativeChatElapsed >= 1 then
 		configStore.ChatLog.NativeChatElapsed = 0
@@ -5016,17 +5055,19 @@ end
 
 function configStore.ESP.FetchLocalSnapshot()
 	local snapshot={}
-	local okCharacter,characterData=pcall(statRetrieveRemote.InvokeServer,statRetrieveRemote,"CharacterData","TableStat")
+	-- Bounded reads: one never-returning invoke would leave LocalSnapshotInFlight
+	-- set forever and freeze the local name/race/Ki for the session.
+	local okCharacter,characterData=configStore.ReadStatBounded(4,nil,"CharacterData","TableStat")
 	if okCharacter and type(characterData)=="table" then
 		snapshot.Name=characterData.Name
 		snapshot.Race=type(characterData.Race)=="table" and characterData.Race.Race or characterData.Race
 	end
 	-- Use the same direct race query as the form tools; CharacterData may not
 	-- expose Race as the string/nested shape the ESP previously assumed.
-	local okRace,race=pcall(statRetrieveRemote.InvokeServer,statRetrieveRemote,"Race")
+	local okRace,race=configStore.ReadStatBounded(4,nil,"Race")
 	if okRace and type(race)=="string" and race:match("%S") then snapshot.Race=race end
 	if type(snapshot.Race)~="string" or not snapshot.Race:match("%S") then snapshot.Race=nil end
-	local okStats,statData=pcall(statRetrieveRemote.InvokeServer,statRetrieveRemote,"StatData","TableStat")
+	local okStats,statData=configStore.ReadStatBounded(4,nil,"StatData","TableStat")
 	if okStats and type(statData)=="table" and type(statData.CharacterStats)=="table" then
 		snapshot.Ki=statData.CharacterStats.Ki
 		snapshot.MaxKi=statData.CharacterStats.MaxKi
@@ -6885,6 +6926,7 @@ function configStore.Session.Save()
 	local encodedOk, body = pcall(HttpService.JSONEncode, HttpService, {
 		StartedAt = session.StartedAt,
 		SavedAt = os.time(),
+		UserId = localPlayer.UserId,
 		JobId = game.JobId,
 		StartLevel = session.StartLevel,
 		CurrentLevel = session.CurrentLevel,
@@ -6914,7 +6956,10 @@ function configStore.Session.Load()
 		decodedOk, data = pcall(HttpService.JSONDecode, HttpService, body)
 	end
 	if not decodedOk or type(data) ~= "table" or type(data.SavedAt) ~= "number"
-		or os.time() - data.SavedAt > session.ResumeWindow then
+		or os.time() - data.SavedAt > session.ResumeWindow
+		-- Executor workspaces are shared between accounts/alts: never resume another
+		-- account's counters (wrong StartLevel, negative levels/hour, fake hops).
+		or tonumber(data.UserId) ~= localPlayer.UserId then
 		return false
 	end
 	session.StartedAt = tonumber(data.StartedAt) or session.StartedAt
@@ -6969,9 +7014,14 @@ function configStore.Session.WatchTarget()
 	if session.WatchedTarget == target then
 		return
 	end
+	local humanoid = target and target:FindFirstChildOfClass("Humanoid")
+	-- Only latch the target once its Humanoid exists, so a still-streaming NPC
+	-- is retried next Heartbeat instead of never being watched.
+	if target and not humanoid then
+		return
+	end
 	session.StopWatchingTarget()
 	session.WatchedTarget = target
-	local humanoid = target and target:FindFirstChildOfClass("Humanoid")
 	if humanoid then
 		session.WatchedConnection = humanoid.HealthChanged:Connect(function(health)
 			if health <= 0 then
@@ -7013,9 +7063,12 @@ function configStore.Session.HookZeni()
 	end
 	session.ZeniValue = zeni
 	session.LastZeni = tonumber(zeni.Value)
+	local hookedAt = os.clock()
 	connect(zeni:GetPropertyChangedSignal("Value"), function()
 		local current = tonumber(zeni.Value)
-		if current and session.LastZeni and current > session.LastZeni then
+		-- A 0 -> balance jump right after hooking is data loading, not earnings.
+		local loading = session.LastZeni == 0 and os.clock() - hookedAt < 5
+		if current and session.LastZeni and current > session.LastZeni and not loading then
 			session.Counters.ZeniEarned += current - session.LastZeni
 		end
 		session.LastZeni = current
@@ -9916,13 +9969,16 @@ function configStore.Webhook.Send(title, description, color, force)
 		end
 		local statusCode = type(response) == "table" and tonumber(response.StatusCode or response.Status) or nil
 		local accepted = sentOk and (statusCode == nil or (statusCode >= 200 and statusCode < 300))
-		configStore.Webhook.Busy = false
 		configStore.Webhook.LastSentAt = accepted and os.clock() or configStore.Webhook.LastSentAt
 		configStore.Webhook.SetStatus(accepted and (tostring(title) .. " alert sent.") or ("Webhook failed" .. (statusCode and (" (HTTP " .. statusCode .. ")") or ".")), accepted and colors.Success or colors.DangerHover)
-		local nextAlert = table.remove(configStore.Webhook.Queue, 1)
-		if nextAlert and not unloaded then
+		if #configStore.Webhook.Queue > 0 and not unloaded then
 			-- Space queued posts out to stay under Discord's webhook rate limit.
+			-- Stay Busy through the gap so new alerts queue instead of jumping it.
 			task.wait(1.2)
+		end
+		configStore.Webhook.Busy = false
+		local nextAlert = not unloaded and table.remove(configStore.Webhook.Queue, 1)
+		if nextAlert then
 			configStore.Webhook.Send(nextAlert[1], nextAlert[2], nextAlert[3], nextAlert[4])
 		end
 	end)
@@ -9936,6 +9992,8 @@ function configStore.Webhook.SetEnabled(enabled)
 		return false
 	end
 	configStore.Webhook.Enabled = enabled
+	-- Pausing drops pending posts so they can't flush as stale alerts hours later.
+	if not enabled then table.clear(configStore.Webhook.Queue) end
 	configStore.Webhook.SyncSettings()
 	configStore.Webhook.SetStatus(enabled and "Webhook alerts enabled." or "Webhook alerts paused.", enabled and colors.Success or colors.Muted)
 	return true
@@ -9965,7 +10023,15 @@ function configStore.Webhook.OnLevelObserved(level, source)
 		return
 	end
 	level = math.floor(level)
+	-- 0/1 dips during respawn/data reload must not lower the baseline, or the
+	-- real value returning would post a burst of fake "Level Up" alerts.
+	if level <= 0 then
+		return
+	end
 	local previous = configStore.Webhook.LastLevelValue
+	if previous and level < previous then
+		return
+	end
 	configStore.Webhook.LastLevelValue = level
 	configStore.Webhook.LevelSource = source or configStore.Webhook.LevelSource
 	if configStore.Session then
@@ -10008,13 +10074,15 @@ end
 
 function configStore.Webhook.ReadLevelFromServer()
 	for _, key in ipairs(configStore.Webhook.LevelKeys) do
-		local ok, value = pcall(statRetrieveRemote.InvokeServer, statRetrieveRemote, key)
+		-- Bounded: one never-returning invoke would otherwise leave LevelPollInFlight
+		-- set forever and silently end level detection for the session.
+		local ok, value = configStore.ReadStatBounded(3, nil, key)
 		if ok and tonumber(value) then
 			return tonumber(value), "StatRetrieveRemote(\"" .. key .. "\")"
 		end
 	end
-	local okStats, statData = pcall(statRetrieveRemote.InvokeServer, statRetrieveRemote, "StatData", "TableStat")
-	local okCharacter, characterData = pcall(statRetrieveRemote.InvokeServer, statRetrieveRemote, "CharacterData", "TableStat")
+	local okStats, statData = configStore.ReadStatBounded(3, nil, "StatData", "TableStat")
+	local okCharacter, characterData = configStore.ReadStatBounded(3, nil, "CharacterData", "TableStat")
 	statData = okStats and type(statData) == "table" and statData or nil
 	characterData = okCharacter and type(characterData) == "table" and characterData or nil
 	local candidates = {
@@ -10245,6 +10313,16 @@ connect(configStore.Webhook.UrlBox.Focused, function()
 	if configStore.Webhook.URL ~= "" then configStore.Webhook.UrlBox.Text = configStore.Webhook.URL end
 end)
 connect(configStore.Webhook.UrlBox.FocusLost, function()
+	-- Deliberately emptying the box (ClearTextOnFocus is off) removes the webhook.
+	if string.gsub(configStore.Webhook.UrlBox.Text, "%s+", "") == "" and configStore.Webhook.URL ~= "" then
+		configStore.Webhook.URL = ""
+		configStore.Webhook.Enabled = false
+		table.clear(configStore.Webhook.Queue)
+		configStore.Webhook.SyncSettings()
+		configStore.Webhook.MaskUrl()
+		configStore.Webhook.SetStatus("Webhook removed; alerts are off.", colors.Muted)
+		return
+	end
 	if string.find(configStore.Webhook.UrlBox.Text, "/api/webhooks/", 1, true) then
 		configStore.Webhook.SetUrl(configStore.Webhook.UrlBox.Text)
 	else
@@ -12679,6 +12757,7 @@ function qolState.RemoteShop.SetVisible(visible)
 	if visible and not qolState.RemoteShop.Populate() then
 		qolState.RemoteShop.Modal.Visible = true
 		qolState.RemoteShop.Visible = true
+		qolState.RemoteShop.OpenButton.Text = "Close Remote Shop"
 		return false
 	end
 	qolState.RemoteShop.Visible = visible
@@ -13068,7 +13147,9 @@ function npcSafety.FindSpawnAnchor(npcType, origin)
 	local function nameMatches(name)
 		local normalized = string.lower(name):gsub("[^%w]", "")
 		return normalized == wanted or normalized == alias
-			or (#alias >= 4 and (string.find(normalized, alias, 1, true) or string.find(alias, normalized, 1, true)))
+			-- Both sides need real length: "1"/"8"/"" would otherwise match any alias.
+			or (#alias >= 4 and (string.find(normalized, alias, 1, true)
+				or (#normalized >= 4 and string.find(alias, normalized, 1, true))))
 	end
 	local world = workspace:FindFirstChild("World")
 	local map = world and world:FindFirstChild("Map")
@@ -13229,7 +13310,9 @@ function npcSafety.TriggerChestPrompt(prompt)
 	local fireProximity = environment.fireproximityprompt
 		or (type(fireproximityprompt) == "function" and fireproximityprompt)
 	if type(fireProximity) == "function" then
-		return pcall(fireProximity, prompt, 0)
+		-- No second argument: on (prompt, amount, skip) implementations amount=0
+		-- fires zero times while pcall still reports success.
+		return pcall(fireProximity, prompt)
 	end
 	local key = prompt.KeyboardKeyCode ~= Enum.KeyCode.Unknown and prompt.KeyboardKeyCode or Enum.KeyCode.E
 	return npcSafety.SendKey(key, prompt.HoldDuration)
@@ -13871,6 +13954,9 @@ function npcSafety.SetDirectLightTarget(target)
 	local diagnostic = npcSafety.DirectLight
 	if diagnostic.BenchmarkRunning and diagnostic.BenchmarkTarget and target ~= diagnostic.BenchmarkTarget then
 		npcSafety.FinishDirectLightBenchmark(true, "INCONCLUSIVE: target changed")
+		-- Finishing a benchmark started with Fast Attack off stops the diagnostic;
+		-- don't re-arm a target/HealthChanged hook for a feature that is OFF.
+		if not diagnostic.Enabled then return false end
 	end
 	if diagnostic.Target == target then
 		return target ~= nil
@@ -14203,7 +14289,9 @@ function npcSafety.UpdateDirectLightBenchmark(deltaTime)
 	if not diagnostic.BenchmarkRunning then
 		return
 	end
-	if diagnostic.BenchmarkTarget and (activeNpcTarget ~= diagnostic.BenchmarkTarget or diagnostic.Target ~= diagnostic.BenchmarkTarget) then
+	-- Only a real target switch is inconclusive. diagnostic.Target briefly goes nil
+	-- during temporary exclusions (player range); pause/grace handles that.
+	if diagnostic.BenchmarkTarget and activeNpcTarget ~= diagnostic.BenchmarkTarget then
 		npcSafety.FinishDirectLightBenchmark(true, "INCONCLUSIVE: target changed")
 		return
 	end
@@ -15870,6 +15958,10 @@ connect(workspace.DescendantRemoving, function(instance)
 end)
 
 function npcSafety.AlertSuper17InNpcs(count)
+	-- The dedicated detector already alerts/posts; don't double every appearance.
+	if configStore and configStore.Super17Detector and configStore.Super17Detector.Enabled then
+		return
+	end
 	count = math.max(1, tonumber(count) or 1)
 	local message = string.format(
 		"Super 17 detected in this server (%d instance%s). Model name contains \"super\" and \"17\". Talk NPC, not a farm target.",
@@ -15982,6 +16074,11 @@ function npcSafety.FinishLootWait(message)
 	npcSafety.LootPrompt = nil
 	npcSafety.LootPosition = nil
 	npcSafety.LastTargetPosition = nil
+	-- ClickGuiButton yields: if autofarm was turned off or the hub unloaded in
+	-- that gap, don't rebuild a movement hold nothing will ever remove.
+	if unloaded or not npcTargetingEnabled then
+		return
+	end
 	local character = localPlayer.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local characterRoot = character and character:FindFirstChild("HumanoidRootPart")
@@ -16526,6 +16623,12 @@ function qolState.ServerNavigation.RunJoinFriend(rawIdentifier)
 		local targetPlaceId = presence and tonumber(presence.placeId)
 		local targetJobId = presence and type(presence.gameId) == "string" and presence.gameId ~= "" and presence.gameId or nil
 		local targetLabel = presence and presence.userName or qolState.ServerNavigation.NormalizeFriendIdentifier(tostring(rawIdentifier or ""))
+		-- The presence API reports whatever game they're in; never teleport out of this one.
+		if targetPlaceId and not qolState.ServerNavigation.IsKnownGamePlace(targetPlaceId) then
+			qolState.ServerNavigation.SetBusy(false)
+			qolState.ServerNavigation.SetStatus("@" .. targetLabel .. " is playing a different game.", colors.DangerHover)
+			return
+		end
 		if not targetJobId then
 			qolState.ServerNavigation.SetStatus("Their server is hidden; searching public servers for @" .. targetLabel .. "...", colors.Warning)
 			local foundPlaceId, foundJobId, scanError = qolState.ServerNavigation.FindUserServerByScan(userId, targetPlaceId)
@@ -17034,7 +17137,8 @@ function npcSafety.TryRetargetAfterHide()
 			tostring(selectedNpcType),
 			contestedCount
 		)
-		if npcSafety.ServerHopEnabled and not npcSafety.HideServerHopTriggered then
+		if npcSafety.ServerHopEnabled and not npcSafety.HideServerHopTriggered
+			and os.clock() >= (npcSafety.HideHopRetryAt or 0) then
 			npcSafety.HideServerHopTriggered = true
 			npcSafety.RequestServerHop(npcSafety.SpawnWaitReason, npcSafety.ProximityThreatPlayer)
 		end
@@ -17210,7 +17314,7 @@ function qolState.ServerNavigation.QueueSelfForTeleport()
 end
 
 function qolState.ServerNavigation.BlockPlayerProfile(player)
-	if not player or player == localPlayer or player.UserId <= 0 then return true end
+	if not player or not player.Parent or player == localPlayer or player.UserId <= 0 then return true end
 	if type(environment.__GohanHubBlockedUserIds) ~= "table" then environment.__GohanHubBlockedUserIds = {} end
 	if environment.__GohanHubBlockedUserIds[player.UserId] then return true end
 	local httpRbxApiService = game:GetService("HttpRbxApiService")
@@ -17243,7 +17347,8 @@ function qolState.ServerNavigation.BlockPlayerProfile(player)
 	while not confirmed and os.clock() < deadline and player.Parent do task.wait(0.1) end
 	if promptConnection then promptConnection:Disconnect() end
 	if confirmed then environment.__GohanHubBlockedUserIds[player.UserId] = true end
-	return confirmed
+	-- A player who left mid-prompt is no longer in the server: don't cancel the hop.
+	return confirmed or not player.Parent
 end
 
 function qolState.ServerNavigation.BlockPlayersBeforeTeleport(priorityPlayer, statusCallback)
@@ -17495,6 +17600,9 @@ function npcSafety.RequestServerHop(reason, detectedPlayer, skipEvade)
 			end
 		end
 		npcSafety.ServerHopBusy = false
+		-- Let a still-active hide session try again, but not every frame.
+		npcSafety.HideServerHopTriggered = false
+		npcSafety.HideHopRetryAt = os.clock() + 15
 		npcSafety.FinishPlayerEvade("Server hop failed; resumed autofarm and will retry on the next detection.")
 	end)
 	return true
@@ -17609,7 +17717,9 @@ local function refreshNpcTypes()
 	table.clear(npcTypeButtons)
 
 	local names, counts = collectNpcTypes()
-	if #names > 0 and selectedNpcType ~= npcSafety.StrongestOptionName and not counts[selectedNpcType] then
+	-- While autofarming, a type with no live NPCs is usually just respawning, and
+	-- autofarm waits at its spawn; only auto-switch when autofarm is off.
+	if #names > 0 and not npcTargetingEnabled and selectedNpcType ~= npcSafety.StrongestOptionName and not counts[selectedNpcType] then
 		local previousSelection = selectedNpcType
 		local bestName = names[1]
 		for _, name in ipairs(names) do
@@ -18082,7 +18192,9 @@ end
 end
 
 
-function qolState.StatAllocate.GetEnhancedValue(statName)
+-- strict: no Boosters fallback. Booster values are temporary modifiers, so build
+-- completion must treat a failed read as unknown rather than compare a booster.
+function qolState.StatAllocate.GetEnhancedValue(statName, strict)
 	local definition = qolState.StatAllocate.Definitions[statName or qolState.StatAllocate.Selected]
 	if not definition then
 		return nil
@@ -18098,6 +18210,7 @@ function qolState.StatAllocate.GetEnhancedValue(statName)
 	if ok and tonumber(enhanced) then
 		return tonumber(enhanced)
 	end
+	if strict then return nil end
 
 	-- Fallback for brief remote failures; this may lag and must not be preferred.
 	local playerStats = localPlayer:FindFirstChild("PlayerStats")
@@ -18154,7 +18267,7 @@ function qolState.StatAllocate.SelectNextBuildStat()
 	for _, statName in ipairs(qolState.StatAllocate.GetPriorityOrder()) do
 		local target = qolState.StatAllocate.BuildTargets[statName]
 		if type(target) == "number" then
-			local current = qolState.StatAllocate.GetEnhancedValue(statName)
+			local current = qolState.StatAllocate.GetEnhancedValue(statName, true)
 			if unloaded or serial ~= qolState.StatAllocate.RequestSerial then return nil end
 			if current == nil or current < target then
 				qolState.StatAllocate.Select(statName)
@@ -18171,7 +18284,7 @@ function qolState.StatAllocate.CheckTargetReached()
 	if target == nil then
 		return false
 	end
-	local current = qolState.StatAllocate.GetEnhancedValue()
+	local current = qolState.StatAllocate.GetEnhancedValue(nil, true)
 	if unloaded or serial ~= qolState.StatAllocate.RequestSerial then return false end
 	if not current or current < target then
 		return false, current
@@ -18191,6 +18304,8 @@ function qolState.StatAllocate.CheckTargetReached()
 	qolState.StatAllocate.AutoEnabled = false
 	qolState.StatAllocate.PersistentAutoEnabled = false
 	qolState.StatAllocate.WaitingForGtp = false
+	-- Build finished while held underground for allocation: let the character go.
+	qolState.StatAllocate.ReleaseAutoBuildHold()
 	qolState.StatAllocate.RenderAuto()
 	qolState.StatAllocate.SetStatus("Full enhanced-stat build complete.", colors.Success)
 	return true, current
@@ -19037,10 +19152,21 @@ function qolState.Unlocks.Finish(button, normalText, requestSerial)
 	return true
 end
 
+-- Runs an unlock body; an error must still release Busy, or every Unlock button
+-- answers "already running" for the rest of the session.
+function qolState.Unlocks.Spawn(button, normalText, requestSerial, body)
+	return task.spawn(function()
+		local ok, err = pcall(body)
+		if not ok and qolState.Unlocks.Finish(button, normalText, requestSerial) then
+			qolState.Unlocks.SetStatus("Unlock failed: " .. tostring(err), colors.DangerHover)
+		end
+	end)
+end
+
 function qolState.Unlocks.UnlockKi()
 	local requestSerial = qolState.Unlocks.Begin(qolState.Unlocks.KiButton, "Unlocking...")
 	if not requestSerial then return false end
-	local thread = task.spawn(function()
+	local thread = qolState.Unlocks.Spawn(qolState.Unlocks.KiButton, "Unlock Ki", requestSerial, function()
 		local okCurrent, current = pcall(statRetrieveRemote.InvokeServer, statRetrieveRemote, "KiUnlocked")
 		if okCurrent and current == true then
 			qolState.Unlocks.Finish(qolState.Unlocks.KiButton, "Unlock Ki", requestSerial)
@@ -19072,7 +19198,7 @@ end
 function qolState.Unlocks.UnlockFlight()
 	local requestSerial = qolState.Unlocks.Begin(qolState.Unlocks.FlightButton, "Unlocking...")
 	if not requestSerial then return false end
-	local thread = task.spawn(function()
+	local thread = qolState.Unlocks.Spawn(qolState.Unlocks.FlightButton, "Unlock Flight", requestSerial, function()
 		local okKi, kiUnlocked = pcall(statRetrieveRemote.InvokeServer, statRetrieveRemote, "KiUnlocked")
 		if not okKi or kiUnlocked ~= true then
 			pcall(function()
@@ -19102,7 +19228,7 @@ end
 function qolState.Unlocks.UnlockAllSkillTree()
 	local requestSerial = qolState.Unlocks.Begin(qolState.Unlocks.SkillTreeButton, "Unlocking tree...")
 	if not requestSerial then return false end
-	local thread = task.spawn(function()
+	local thread = qolState.Unlocks.Spawn(qolState.Unlocks.SkillTreeButton, "Unlock All Skill Tree", requestSerial, function()
 		local skillDataModule = ReplicatedStorage.Modules.Metadata.CharacterData:FindFirstChild("SkillTreeData")
 		local okData, skillTreeData = pcall(require, skillDataModule)
 		if not okData or type(skillTreeData) ~= "table" then
@@ -19217,17 +19343,30 @@ function autoTransformState.ReadFatiguePercent(forceScan)
 	local state = autoTransformState
 	local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
 	local character = localPlayer.Character
-	if forceScan or state.FatigueGui ~= playerGui or state.FatigueCharacter ~= character
+	-- Candidates are cached whether or not they are visible right now, and their
+	-- visibility/percent is re-read on every call, so a bar that pops up is seen
+	-- on the next tick without a full rescan. Full rescans (to discover newly
+	-- created panels) run every 2 s, when a cached panel is removed, and always
+	-- before an activation is sent (forceScan).
+	local detached = false
+	for _, panel in ipairs(state.FatiguePanels or {}) do
+		if not panel.Parent or not ((playerGui and panel:IsDescendantOf(playerGui))
+			or (character and panel:IsDescendantOf(character))) then
+			detached = true
+			break
+		end
+	end
+	if forceScan or detached or state.FatigueGui ~= playerGui or state.FatigueCharacter ~= character
 		or os.clock() >= (state.NextFatigueScanAt or 0) then
 		state.FatigueGui, state.FatigueCharacter = playerGui, character
-		state.NextFatigueScanAt = os.clock() + 0.75
+		state.NextFatigueScanAt = os.clock() + 2
 		state.FatiguePanels = {}
 		local seen = {}
 		for _, root in pairs({playerGui, character}) do
-			local descendants = root:GetDescendants()
-			for index, object in ipairs(descendants) do
-				if index > 6000 then break end
-				if object:IsA("GuiObject") and state.IsOwnVisibleGui(object) then
+			-- No descendant cap: large game UIs exceed a few thousand objects and the
+			-- shared FATIGUE panel was never reached.
+			for _, object in ipairs(root:GetDescendants()) do
+				if object:IsA("GuiObject") then
 					local name = string.lower(object.Name):gsub("[^%a]", "")
 					local text = (object:IsA("TextLabel") or object:IsA("TextButton"))
 						and string.lower(object.Text:gsub("<[^>]+>", "")) or ""
@@ -19306,6 +19445,11 @@ function autoTransformState.ResourceReady(selected, forceScan)
 		end
 	end
 	if fatigue == nil then return false, "Fatigue unavailable" end
+	-- Kaioken may go at anything below 10%; every other form waits for <=1%.
+	if string.lower(selected):gsub("[^%a]", "")=="kaioken" then
+		if fatigue >= 10 then return false, string.format("Fatigue %.1f%% (Kaioken needs <10%%)", fatigue) end
+		return true, "Fatigue ready"
+	end
 	if fatigue > 1 then return false, string.format("Fatigue %.1f%% > 1%%", fatigue) end
 	return true, "Fatigue ready"
 end
@@ -19338,14 +19482,15 @@ function autoTransformState.CaptureKaiokenStatus(character,coreStats,misc,active
 		-- undetected bar can be identified from this file instead of guessed.
 		local playerGui=localPlayer:FindFirstChildOfClass("PlayerGui")
 		local guiLines=0
+		if playerGui then lines[#lines+1]="PlayerGuiDescendants~"..(#playerGui:GetDescendants()//1000*1000)end
 		for _,root in ipairs({playerGui or character,character})do
-			for index,object in ipairs(root:GetDescendants())do
-				if index>6000 or guiLines>=20 then break end
-				if object:IsA("GuiObject")and autoTransformState.IsOwnVisibleGui(object)then
+			for _,object in ipairs(root:GetDescendants())do
+				if guiLines>=20 then break end
+				if object:IsA("GuiObject")then
 					local label=(object:IsA("TextLabel")or object:IsA("TextButton"))and object.Text:gsub("<[^>]+>","")or ""
 					local probe=(object.Name.." "..label):lower()
-					if probe:find("fatigue",1,true)or probe:find("kaio",1,true)or probe:find("strain",1,true)
-						or probe:find("exhaust",1,true)or probe:find("overload",1,true)then
+					if(probe:find("fatigue",1,true)or probe:find("kaio",1,true)or probe:find("strain",1,true)
+						or probe:find("exhaust",1,true)or probe:find("overload",1,true))and autoTransformState.IsOwnVisibleGui(object)then
 						guiLines+=1
 						lines[#lines+1]="Gui."..text(object:GetFullName():sub(-90)).." ["..object.ClassName.."] text="..text(label:sub(1,40))
 					end
@@ -20937,11 +21082,29 @@ local function restoreKiControlCamera()
 	UserInputService.MouseBehavior = state.MouseBehavior
 end
 
+-- Called from RenderStepped/Heartbeat: never yield there. The enhanced value is
+-- refreshed by at most one background read per second and read from a cache.
 function qolState.StatAllocate.IsAutoTrainingTargetReached()
-	if type(qolState.StatAllocate.AutoTrainingEnhancedTarget) ~= "number" then return false end
+	local target = qolState.StatAllocate.AutoTrainingEnhancedTarget
+	if type(target) ~= "number" then return false end
 	local definition = trainingDefinitionByButton[selectedTrainingButton]
-	local current = definition and qolState.StatAllocate.GetEnhancedValue(definition.EnhancedStat)
-	return type(current) == "number" and current >= qolState.StatAllocate.AutoTrainingEnhancedTarget, current, definition
+	if not definition then return false end
+	local cache = qolState.StatAllocate.AutoTrainingEnhancedCache
+	if not cache or cache.Stat ~= definition.EnhancedStat then
+		cache = {Stat = definition.EnhancedStat, At = -math.huge}
+		qolState.StatAllocate.AutoTrainingEnhancedCache = cache
+	end
+	if not cache.InFlight and not unloaded and os.clock() - cache.At >= 1 then
+		cache.InFlight = true
+		task.spawn(function()
+			local ok, value = pcall(qolState.StatAllocate.GetEnhancedValue, cache.Stat)
+			cache.InFlight = false
+			cache.At = os.clock()
+			if ok and type(value) == "number" then cache.Value = value end
+		end)
+	end
+	local current = cache.Value
+	return type(current) == "number" and current >= target, current, definition
 end
 
 local function stopTrainingSession(statusText)
@@ -21434,20 +21597,31 @@ end
 
 function qolState.StatAllocate.UpdateAutoBuildTrainer(deltaTime)
 	local state = qolState.StatAllocate
-	if not state.PersistentAutoEnabled or unloaded then return end
+	if not state.PersistentAutoEnabled or unloaded or state.AutoBuildTickInFlight then return end
 	state.AutoBuildElapsed += deltaTime
 	if state.AutoBuildElapsed < 0.5 then return end
 	state.AutoBuildElapsed = 0
+	-- One tick at a time: the reads below yield, and Heartbeat would otherwise
+	-- stack overlapping ticks whenever the server is slow.
+	state.AutoBuildTickInFlight = true
 	local utp = state.GetUtp()
-	local gtpOk, gtp = pcall(statRetrieveRemote.InvokeServer, statRetrieveRemote, "Gained TP")
+	local gtpOk, gtp = configStore.ReadStatBounded(3, nil, "Gained TP")
 	gtp = gtpOk and tonumber(gtp) or nil
+	if unloaded or not state.PersistentAutoEnabled then state.AutoBuildTickInFlight = false return end
 	if utp == nil or gtp == nil then
+		state.AutoBuildTickInFlight = false
 		state.SetStatus("Auto Build is waiting for the UTP/GTP counters.", colors.Muted)
 		return
 	end
+	local serial = state.RequestSerial
 	local statName, current, target = state.SelectNextBuildStat()
+	state.AutoBuildTickInFlight = false
+	-- Toggled off, or the read was canceled (respawn/manual Allocate bump the
+	-- serial): that is not "build complete", so just try again next tick.
+	if unloaded or not state.PersistentAutoEnabled or (not statName and serial ~= state.RequestSerial) then return end
 	if not statName then
 		state.PersistentAutoEnabled = false
+		state.ReleaseAutoBuildHold()
 		state.RenderAuto()
 		if autoStartEnabled then
 			state.InternalTrainingToggle = true
@@ -21469,7 +21643,10 @@ function qolState.StatAllocate.UpdateAutoBuildTrainer(deltaTime)
 			state.InternalTrainingToggle = false
 		end
 		if activeTrainingButton then stopTrainingSession("Auto Build resuming Autofarm.") end
-		if selectedNpcType and not npcTargetingEnabled then setNpcTargetingEnabled(true) end
+		if selectedNpcType and not npcTargetingEnabled then
+			state.ReleaseAutoBuildHold()
+			setNpcTargetingEnabled(true)
+		end
 		state.SetStatus(
 			utp > 0 and "Auto Build has UTP; Autofarm active."
 				or "Auto Build has no UTP or GTP; Autofarm active.",
@@ -21515,7 +21692,11 @@ local function updateTrainingTargetPresence(found, finishGap)
 	elseif not trainingSessionSawTargets
 		and now - trainingSessionStartedAt > (activeTrainingButton == "Control" and 12 or 5) then
 		if autoStartEnabled and autoStartFailedLaunches >= 3 then
+			-- Internal toggle: a launch failure must not switch Auto Build off and
+			-- report "stopped manually"; Auto Build re-arms training on its next tick.
+			qolState.StatAllocate.InternalTrainingToggle = true
 			setAutoStartEnabled(false)
+			qolState.StatAllocate.InternalTrainingToggle = false
 			stopTrainingSession("Auto Start paused after 3 failed launches")
 		else
 			stopTrainingSession("Minigame did not start - ready again")
@@ -21948,6 +22129,12 @@ function configStore.AutoPong.Update(deltaTime)
 	if not court or not court:IsA("GuiObject") or not isGuiVisible(court)
 		or not ball or not ball:IsA("GuiObject") or not isGuiVisible(ball)
 		or not mine or not mine:IsA("GuiObject") or not isGuiVisible(mine) then
+		-- Shared status label: while Clash/Maze is on and no Pong court is up,
+		-- stay quiet instead of overwriting their status every frame.
+		if (configStore.AutoClash and configStore.AutoClash.Enabled)
+			or (configStore.AutoMaze and configStore.AutoMaze.Enabled) then
+			pong.Release(); pong.Session = nil; return
+		end
 		pause("WAITING FOR COURT"); return
 	end
 	local status = note and note:IsA("TextLabel") and string.upper(note.Text) or ""
@@ -23459,6 +23646,7 @@ end)
 
 connect(UserInputService.InputEnded, function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		if windowDragState.Dragging then task.defer(configStore.ClampWindowToScreen) end
 		windowDragState.Dragging = false
 	end
 end)
@@ -23512,6 +23700,7 @@ function configStore.Capture()
 		AutoFoodEnabled = qolState.AutoFood.Enabled,
 		AutoFoodThreshold = qolState.AutoFood.Threshold,
 		AutoTraining = autoStartEnabled,
+		AutoTrainingStat = selectedTrainingButton,
 		AutoTrainingEnhancedTarget = qolState.StatAllocate.AutoTrainingEnhancedTarget,
 		AutoAllocate = qolState.StatAllocate.AutoEnabled,
 		PersistentAutoAllocate = qolState.StatAllocate.PersistentAutoEnabled,
@@ -23581,6 +23770,8 @@ function configStore.Apply(data)
 		if type(p.XScale)=="number" and type(p.XOffset)=="number" and type(p.YScale)=="number" and type(p.YOffset)=="number" then
 			window.Position = UDim2.new(p.XScale, p.XOffset, p.YScale, p.YOffset)
 			configStore.WindowShadow.Position = UDim2.new(p.XScale, p.XOffset + 8, p.YScale, p.YOffset + 10)
+			-- A position saved on a larger screen may be offscreen here.
+			task.defer(configStore.ClampWindowToScreen)
 		end
 	end
 	if type(data.FlightSpeed) == "number" then
@@ -23610,6 +23801,12 @@ function configStore.Apply(data)
 	if type(data.AutoFoodEnabled) == "boolean" then
 		qolState.AutoFood.SetEnabled(data.AutoFoodEnabled)
 	end
+	-- Restore the trained stat before enabling, or Auto Training restarts on the
+	-- default (Strength) instead of what was saved.
+	if configStore.FeatureAccess.AutoTraining and type(data.AutoTrainingStat) == "string"
+		and trainingDefinitionByButton[data.AutoTrainingStat] then
+		selectTrainingDefinition(trainingDefinitionByButton[data.AutoTrainingStat])
+	end
 	if configStore.FeatureAccess.AutoTraining and type(data.AutoTraining) == "boolean" then
 		setAutoStartEnabled(data.AutoTraining)
 	end
@@ -23617,6 +23814,10 @@ function configStore.Apply(data)
 		and data.AutoTrainingEnhancedTarget >= 0 then
 		qolState.StatAllocate.AutoTrainingEnhancedTarget = math.clamp(data.AutoTrainingEnhancedTarget, 0, 1000000000)
 		qolState.StatAllocate.AutoTrainingTargetBox.Text = tostring(qolState.StatAllocate.AutoTrainingEnhancedTarget)
+	elseif configStore.FeatureAccess.AutoTraining then
+		-- Config saved without a cap: don't keep the previous config's cap.
+		qolState.StatAllocate.AutoTrainingEnhancedTarget = nil
+		qolState.StatAllocate.AutoTrainingTargetBox.Text = ""
 	end
 	if configStore.FeatureAccess.AdvancedBuild and type(data.AutoAllocateStat) == "string" then
 		qolState.StatAllocate.Select(data.AutoAllocateStat)
@@ -23660,6 +23861,8 @@ function configStore.Apply(data)
 				configStore.ESP.Settings[key]=value
 			end
 		end
+		-- Same side effect as SetSetting: Self off must drop the existing overlay.
+		if not configStore.ESP.Settings.Self then configStore.ESP.RemoveEntry(localPlayer) end
 	end
 	if type(data.ESPEnabled)=="boolean" then configStore.ESP.SetEnabled(data.ESPEnabled) else configStore.ESP.RenderButtons() end
 	if type(data.ESPMaxDistance) == "number" then
@@ -23966,6 +24169,17 @@ function controller.Unload()
 		qolState.StatAllocate.MotivationAutoEnabled = false
 		qolState.StatAllocate.MotivationBusy = false
 		qolState.StatAllocate.ReleaseAutoBuildHold()
+	end)
+	step("teleport queue", function()
+		-- A queue armed by a failed teleport would otherwise re-inject the hub the
+		-- user deliberately unloaded on their next teleport. Reloads re-arm it on
+		-- the next TeleportState.Started.
+		if qolState.ServerNavigation.TeleportQueueArmed then
+			local clear = environment.clear_teleport_queue or environment.clearqueueonteleport
+				or (type(environment.syn) == "table" and environment.syn.clear_teleport_queue)
+			if type(clear) == "function" then pcall(clear) end
+			qolState.ServerNavigation.TeleportQueueArmed = false
+		end
 	end)
 	autoTransformState.Enabled = false
 	autoTransformState.CancelPending()

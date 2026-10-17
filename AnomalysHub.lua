@@ -7964,6 +7964,7 @@ do
         if d.Effect(object)then d.EffectSeen[object]=true;table.insert(d.Effects,object);d.Log('effect_added',{id=#d.Effects,kind=d.Text(object.ClassName)})end
     end
     function d.Start(mode)
+        if d.RuleCapture and d.RuleCapture.Active then d.Status('Wait for block-rule capture, or Stop / Save to cancel.');return end
         if unloaded or d.Active or not d.Modes[mode] then return end
         local char=localPlayer.Character
         local hum=char and char:FindFirstChildOfClass('Humanoid')
@@ -8080,6 +8081,7 @@ do
         return ok
     end
     function b.SetEnabled(enabled)
+        if enabled and d.RuleCapture and d.RuleCapture.Active then d.Status('Wait for block-rule capture, or Stop / Save to cancel.');return end
         if not enabled then
             defenseQueue.Cancel(b)
             b.Enabled=false;b.Pending=nil;b.Armed=nil
@@ -8481,6 +8483,7 @@ do
         d.Status('PARRY TEST // SKIPPED: '..reason..(p.SaveFailed and ' // Log save failed' or ''))
     end
     function p.SetEnabled(enabled)
+        if enabled and d.RuleCapture and d.RuleCapture.Active then d.Status('Wait for block-rule capture, or Stop / Save to cancel.');return end
         if not enabled then
             defenseQueue.Cancel(p)
             p.Enabled=false;p.Pending=nil
@@ -8686,8 +8689,115 @@ do
         p.SafeObservation(p.Observe) -- After input scheduling, never before an immediate press.
     end)
     -- END AUTO PARRY TEST
+    -- BEGIN BLOCK RULE CAPTURE
+    -- Explicit user-triggered source reads only. Never require or execute these
+    -- modules, hook functions, or send remotes to test an eligibility hypothesis.
+    local c={Active=false,Serial=0,MaxBytes=2*1024*1024,Timeout=5}
+    d.RuleCapture=c
+    function c.Path(root,names)
+        for _,name in ipairs(names)do root=root and root:FindFirstChild(name)end
+        return root
+    end
+    function c.Alive(serial)return c.Active and c.Serial==serial and not unloaded end
+    function c.Save()
+        local ok=pcall(function()
+            if type(writefile)~='function' then error('File writing unavailable')end
+            if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
+            local report=table.concat(c.Lines,'\n')
+            writefile(configStore.Root..'/block_rules_latest.txt',report)
+            writefile(configStore.Root..'/block_rules_'..c.Id..'.txt',report)
+        end)
+        c.SaveFailed=not ok;return ok
+    end
+    function c.Cancel(reason)
+        if not c.Active then return end
+        c.Active=false;c.Serial+=1
+        if c.Worker then pcall(task.cancel,c.Worker);c.Worker=nil end
+        if c.Runner then pcall(task.cancel,c.Runner);c.Runner=nil end
+        c.Lines[#c.Lines+1]='CANCELED: '..d.Text(reason);c.Save()
+        d.Status('Block-rule capture canceled'..(c.SaveFailed and '; report save failed.'or'.'))
+    end
+    function c.Read(object,serial)
+        local result
+        c.Worker=task.spawn(function()
+            local ok,source=pcall(function()return object.Source end)
+            if ok and type(source)=='string'and source:match('%S')then result={true,source};return end
+            local env=(getgenv and getgenv())or{}
+            local reader=env.decompile or decompile
+            if type(reader)~='function'then result={false,'Source/decompiler unavailable'};return end
+            result=table.pack(pcall(reader,object))
+        end)
+        local deadline=math.min(c.Deadline,os.clock()+c.Timeout)
+        while not result and c.Alive(serial)and os.clock()<deadline do task.wait(0.05)end
+        if c.Worker then pcall(task.cancel,c.Worker);c.Worker=nil end
+        if not c.Alive(serial)then return nil,'Canceled'end
+        if not result then return nil,'Source read timed out'end
+        if not result[1]or type(result[2])~='string'then return nil,'Source unavailable'end
+        local source=result[2]
+        if #source>c.MaxBytes then return nil,'Source exceeds 2MB; not truncated'end
+        local lower=source:lower()
+        if not source:match('%S')or lower:find('failed to decompile',1,true)or lower:find('decompilation failed',1,true)then
+            return nil,'Empty/failed decompiler output'
+        end
+        return source
+    end
+    function c.Run(serial)
+        local entries={
+            {name='Combat',root=localPlayer,path={'PlayerScripts','Client','Core','Combat','Default Combat','Core Combat'}},
+            {name='StateManager',root=ReplicatedStorage,path={'Modules','Metadata','ControlData','StateManager'}},
+            {name='CombatPresets',root=ReplicatedStorage,path={'Modules','Metadata','CombatData','CombatPresets'}},
+            {name='ControlData',root=ReplicatedStorage,path={'Modules','Metadata','ControlData','ControlData'}},
+        }
+        local saved=0
+        for _,entry in ipairs(entries)do
+            if not c.Alive(serial)then return end
+            local path=table.concat(entry.path,'.')
+            local object=c.Path(entry.root,entry.path)
+            local source,err
+            if os.clock()>=c.Deadline then err='Total time budget exhausted'
+            elseif not object then err='Exact path missing'
+            elseif not(object:IsA('ModuleScript')or object:IsA('LocalScript'))then err='Not a script'
+            else source,err=c.Read(object,serial)end
+            if not c.Alive(serial)then return end
+            if source then
+                local file=configStore.Root..'/block_rules_'..c.Id..'_'..entry.name..'.lua'
+                local ok=pcall(writefile,file,source)
+                if ok then
+                    saved+=1;c.Lines[#c.Lines+1]='SAVED '..path..' bytes='..#source..' file='..file
+                else c.Lines[#c.Lines+1]='FAILED '..path..': source file save failed'end
+            else c.Lines[#c.Lines+1]='UNAVAILABLE '..path..': '..d.Text(err)end
+            c.Save()
+        end
+        c.Lines[#c.Lines+1]='COMPLETE saved='..saved..'/4. Client sources only; server rules and decompiler accuracy unverified.'
+        c.Save();c.Active=false;c.Runner=nil
+        d.Status('Block rules: '..saved..'/4 saved. '..(c.SaveFailed and 'Report save FAILED.'or'See GohanHub/block_rules_latest.txt.'))
+    end
+    function c.Start()
+        if unloaded or c.Active then return end
+        if d.Active or b.Enabled or p.Enabled or d.KeyOwner or b.Held or p.Held then
+            d.Status('Stop defense tests/recordings before capturing block rules.');return
+        end
+        c.Id=tostring(os.time())..'_'..HttpService:GenerateGUID(false):gsub('%W',''):sub(1,12)
+        c.Lines={'BLOCK RULE CAPTURE // read-only v1 place='..tostring(game.PlaceId),
+            'Four exact client paths. No recursive scan, require, execution, hooks, input or remotes.',
+            'Up to 2MB per source, 5s per read and 20s total source-read budget. Missing/oversized sources are reported.',
+            'Decompiler output may be incomplete or inaccurate. Client checks do not establish server acceptance.',
+            'RUNNING capture='..c.Id}
+        if not c.Save()then d.Status('Cannot save block-rule report; capture not started.');return end
+        c.Serial+=1;local serial=c.Serial;c.Active=true;c.Deadline=os.clock()+20
+        d.Status('Capturing current block rules // no combat inputs // up to 20 seconds.')
+        c.Runner=task.spawn(function()
+            local ok,err=pcall(c.Run,serial)
+            if not ok and c.Alive(serial)then
+                c.Lines[#c.Lines+1]='ERROR '..d.Text(err);c.Save();c.Active=false;c.Runner=nil
+                if c.Worker then pcall(task.cancel,c.Worker);c.Worker=nil end
+                d.Status('Block-rule capture failed; '..(c.SaveFailed and 'report save failed.'or'see block_rules_latest.txt.'))
+            end
+        end)
+    end
+    -- END BLOCK RULE CAPTURE
     -- BEGIN DEFENSE UI
-    local card=create('Frame',{Name='CombatDefense',Position=UDim2.fromOffset(16,210),Size=UDim2.new(1,-32,0,228),
+    local card=create('Frame',{Name='CombatDefense',Position=UDim2.fromOffset(16,210),Size=UDim2.new(1,-32,0,264),
         BackgroundColor3=colors.SurfaceRaised,BorderSizePixel=0},configStore.CombatPage)
     create('UICorner',{CornerRadius=UDim.new(0,9)},card)
     create('TextLabel',{Position=UDim2.fromOffset(14,8),Size=UDim2.new(1,-28,0,22),BackgroundTransparency=1,
@@ -8708,10 +8818,11 @@ do
         end
         button('Record'..mode,'Record '..mode,0.65,36+(index-1)*36,0.35,function()d.Start(mode)end)
     end
-    button('Stop','Stop / Save',0,148,1/3,function()d.Stop('User stopped');b.SetEnabled(false);p.SetEnabled(false)end)
+    button('Stop','Stop / Save',0,148,1/3,function()c.Cancel('User stopped');d.Stop('User stopped');b.SetEnabled(false);p.SetEnabled(false)end)
     button('Success','Mark SUCCESS',1/3,148,1/3,function()d.Log('user_outcome','success');for _,mode in ipairs({b,p})do if mode.Enabled then mode.Log('user_outcome','success');mode.Save()end end end)
     button('Miss','Mark MISS',2/3,148,1/3,function()d.Log('user_outcome','miss');for _,mode in ipairs({b,p})do if mode.Enabled then mode.Log('user_outcome','miss');mode.Save()end end end)
-    d.Label=create('TextLabel',{Position=UDim2.fromOffset(14,184),Size=UDim2.new(1,-28,0,38),BackgroundTransparency=1,
+    button('CaptureBlockRules','Capture block rules (read only)',0,184,1,function()c.Start()end)
+    d.Label=create('TextLabel',{Position=UDim2.fromOffset(14,220),Size=UDim2.new(1,-28,0,38),BackgroundTransparency=1,
         Text='Parry / Beam: 60-second tests, OFF by default. Test one at a time. Sonic Sway needs calibration.',Font=Enum.Font.Gotham,TextSize=10,
         TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left},card)
 end
@@ -23254,6 +23365,7 @@ function controller.Unload()
 	end
 	step("server browser",qolState.ServerNavigation.StopServerBrowser)
 	step("combat defense recorder",function()configStore.CombatDefense.Stop('Hub unloaded')end)
+	step("block rule capture",function()configStore.CombatDefense.RuleCapture.Cancel('Hub unloaded')end)
 	step("beam defense input",function()configStore.CombatDefense.Beam.Stop('Hub unloaded')end)
 	step("parry defense input",function()configStore.CombatDefense.Parry.Stop('Hub unloaded')end)
 	step("reload request",function()

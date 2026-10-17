@@ -8367,7 +8367,8 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v9-release-events',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v10-dash-recognition',RecoveryOpportunitySpan=0.75,
+        DashAnimation='88929057646501',DashPairWindow=0.15,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
@@ -8434,6 +8435,7 @@ do
         local own,other=d.Root(p.Character),d.Root(p.Target)
         capture.animations[#capture.animations+1]={t=now-p.Started,id=id,known=known,
             speed=track.Speed,position=track.TimePosition,length=track.Length,
+            cueClass=id==p.DashAnimation and 'forward_dash_candidate' or nil,
             distance=own and other and (own.Position-other.Position).Magnitude or nil,
             selfStunned=p.Character:GetAttribute('State_Stunned')==true,
             attackerStunned=p.Target:GetAttribute('State_Stunned')==true,
@@ -8474,6 +8476,7 @@ do
     function p.Observe()
         if not p.Enabled or not p.Observations or p.ObservationError then return end
         local now=os.clock()
+        p.ObserveDash()
         p.ObserveResponses(now)
         -- Sample the live query every observed heartbeat, even without a pending
         -- attack. Log transitions separately so they cannot exhaust action rows.
@@ -8513,6 +8516,38 @@ do
             if p.Observations then p.Observations.error=p.ObservationError;p.ObservationDirty=true end
             p.Log('observation_error',p.ObservationError) -- Diagnostics cannot disable defense.
         end
+    end
+    -- Recognition ONLY. Dash arrival varies with distance; this observed cue
+    -- can arrive after close-range damage. Do not reuse an M1 timing profile.
+    function p.ObserveDash(track,id)
+        if not p.Enabled or not p.Target then return end
+        local now=os.clock()
+        local forward=p.Target:GetAttribute('State_ForwardDashing')==true
+        if forward and not p.LastForwardDash then p.ForwardDashEdge=now end
+        p.LastForwardDash=forward
+        if track and id==p.DashAnimation then
+            if p.LastDashTrack==track and now-(p.LastDashAt or 0)<0.25 then return end
+            p.LastDashTrack=track;p.LastDashAt=now
+            if type(track.TimePosition)~='number' or track.TimePosition<0 or track.TimePosition>0.1 then
+                p.Log('dash_cue_unconfirmed',{reason='late_animation',animation=id});return
+            end
+            p.DashCandidate={track=track,at=now,speed=track.Speed}
+        end
+        local cue=p.DashCandidate
+        if not cue then return end
+        if now-cue.at>p.DashPairWindow or cue.track.IsPlaying==false then
+            p.DashCandidate=nil
+            p.Log('dash_cue_unconfirmed',{reason='state_pair_missing_or_clip_ended',animation=p.DashAnimation});return
+        end
+        if not forward or p.Target:GetAttribute('State_Dashing')~=true or not p.ForwardDashEdge
+            or math.abs(p.ForwardDashEdge-cue.at)>p.DashPairWindow then return end
+        p.DashCandidate=nil
+        local own,other=d.Root(p.Character),d.Root(p.Target)
+        p.Log('forward_q_dash_recognized',{animation=p.DashAnimation,speed=cue.speed,
+            sinceAnimation=now-cue.at,stateEdgeOffset=p.ForwardDashEdge-cue.at,
+            distance=own and other and (own.Position-other.Position).Magnitude or nil,
+            attackerMotion=p.Motion(p.Target),recognitionOnly=true})
+        d.Status('PARRY TEST // Forward Q dash recognized // timing not calibrated; no dash F sent.')
     end
     function p.CancelReleaseWatch(reason)
         if not p.ReleaseWatch then return end
@@ -8731,7 +8766,7 @@ do
             p.PrepareSerial=(p.PrepareSerial or 0)+1;p.Preparing=false
             if p.RuleWorker then pcall(task.cancel,p.RuleWorker);p.RuleWorker=nil end
             defenseQueue.Cancel(p)
-            p.Enabled=false;p.Pending=nil;p.Rules=nil
+            p.Enabled=false;p.Pending=nil;p.Rules=nil;p.DashCandidate=nil;p.LastDashTrack=nil;p.ForwardDashEdge=nil
             if p.Connection then pcall(function()p.Connection:Disconnect()end);p.Connection=nil end
             p.Release('disabled');p.Target=nil;p.Character=nil;p.LastTrack=nil
             if p.Started then p.Log('stop','Disabled');p.Save()end
@@ -8762,6 +8797,8 @@ do
         p.Rules=rules
         p.Character=char;p.Target=target;p.Rows={};p.DroppedRows=0;p.Started=os.clock();p.SaveFailed=false
         p.Pending=nil;p.LastTrack=nil;p.ReleaseWatch=nil;p.Enabled=true
+        p.DashCandidate=nil;p.LastDashTrack=nil;p.LastDashAt=nil;p.ForwardDashEdge=nil
+        p.LastForwardDash=target:GetAttribute('State_ForwardDashing')==true
         p.InputSerial=0;p.LastInputRequest=nil
         p.InputHistory={};p.ResponseStates={State_Blocking=char:GetAttribute('State_Blocking')==true,
             State_SonicSway=char:GetAttribute('State_SonicSway')==true}
@@ -8779,7 +8816,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v9 F-delivery diagnostics // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v10 Q-dash recognition // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -8830,6 +8867,7 @@ do
         local id=track.Animation and tostring(track.Animation.AnimationId):match('%d+$')
         local profile=id and p.Profiles[id]
         p.SafeObservation(p.ObserveAnimation,track,id,profile~=nil)
+        p.SafeObservation(p.ObserveDash,track,id)
         if not profile then return end -- Other styles/heavies/locomotion remain observation-only.
         local now=os.clock()
         if p.LastTrack==track and now-p.LastTrackAt<0.1 then return end

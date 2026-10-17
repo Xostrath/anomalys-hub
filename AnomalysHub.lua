@@ -8333,7 +8333,7 @@ do
     -- First punch: earlier user-confirmed sequence began with F ~0.003s after the cue;
     -- attribution was less certain because later taps followed. Second punch: one confirmed
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v3-air-finisher',
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v4-client-gates',
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
         ['99346182354558']={phase=0,hold=0.12,reach=12,facing=0.25,label='first punch / provisional'},
@@ -8363,7 +8363,7 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=6,build=p.Build,place=game.PlaceId,run=p.RunId,
+            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=7,build=p.Build,place=game.PlaceId,run=p.RunId,
                 recoveryHold=p.RecoveryHold,recoveryGap=p.RecoveryGap,recoveryLimit=p.RecoveryLimit,
                 burstLimit=p.BurstLimit,burstSpan=p.BurstSpan,burstPhaseStep=p.BurstPhaseStep,droppedRows=p.DroppedRows or 0,
                 observationsFile='defense_parry_observed_latest.json',
@@ -8482,11 +8482,60 @@ do
         details=details or {};details.reason=reason;p.Log('skip',details);p.Save()
         d.Status('PARRY TEST // SKIPPED: '..reason..(p.SaveFailed and ' // Log save failed' or ''))
     end
+    -- Query the game's current module, never execute the decompiled capture or
+    -- mutate states/locks. Loaded before listening for attacks, not on a cue.
+    function p.LoadRules(serial)
+        local object=ReplicatedStorage
+        for _,name in ipairs({'Modules','Metadata','ControlData','StateManager'})do
+            object=object and object:FindFirstChild(name)
+        end
+        if not object then return nil,'StateManager missing'end
+        local result
+        local worker=task.spawn(function()result=table.pack(pcall(require,object))end)
+        p.RuleWorker=worker
+        local deadline=os.clock()+5
+        while not result and not unloaded and p.Preparing and p.PrepareSerial==serial and os.clock()<deadline do task.wait(0.05)end
+        pcall(task.cancel,worker)
+        if p.RuleWorker==worker then p.RuleWorker=nil end
+        if not result then return nil,'StateManager load canceled/timed out'end
+        if not result[1]or type(result[2])~='table'or type(result[2].CanPerformAction)~='function'then
+            return nil,'StateManager eligibility query unavailable'
+        end
+        return result[2]
+    end
+    function p.BlockEligibility()
+        local ok,eligible,reason,signals=pcall(function()
+            local char=p.Character
+            local lock=char:GetAttribute('BlockLockUntil')or 0
+            local serverNow=workspace:GetServerTimeNow()
+            assert(type(lock)=='number'and lock==lock and type(serverNow)=='number'and serverNow==serverNow,'Invalid block clock')
+            local data={serverNow=serverNow,blockLockUntil=lock,lockRemaining=math.max(0,lock-serverNow),
+                superPushCasting=not not char:GetAttribute('SuperPushCasting'),stunnedReported=char:GetAttribute('State_Stunned')==true}
+            if data.superPushCasting then return false,'super_push_casting',data end
+            if serverNow<lock then return false,'block_lock',data end
+            local allowed=p.Rules.CanPerformAction(char,'Block')
+            assert(type(allowed)=='boolean','Invalid eligibility result')
+            data.canPerformBlock=allowed
+            if not allowed and type(p.Rules.GetAllStates)=='function'then
+                local states=p.Rules.GetAllStates(char);data.activeStates={}
+                for name,active in pairs(states)do
+                    if active then data.activeStates[#data.activeStates+1]=d.Text(name)end
+                    if #data.activeStates>=16 then break end
+                end
+                table.sort(data.activeStates)
+            end
+            return allowed,allowed and 'client_eligible'or 'state_disallows_block',data
+        end)
+        if not ok then return nil,'eligibility_query_failed',{error=d.Text(eligible)}end
+        return eligible,reason,signals
+    end
     function p.SetEnabled(enabled)
         if enabled and d.RuleCapture and d.RuleCapture.Active then d.Status('Wait for block-rule capture, or Stop / Save to cancel.');return end
         if not enabled then
+            p.PrepareSerial=(p.PrepareSerial or 0)+1;p.Preparing=false
+            if p.RuleWorker then pcall(task.cancel,p.RuleWorker);p.RuleWorker=nil end
             defenseQueue.Cancel(p)
-            p.Enabled=false;p.Pending=nil
+            p.Enabled=false;p.Pending=nil;p.Rules=nil
             if p.Connection then pcall(function()p.Connection:Disconnect()end);p.Connection=nil end
             p.Release('disabled');p.Target=nil;p.Character=nil;p.LastTrack=nil
             if p.Started then p.Log('stop','Disabled');p.Save()end
@@ -8494,7 +8543,7 @@ do
             if p.ObservationSaveFailed then d.Status('PARRY TEST // observation save failed; check executor file support.')end
             p.Render();return
         end
-        if unloaded or p.Enabled or p.Held then return end
+        if unloaded or p.Enabled or p.Held or p.Preparing then return end
         if d.Active then d.Status('Stop the manual recording before enabling Auto Parry.');return end
         local char=localPlayer.Character
         local hum=char and char:FindFirstChildOfClass('Humanoid')
@@ -8506,6 +8555,15 @@ do
         local targetHum=target:FindFirstChildOfClass('Humanoid')
         local animator=targetHum and targetHum:FindFirstChildOfClass('Animator')
         if not animator then d.Status('PARRY TEST // attacker animation cues unavailable.');return end
+        p.PrepareSerial=(p.PrepareSerial or 0)+1;local serial=p.PrepareSerial;p.Preparing=true
+        d.Status('PARRY TEST // preparing current client block eligibility...')
+        local rules,ruleError=p.LoadRules(serial)
+        if serial~=p.PrepareSerial then return end
+        p.Preparing=false
+        if unloaded or localPlayer.Character~=char or hum.Health<=0 or not target.Parent or targetHum.Health<=0
+            or d.Active or(d.RuleCapture and d.RuleCapture.Active)then return end
+        if not rules then d.Status('PARRY TEST // OFF: '..d.Text(ruleError));return end
+        p.Rules=rules
         p.Character=char;p.Target=target;p.Rows={};p.DroppedRows=0;p.Started=os.clock();p.SaveFailed=false
         p.Pending=nil;p.LastTrack=nil;p.Enabled=true
         p.InputHistory={};p.ResponseStates={State_Blocking=char:GetAttribute('State_Blocking')==true,
@@ -8522,7 +8580,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // air finisher + recovery v3; max 2 recovery holds // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v4 client eligibility gates // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -8641,6 +8699,31 @@ do
             return
         end
         if not pending then defenseQueue.Cancel(p);return end
+        -- A closed client gate waits only inside this swing's existing deadline.
+        -- Do not count a rejected opportunity as a tap or invent a fresh window
+        -- when stun/lock clears. Query again at dispatch to avoid stale readiness.
+        if now>=pending.at and not p.Held then
+            if pending.gateReason and now>pending.at+0.1 then
+                p.Pending=nil;defenseQueue.Cancel(p)
+                p.Skip('block_gate_window_expired',{animation=pending.id,gate=pending.gateReason});return
+            end
+            local eligible,gate,signals=p.BlockEligibility()
+            if eligible==nil then p.Log('eligibility_error',signals);p.Stop(gate);return end
+            pending.eligibility=signals
+            if not eligible then
+                if pending.gateReason~=gate then
+                    p.Log('block_gate_wait',{animation=pending.id,gate=gate,signals=signals});pending.gateReason=gate
+                end
+                defenseQueue.Cancel(p)
+                if now>pending.at+0.1 then
+                    p.Pending=nil;p.Skip('block_gate_window_expired',{animation=pending.id,gate=gate})
+                end
+                return
+            elseif pending.gateReason then
+                p.Log('block_gate_ready',{animation=pending.id,previousGate=pending.gateReason,signals=signals})
+                pending.gateReason=nil
+            end
+        end
         -- Each distinct swing owns its deadline. Only wait for the real key-up
         -- gap, not a cooldown inherited from a different swing. Do not extend
         -- the original expiry if that gap would make this attack too late.
@@ -8657,7 +8740,7 @@ do
         local details={animation=pending.id,sinceAnimation=now-pending.started,lateness=now-pending.at,
             distance=distance,health=health,speed=pending.speed,phase=pending.phase,
             stunnedReported=stunned,recovery=pending.recovery or false,plannedHold=hold,
-            burst=pending.burst,tap=pending.taps+1,profile=pending.profile.label}
+            burst=pending.burst,tap=pending.taps+1,profile=pending.profile.label,clientEligibility=pending.eligibility}
         local skip=pending.taps>=limit and 'recovery_tap_limit' or details.lateness>0.1 and 'late_frame' or d.KeyOwner and 'F_owned_by_defense'
             or UserInputService:IsKeyDown(Enum.KeyCode.F)and 'F_already_down'
             or p.Character:GetAttribute('State_Blocking')and 'blocking_reported'
@@ -8774,7 +8857,7 @@ do
     end
     function c.Start()
         if unloaded or c.Active then return end
-        if d.Active or b.Enabled or p.Enabled or d.KeyOwner or b.Held or p.Held then
+        if d.Active or b.Enabled or p.Enabled or p.Preparing or d.KeyOwner or b.Held or p.Held then
             d.Status('Stop defense tests/recordings before capturing block rules.');return
         end
         c.Id=tostring(os.time())..'_'..HttpService:GenerateGUID(false):gsub('%W',''):sub(1,12)

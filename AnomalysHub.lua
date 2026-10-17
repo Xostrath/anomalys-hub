@@ -9177,6 +9177,8 @@ do
             {name='StateManager',root=ReplicatedStorage,path={'Modules','Metadata','ControlData','StateManager'}},
             {name='CombatPresets',root=ReplicatedStorage,path={'Modules','Metadata','CombatData','CombatPresets'}},
             {name='ControlData',root=ReplicatedStorage,path={'Modules','Metadata','ControlData','ControlData'}},
+            -- Exact child referenced by the previously captured Core Combat source.
+            {name='DashModule',root=localPlayer,path={'PlayerScripts','Client','Core','Combat','Default Combat','Core Combat','DashModule'}},
         }
         local saved=0
         for _,entry in ipairs(entries)do
@@ -9198,9 +9200,9 @@ do
             else c.Lines[#c.Lines+1]='UNAVAILABLE '..path..': '..d.Text(err)end
             c.Save()
         end
-        c.Lines[#c.Lines+1]='COMPLETE saved='..saved..'/4. Client sources only; server rules and decompiler accuracy unverified.'
+        c.Lines[#c.Lines+1]='COMPLETE saved='..saved..'/'..#entries..'. Client sources only; server rules and decompiler accuracy unverified.'
         c.Save();c.Active=false;c.Runner=nil
-        d.Status('Block rules: '..saved..'/4 saved. '..(c.SaveFailed and 'Report save FAILED.'or'See GohanHub/block_rules_latest.txt.'))
+        d.Status('Block / dash rules: '..saved..'/'..#entries..' saved. '..(c.SaveFailed and 'Report save FAILED.'or'See GohanHub/block_rules_latest.txt.'))
     end
     function c.Start()
         if unloaded or c.Active then return end
@@ -9208,14 +9210,14 @@ do
             d.Status('Stop defense tests/recordings before capturing block rules.');return
         end
         c.Id=tostring(os.time())..'_'..HttpService:GenerateGUID(false):gsub('%W',''):sub(1,12)
-        c.Lines={'BLOCK RULE CAPTURE // read-only v1 place='..tostring(game.PlaceId),
-            'Four exact client paths. No recursive scan, require, execution, hooks, input or remotes.',
-            'Up to 2MB per source, 5s per read and 20s total source-read budget. Missing/oversized sources are reported.',
+        c.Lines={'BLOCK RULE CAPTURE // read-only v2 with DashModule place='..tostring(game.PlaceId),
+            'Five exact client paths. No recursive scan, require, execution, hooks, input or remotes.',
+            'Up to 2MB per source, 5s per read and 25s total source-read budget. Missing/oversized sources are reported.',
             'Decompiler output may be incomplete or inaccurate. Client checks do not establish server acceptance.',
             'RUNNING capture='..c.Id}
         if not c.Save()then d.Status('Cannot save block-rule report; capture not started.');return end
-        c.Serial+=1;local serial=c.Serial;c.Active=true;c.Deadline=os.clock()+20
-        d.Status('Capturing current block rules // no combat inputs // up to 20 seconds.')
+        c.Serial+=1;local serial=c.Serial;c.Active=true;c.Deadline=os.clock()+25
+        d.Status('Capturing block / dash rules // no combat inputs // up to 25 seconds.')
         c.Runner=task.spawn(function()
             local ok,err=pcall(c.Run,serial)
             if not ok and c.Alive(serial)then
@@ -9251,7 +9253,7 @@ do
     button('Stop','Stop / Save',0,148,1/3,function()c.Cancel('User stopped');d.Stop('User stopped');b.SetEnabled(false);p.SetEnabled(false)end)
     button('Success','Mark SUCCESS',1/3,148,1/3,function()d.Log('user_outcome','success');for _,mode in ipairs({b,p})do if mode.Enabled then mode.Log('user_outcome','success');mode.Save()end end end)
     button('Miss','Mark MISS',2/3,148,1/3,function()d.Log('user_outcome','miss');for _,mode in ipairs({b,p})do if mode.Enabled then mode.Log('user_outcome','miss');mode.Save()end end end)
-    button('CaptureBlockRules','Capture block rules (read only)',0,184,1,function()c.Start()end)
+    button('CaptureBlockRules','Capture block + dash rules (read only)',0,184,1,function()c.Start()end)
     button('RecordQDash','Record Q Dash (60s / passive)',0,220,1,function()d.Start('QDash')end)
     d.Label=create('TextLabel',{Position=UDim2.fromOffset(14,256),Size=UDim2.new(1,-28,0,38),BackgroundTransparency=1,
         Text='Parry / Beam: 60-second tests, OFF by default. Test one at a time. Sonic Sway needs calibration.',Font=Enum.Font.Gotham,TextSize=10,

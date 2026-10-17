@@ -8348,10 +8348,70 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=2,place=game.PlaceId,
+            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=3,place=game.PlaceId,run=p.RunId,
+                observationsFile='defense_parry_observed_latest.json',
                 note='Experimental two-punch parry attempts, NOT confirmed successes. One locked attacker; no network reporting.',rows=p.Rows}))
         end)
         p.SaveFailed=not ok
+    end
+    -- Companion diagnostics do not consume the action log's row budget. They never
+    -- choose timings or press keys. Unknown animations include locomotion/idle;
+    -- an observed animation is NOT automatically a melee attack or a success.
+    function p.SaveObservations()
+        if not p.Observations or not p.ObservationDirty then return end
+        local ok=pcall(function()
+            assert(type(writefile)=='function','File writing unavailable')
+            if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
+            local body=HttpService:JSONEncode(p.Observations)
+            assert(#body<=8*1024*1024,'Observation file exceeds 8MB limit')
+            writefile(configStore.Root..'/defense_parry_observed_latest.json',body)
+        end)
+        p.ObservationSaveFailed=not ok
+        if ok then p.ObservationDirty=false end
+        p.LastObservationSave=os.clock()
+    end
+    function p.ObserveAnimation(track,id,known)
+        if not p.Enabled or not p.Observations or p.ObservationError then return end
+        local now=os.clock()
+        if p.ObservedTrack==track and now-p.ObservedAt<0.1 then return end
+        p.ObservedTrack=track;p.ObservedAt=now
+        local capture=p.Observations
+        if #capture.animations>=200 then capture.droppedAnimations+=1;p.ObservationDirty=true;return end
+        local own,other=d.Root(p.Character),d.Root(p.Target)
+        capture.animations[#capture.animations+1]={t=now-p.Started,id=id,known=known,
+            speed=track.Speed,position=track.TimePosition,length=track.Length,
+            distance=own and other and (own.Position-other.Position).Magnitude or nil,
+            selfStunned=p.Character:GetAttribute('State_Stunned')==true,
+            attackerStunned=p.Target:GetAttribute('State_Stunned')==true,
+            lightAttacking=p.Target:GetAttribute('State_LightAttacking')==true,
+            chainAttacking=p.Target:GetAttribute('State_ChainAttacking')==true}
+        p.ObservationDirty=true
+    end
+    function p.Observe()
+        if not p.Enabled or not p.Observations or p.ObservationError then return end
+        local now=os.clock()
+        if now-(p.LastObservationFrame or -math.huge)>=0.05 then
+            p.LastObservationFrame=now
+            local capture=p.Observations
+            if #capture.frames<1200 then
+                capture.frames[#capture.frames+1]={t=now-p.Started,self=d.Actor(p.Character),attacker=d.Actor(p.Target),
+                    inputHeld=p.Held,manualOrSyntheticF=UserInputService:IsKeyDown(Enum.KeyCode.F),
+                    pending=p.Pending and p.Pending.id or nil}
+            else capture.droppedFrames+=1 end
+            p.ObservationDirty=true
+        end
+        -- Keep large JSON serialization out of attack callbacks, scheduled input
+        -- windows, and active holds. Stop/timeout also flushes the full capture.
+        if now-p.LastObservationSave>=5 and not p.Pending and not b.Pending and not d.KeyOwner
+            and now-(p.ObservedAt or p.Started)>=0.75 then p.SaveObservations()end
+    end
+    function p.SafeObservation(callback,...)
+        local ok,err=pcall(callback,...)
+        if not ok and not p.ObservationError then
+            p.ObservationError=d.Text(err)
+            if p.Observations then p.Observations.error=p.ObservationError;p.ObservationDirty=true end
+            p.Log('observation_error',p.ObservationError) -- Diagnostics cannot disable defense.
+        end
     end
     function p.Release(reason)
         if not p.Held then return true end
@@ -8370,6 +8430,8 @@ do
             if p.Connection then pcall(function()p.Connection:Disconnect()end);p.Connection=nil end
             p.Release('disabled');p.Target=nil;p.Character=nil;p.LastTrack=nil
             if p.Started then p.Log('stop','Disabled');p.Save()end
+            p.SaveObservations();p.ObservedTrack=nil
+            if p.ObservationSaveFailed then d.Status('PARRY TEST // observation save failed; check executor file support.')end
             p.Render();return
         end
         if unloaded or p.Enabled or p.Held then return end
@@ -8386,17 +8448,23 @@ do
         if not animator then d.Status('PARRY TEST // attacker animation cues unavailable.');return end
         p.Character=char;p.Target=target;p.Rows={};p.Started=os.clock();p.Cooldown=0;p.SaveFailed=false
         p.Pending=nil;p.LastTrack=nil;p.Enabled=true
+        p.RunId=tostring(p.Started);p.ObservationError=nil;p.ObservationSaveFailed=false
+        p.ObservedTrack=nil;p.ObservedAt=nil;p.LastObservationFrame=nil;p.LastObservationSave=p.Started
+        p.Observations={version=1,run=p.RunId,place=game.PlaceId,framesPerSecond=20,
+            note='Passive observations during Auto Parry, NOT confirmed attacks, hit times, parries or Sonic Sways. Unknown animations may be idle/locomotion. One locked attacker; local file only.',
+            frames={},animations={},droppedFrames=0,droppedAnimations=0}
+        p.ObservationDirty=true;p.SaveObservations()
         p.Connection=animator.AnimationPlayed:Connect(function(track)
             if not p.Enabled then return end
             local ok,err=pcall(p.OnAnimation,track)
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12});p.Save();p.Render()
-        d.Status('PARRY TEST // locked: '..d.Text(target.Name)..' // first two recorded punches; 60 seconds.'..(p.SaveFailed and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // locked: '..d.Text(target.Name)..' // 60 seconds; unknown animations logged locally.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
-        d.Status('PARRY TEST // '..reason..(p.SaveFailed and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // '..reason..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Check(pending)
         if unloaded or localPlayer.Character~=p.Character then return false,'character_changed',true end
@@ -8434,6 +8502,7 @@ do
         if not p.Enabled then return end
         local id=track.Animation and tostring(track.Animation.AnimationId):match('%d+$')
         local profile=id and p.Profiles[id]
+        p.SafeObservation(p.ObserveAnimation,track,id,profile~=nil)
         if not profile then return end -- Locomotion, later combo hits, heavy attacks and other styles are not mapped.
         local now=os.clock()
         if p.LastTrack==track and now-p.LastTrackAt<0.1 then return end
@@ -8517,6 +8586,7 @@ do
             if not ok then mode.Stop('Error: '..d.Text(err))end
         end
         defenseQueue.Drain()
+        p.SafeObservation(p.Observe) -- After input scheduling, never before an immediate press.
     end)
     -- END AUTO PARRY TEST
     -- BEGIN DEFENSE UI

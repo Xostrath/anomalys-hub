@@ -8335,7 +8335,7 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v8-second-hit-lead',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v9-release-events',RecoveryOpportunitySpan=0.75,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
@@ -8366,7 +8366,7 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=10,build=p.Build,place=game.PlaceId,run=p.RunId,
+            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=11,build=p.Build,place=game.PlaceId,run=p.RunId,
                 recoveryOpportunitySpan=p.RecoveryOpportunitySpan,
                 releaseCheckDelay=p.ReleaseCheckDelay,releaseRetryLimit=p.ReleaseRetryLimit,releaseWatchSpan=p.ReleaseWatchSpan,
                 recoveryHold=p.RecoveryHold,recoveryGap=p.RecoveryGap,recoveryLimit=p.RecoveryLimit,
@@ -8487,6 +8487,65 @@ do
         p.Log('release_watch_canceled',{reason=reason,retries=p.ReleaseWatch.retries})
         p.ReleaseWatch=nil
     end
+    -- Record requested input separately from delivered UIS events. Proximity to
+    -- a request is context only: a physical F event cannot be uniquely attributed.
+    function p.SendF(down,reason)
+        p.InputSerial=(p.InputSerial or 0)+1
+        local request={serial=p.InputSerial,at=os.clock(),down=down,reason=reason}
+        p.LastInputRequest=request
+        local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,down,Enum.KeyCode.F,false,game)
+        request.sent=ok
+        p.Log('F_request',{serial=request.serial,down=down,reason=reason,sent=ok,
+            requestedAt=request.at-(p.Started or request.at),callDuration=os.clock()-request.at})
+        return ok
+    end
+    function p.ObserveInput(direction,input,processed)
+        if input.KeyCode~=Enum.KeyCode.F or(not p.Enabled and not p.ReleaseTail)or not p.Observations then return end
+        local capture=p.Observations
+        if #capture.inputEvents>=160 then capture.droppedInputEvents+=1;p.ObservationDirty=true;return end
+        local now=os.clock()
+        local char=p.Character or(p.ReleaseTail and p.ReleaseTail.character)
+        local request=p.LastInputRequest
+        local context
+        if request and now-request.at<=0.5 then
+            context={serial=request.serial,age=now-request.at,down=request.down,reason=request.reason,sent=request.sent}
+        end
+        capture.inputEvents[#capture.inputEvents+1]={t=now-p.Started,direction=direction,processed=processed==true,
+            keyDown=UserInputService:IsKeyDown(Enum.KeyCode.F),held=p.Held,postStop=p.ReleaseTail~=nil,
+            reportedBlocking=char and char:GetAttribute('State_Blocking')==true,
+            reportedStunned=char and char:GetAttribute('State_Stunned')==true,
+            owner=d.KeyOwner==p and 'parry' or(d.KeyOwner==b and 'beam' or 'none'),recentRequest=context}
+        p.ObservationDirty=true
+    end
+    function p.FinishReleaseTail(reason)
+        if not p.ReleaseTail then return end
+        p.ReleaseTail=nil;p.Log('release_tail_end',reason);p.Save();p.SaveObservations()
+    end
+    function p.UpdateReleaseTail()
+        local tail=p.ReleaseTail
+        if not tail then return end
+        local now=os.clock()
+        if now>=tail.expires then p.FinishReleaseTail('completed');return end
+        if p.ObservationError then p.FinishReleaseTail('observation_error');return end
+        local hum=tail.character:FindFirstChildOfClass('Humanoid')
+        if unloaded or localPlayer.Character~=tail.character or not hum or hum.Health<=0 then
+            p.FinishReleaseTail('lifecycle');return
+        end
+        if p.Enabled or b.Enabled or d.Active or(d.RuleCapture and d.RuleCapture.Active)then
+            p.FinishReleaseTail('another_test');return
+        end
+        if now<tail.nextAt then return end
+        tail.nextAt=now+0.05
+        local ok,states=pcall(tail.rules.GetAllStates,tail.character)
+        if not ok or type(states)~='table' then p.FinishReleaseTail('query_failed');return end
+        local samples=p.Observations.releaseTail
+        if #samples>=201 then p.FinishReleaseTail('sample_cap');return end
+        samples[#samples+1]={t=now-p.Started,localBlocking=states.Blocking==true,
+            reportedBlocking=tail.character:GetAttribute('State_Blocking')==true,
+            keyDown=UserInputService:IsKeyDown(Enum.KeyCode.F)}
+        p.ObservationDirty=true
+        if now-(tail.lastSave or tail.started)>=1 then tail.lastSave=now;p.SaveObservations()end
+    end
     function p.CheckRelease(now)
         local watch=p.ReleaseWatch
         if not watch then return end
@@ -8533,12 +8592,18 @@ do
         watch.clearSince=nil
         if now>=watch.expires then
             p.Log('release_still_blocking',details);p.ReleaseWatch=nil
-            p.Stop('Blocking persisted after F-up; test stopped. Tap and release F manually.');return
+            local char,rules=watch.character,p.Rules
+            p.Stop('Blocking persisted; test stopped. Tap/release F once now; observing for 10s.')
+            if not unloaded and not b.Enabled and not d.Active and not p.ObservationError then
+                p.ReleaseTail={character=char,rules=rules,started=now,expires=now+10,nextAt=now}
+                p.Log('release_tail_start',{duration=10,passive=true});p.Save()
+            end
+            return
         end
         if watch.retries>=p.ReleaseRetryLimit then return end
         -- Retry ONLY key-up. Never press F down, clear game state, or send a
         -- combat remote to force recovery from a lingering block.
-        local sent=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,false,Enum.KeyCode.F,false,game)
+        local sent=p.SendF(false,'release_retry')
         watch.retries+=1;watch.nextAt=now+p.ReleaseRetryGap
         details.retry=watch.retries;details.sent=sent
         p.Log('F_up_retry',details)
@@ -8546,12 +8611,16 @@ do
         watch.sawKeyUp=false;watch.lastUp=now -- A retry can also have delayed key-state visibility.
         p.NextPressAt=math.max(p.NextPressAt,now+p.BurstGap)
     end
-    connect(UserInputService.InputBegan,function(input)
+    connect(UserInputService.InputBegan,function(input,processed)
+        p.SafeObservation(p.ObserveInput,'began',input,processed)
         if input.KeyCode==Enum.KeyCode.F then p.CancelReleaseWatch('F_input_after_release')end
+    end)
+    connect(UserInputService.InputEnded,function(input,processed)
+        p.SafeObservation(p.ObserveInput,'ended',input,processed)
     end)
     function p.Release(reason)
         if not p.Held then return true end
-        local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,false,Enum.KeyCode.F,false,game)
+        local ok=p.SendF(false,reason)
         if ok then
             p.Held=false;if d.KeyOwner==p then d.KeyOwner=nil end
             p.NextPressAt=os.clock()+(p.HoldGap or p.BurstGap)
@@ -8624,6 +8693,7 @@ do
     end
     function p.SetEnabled(enabled)
         if enabled and d.RuleCapture and d.RuleCapture.Active then d.Status('Wait for block-rule capture, or Stop / Save to cancel.');return end
+        p.FinishReleaseTail(enabled and 'new_test' or 'disabled')
         if not enabled then
             p.CancelReleaseWatch('disabled')
             p.PrepareSerial=(p.PrepareSerial or 0)+1;p.Preparing=false
@@ -8660,14 +8730,16 @@ do
         p.Rules=rules
         p.Character=char;p.Target=target;p.Rows={};p.DroppedRows=0;p.Started=os.clock();p.SaveFailed=false
         p.Pending=nil;p.LastTrack=nil;p.ReleaseWatch=nil;p.Enabled=true
+        p.InputSerial=0;p.LastInputRequest=nil
         p.InputHistory={};p.ResponseStates={State_Blocking=char:GetAttribute('State_Blocking')==true,
             State_SonicSway=char:GetAttribute('State_SonicSway')==true}
         p.RunId=tostring(p.Started);p.ObservationError=nil;p.ObservationSaveFailed=false
         p.ObservedTrack=nil;p.ObservedAt=nil;p.LastObservationFrame=nil;p.LastObservationSave=p.Started;p.LastEligibilityKey=nil
-        p.Observations={version=2,build=p.Build,run=p.RunId,place=game.PlaceId,framesPerSecond=20,
+        p.Observations={version=3,build=p.Build,run=p.RunId,place=game.PlaceId,framesPerSecond=20,
             note='Passive observations during Auto Parry, NOT confirmed attacks, hit times, parries or Sonic Sways. Unknown animations may be idle/locomotion. One locked attacker; local file only.',
             frames={},animations={},droppedFrames=0,droppedAnimations=0,
-            eligibilityTransitions={},eligibilitySamples=0,droppedEligibilityTransitions=0}
+            eligibilityTransitions={},eligibilitySamples=0,droppedEligibilityTransitions=0,
+            inputEvents={},droppedInputEvents=0,releaseTail={}}
         p.ObservationDirty=true;p.SaveObservations()
         p.Connection=animator.AnimationPlayed:Connect(function(track)
             if not p.Enabled then return end
@@ -8675,7 +8747,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v8 earlier second hit + settled release checks // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v9 F-delivery diagnostics // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -8873,7 +8945,7 @@ do
         if skip then p.Skip(skip,details);return end
         p.CancelReleaseWatch('new_parry_input')
         d.KeyOwner=p;p.Held=true;p.ReleaseAt=now+hold;p.HoldGap=pending.gap
-        local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,true,Enum.KeyCode.F,false,game)
+        local ok=p.SendF(true,'parry_press')
         if not ok then p.Stop('F input unavailable');return end
         pending.taps+=1
         p.InputHistory[#p.InputHistory+1]={at=now,id=pending.id,tap=pending.taps,recovery=pending.recovery or false,hold=hold}
@@ -8897,6 +8969,7 @@ do
         end
         defenseQueue.Drain()
         p.SafeObservation(p.Observe) -- After input scheduling, never before an immediate press.
+        p.SafeObservation(p.UpdateReleaseTail) -- Passive only; cannot press/release F or change game state.
     end)
     -- END AUTO PARRY TEST
     -- BEGIN BLOCK RULE CAPTURE

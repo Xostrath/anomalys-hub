@@ -13337,6 +13337,22 @@ function npcSafety.SendKey(keyCode, holdDuration)
 	return ok
 end
 
+-- User request (2026-10-17): press E once after each autofarm kill. Deduped
+-- per NPC model; skipped while a text box (chat) has focus.
+npcSafety.KillKeyPressed = setmetatable({}, {__mode = "k"})
+function npcSafety.PressKeyAfterKill(model)
+	if not model or unloaded or not npcTargetingEnabled or npcSafety.KillKeyPressed[model] then
+		return false
+	end
+	local humanoid = model.Parent and model:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.Health > 0 and not npcSafety.IsKnocked(model) then
+		return false -- still alive and not knocked: not a kill
+	end
+	npcSafety.KillKeyPressed[model] = true
+	if UserInputService:GetFocusedTextBox() then return false end
+	return npcSafety.SendKey(Enum.KeyCode.E)
+end
+
 function npcSafety.TriggerChestPrompt(prompt)
 	if not prompt or not prompt.Parent or not prompt:IsA("ProximityPrompt") then
 		return false
@@ -20834,6 +20850,7 @@ connect(RunService.Heartbeat, function(deltaTime)
 			setNpcStatus("Grip in progress; waiting for the dropped chest...", colors.Success)
 			return
 		elseif npcSafety.GripConfirmed or not gripTarget.Parent or not getNpcRoot(gripTarget) then
+			npcSafety.PressKeyAfterKill(gripTarget)
 			npcSafety.BeginLootWait(character, humanoid, characterRoot)
 			return
 		elseif not npcSafety.IsKnocked(gripTarget) then
@@ -20849,6 +20866,7 @@ connect(RunService.Heartbeat, function(deltaTime)
 					npcAlignOrientation.Enabled = true
 				end
 			else
+				npcSafety.PressKeyAfterKill(gripTarget)
 				npcSafety.BeginLootWait(character, humanoid, characterRoot)
 				return
 			end
@@ -20858,6 +20876,7 @@ connect(RunService.Heartbeat, function(deltaTime)
 	if npcSafety.ChestLootEnabled and activeNpcTarget and not npcSafety.GripMode
 		and not isLivingNpcOfType(activeNpcTarget, selectedNpcType) then
 		configStore.Session.RecordKill(activeNpcTarget)
+		npcSafety.PressKeyAfterKill(activeNpcTarget)
 		npcSafety.BeginLootWait(character, humanoid, characterRoot, npcSafety.LastTargetPosition, nil,
 			"Target defeated; waiting for its dropped chest...")
 		return
@@ -20869,6 +20888,7 @@ connect(RunService.Heartbeat, function(deltaTime)
 	if not activeNpcTarget or not activeTargetUsable
 		or not npcLinearVelocity or not npcLinearVelocity.Parent then
 		if activeNpcTarget and not isLivingNpcOfType(activeNpcTarget, selectedNpcType) then
+			npcSafety.PressKeyAfterKill(activeNpcTarget)
 			clearNpcConstraintRig()
 			npcSafety.SpawnDestination = nil
 			npcSafety.SpawnSource = nil

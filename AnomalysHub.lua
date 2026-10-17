@@ -8333,7 +8333,7 @@ do
     -- First punch: earlier user-confirmed sequence began with F ~0.003s after the cue;
     -- attribution was less certain because later taps followed. Second punch: one confirmed
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v6-release-check',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v7-release-settle',RecoveryOpportunitySpan=0.75,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
@@ -8364,7 +8364,7 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=9,build=p.Build,place=game.PlaceId,run=p.RunId,
+            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=10,build=p.Build,place=game.PlaceId,run=p.RunId,
                 recoveryOpportunitySpan=p.RecoveryOpportunitySpan,
                 releaseCheckDelay=p.ReleaseCheckDelay,releaseRetryLimit=p.ReleaseRetryLimit,releaseWatchSpan=p.ReleaseWatchSpan,
                 recoveryHold=p.RecoveryHold,recoveryGap=p.RecoveryGap,recoveryLimit=p.RecoveryLimit,
@@ -8494,8 +8494,20 @@ do
         -- A new owner or observed F input makes attribution unsafe. Cancel,
         -- rather than resuming an old retry after that activity has ended.
         if p.Held or d.KeyOwner or b.Held then p.CancelReleaseWatch('input_owner_changed');return end
-        if UserInputService:IsKeyDown(Enum.KeyCode.F)then p.CancelReleaseWatch('F_is_down');return end
         if d.Active or b.Busy()or p.SwayActive()then p.CancelReleaseWatch('busy_or_sway');return end
+        local keyDown=UserInputService:IsKeyDown(Enum.KeyCode.F)
+        if not watch.sawKeyUp then
+            -- SendKeyEvent(false) can return before IsKeyDown settles. Observe
+            -- an up state first; never send a retry while the key reads down.
+            -- A new InputBegan still cancels immediately during this grace.
+            if keyDown then
+                if now>=math.min(watch.nextAt,watch.expires)then p.CancelReleaseWatch('F_still_down_after_grace')end
+                return
+            end
+            watch.sawKeyUp=true
+            p.Log('release_key_up_observed',{sinceRelease=now-watch.at,
+                sinceLatestUp=now-(watch.lastUp or watch.at),retries=watch.retries})
+        elseif keyDown then p.CancelReleaseWatch('F_is_down');return end
         if now<watch.nextAt then return end
         local ok,localBlocking,reportedBlocking=pcall(function()
             local states=p.Rules.GetAllStates(watch.character)
@@ -8529,6 +8541,7 @@ do
         details.retry=watch.retries;details.sent=sent
         p.Log('F_up_retry',details)
         if not sent then p.ReleaseWatch=nil;p.Stop('F-up retry failed; automation stopped.');return end
+        watch.sawKeyUp=false;watch.lastUp=now -- A retry can also have delayed key-state visibility.
         p.NextPressAt=math.max(p.NextPressAt,now+p.BurstGap)
     end
     connect(UserInputService.InputBegan,function(input)
@@ -8660,7 +8673,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v6 recovery + release verification // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v7 recovery + settled release checks // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)

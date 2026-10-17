@@ -7970,7 +7970,8 @@ do
         local target=d.FindTarget()
         if not target then d.Status('Stand within 100 studs of ONE test attacker, then record.');return end
         if d.Beam then d.Beam.SetEnabled(false)end -- Manual calibration never includes automated F input.
-        if d.Beam and d.Beam.Held then d.Status('F release failed; stop automation before recording.');return end
+        if d.Parry then d.Parry.SetEnabled(false)end
+        if (d.Beam and d.Beam.Held)or(d.Parry and d.Parry.Held)then d.Status('F release failed; stop automation before recording.');return end
         d.Mode=mode;d.Character=char;d.Target=target;d.Rows={};d.Effects={};d.EffectSeen={}
         d.Started=os.clock();d.Next=0;d.LastSave=d.Started;d.Active=true
         d.File=configStore.Root..'/defense_'..mode:lower()..'_latest.json'
@@ -8033,7 +8034,7 @@ do
     function b.Release(reason)
         if not b.Held then return true end
         local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,false,Enum.KeyCode.F,false,game)
-        if ok then b.Held=false;b.Log('F_up',reason)end
+        if ok then b.Held=false;if d.KeyOwner==b then d.KeyOwner=nil end;b.Log('F_up',reason)end
         return ok
     end
     function b.SetEnabled(enabled)
@@ -8160,12 +8161,13 @@ do
             if details.lateness>0.15 then table.insert(reasons,'late_frame')end
             if not aimed then table.insert(reasons,aim.reason)end
             if b.Held then table.insert(reasons,'test_already_holding_F')end
+            if d.KeyOwner and d.KeyOwner~=b then table.insert(reasons,'F_owned_by_parry')end
             if now<b.Cooldown then table.insert(reasons,'cooldown')end
             if details.fAlreadyDown then table.insert(reasons,'F_already_down')end
             if details.blockingReported then table.insert(reasons,'blocking_reported')end
             if details.stunnedReported then table.insert(reasons,'stunned_reported')end
             if #reasons>0 then b.Skip('press',reasons,details);return end
-            b.Held=true;b.ReleaseAt=now+b.Hold;b.Cooldown=now+1
+            d.KeyOwner=b;b.Held=true;b.ReleaseAt=now+b.Hold;b.Cooldown=now+1
             local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,true,Enum.KeyCode.F,false,game)
             if not ok then b.Stop('F input unavailable');return end
             details.health=hum.Health;details.distance=distance
@@ -8178,12 +8180,164 @@ do
         if not ok then b.Stop('Error: '..d.Text(err))end
     end)
     -- END BEAM DEFLECT TEST
+    -- BEGIN AUTO PARRY TEST
+    -- First punch: earlier user-confirmed sequence began with F ~0.003s after the cue;
+    -- attribution was less certain because later taps followed. Second punch: one confirmed
+    -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
+    local p={Enabled=false,Held=false,Rows={},Cooldown=0,Profiles={
+        ['99346182354558']={phase=0,hold=0.12,label='first punch / provisional'},
+        ['137006829454244']={phase=0.31,hold=0.16,label='second punch / confirmed manual example'},
+    }}
+    d.Parry=p
+    function p.Render()
+        if p.Button then p.Button.Text='Auto Parry: '..(p.Enabled and 'ON (TEST)' or 'OFF (TEST)')end
+    end
+    function p.Log(event,data)
+        if #p.Rows>=300 then return end
+        p.Rows[#p.Rows+1]={t=os.clock()-(p.Started or os.clock()),event=event,data=data};p.Dirty=true
+    end
+    function p.Save()
+        if not p.Dirty then return end
+        p.Dirty=false
+        local ok=pcall(function()
+            assert(type(writefile)=='function','File writing unavailable')
+            if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
+            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=1,place=game.PlaceId,
+                note='Experimental two-punch parry attempts, NOT confirmed successes. One locked attacker; no network reporting.',rows=p.Rows}))
+        end)
+        p.SaveFailed=not ok
+    end
+    function p.Release(reason)
+        if not p.Held then return true end
+        local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,false,Enum.KeyCode.F,false,game)
+        if ok then p.Held=false;if d.KeyOwner==p then d.KeyOwner=nil end;p.Log('F_up',reason)end
+        return ok
+    end
+    function p.Skip(reason,details)
+        details=details or {};details.reason=reason;p.Log('skip',details);p.Save()
+        d.Status('PARRY TEST // SKIPPED: '..reason..(p.SaveFailed and ' // Log save failed' or ''))
+    end
+    function p.SetEnabled(enabled)
+        if not enabled then
+            p.Enabled=false;p.Pending=nil
+            if p.Connection then pcall(function()p.Connection:Disconnect()end);p.Connection=nil end
+            p.Release('disabled');p.Target=nil;p.Character=nil;p.LastTrack=nil
+            if p.Started then p.Log('stop','Disabled');p.Save()end
+            p.Render();return
+        end
+        if unloaded or p.Enabled or p.Held then return end
+        if d.Active then d.Status('Stop the manual recording before enabling Auto Parry.');return end
+        local char=localPlayer.Character
+        local hum=char and char:FindFirstChildOfClass('Humanoid')
+        local target=hum and hum.Health>0 and d.FindTarget()
+        local own,other=d.Root(char),d.Root(target)
+        if not own or not other or (own.Position-other.Position).Magnitude>12 then
+            d.Status('PARRY TEST // stand within 12 studs of ONE attacker, then enable.');return
+        end
+        local targetHum=target:FindFirstChildOfClass('Humanoid')
+        local animator=targetHum and targetHum:FindFirstChildOfClass('Animator')
+        if not animator then d.Status('PARRY TEST // attacker animation cues unavailable.');return end
+        p.Character=char;p.Target=target;p.Rows={};p.Started=os.clock();p.Cooldown=0;p.SaveFailed=false
+        p.Pending=nil;p.LastTrack=nil;p.Enabled=true
+        p.Connection=animator.AnimationPlayed:Connect(function(track)
+            if not p.Enabled then return end
+            local ok,err=pcall(p.OnAnimation,track)
+            if not ok then p.Stop('Error: '..d.Text(err))end
+        end)
+        p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12});p.Save();p.Render()
+        d.Status('PARRY TEST // locked: '..d.Text(target.Name)..' // first two recorded punches; 60 seconds.'..(p.SaveFailed and ' // Log save failed' or ''))
+    end
+    function p.Stop(reason)
+        p.Log('stop_reason',reason);p.SetEnabled(false)
+        d.Status('PARRY TEST // '..reason..(p.SaveFailed and ' // Log save failed' or ''))
+    end
+    function p.Check()
+        if unloaded or localPlayer.Character~=p.Character then return false,'character_changed',true end
+        local hum=p.Character and p.Character:FindFirstChildOfClass('Humanoid')
+        local targetHum=p.Target and p.Target:FindFirstChildOfClass('Humanoid')
+        if not hum or hum.Health<=0 or not p.Target or not p.Target.Parent or not targetHum or targetHum.Health<=0 then
+            return false,'character_or_target_unavailable',true
+        end
+        local busy,reason=b.Busy()
+        if busy then return false,reason end
+        local own,other=d.Root(p.Character),d.Root(p.Target)
+        if not own or not other then return false,'missing_root' end
+        local delta=own.Position-other.Position
+        local distance=delta.Magnitude
+        if distance<0.1 or distance>12 then return false,'outside_melee_range' end
+        if other.CFrame.LookVector:Dot(delta.Unit)<0.25 then return false,'attacker_not_facing_you' end
+        if own.CFrame.LookVector:Dot(-delta.Unit)<0.25 then return false,'not_facing_attacker' end
+        if p.Character:GetAttribute('State_Stunned')then return false,'stunned_reported' end
+        if p.Target:GetAttribute('State_Stunned')then return false,'attacker_stunned' end
+        if p.Target:GetAttribute('State_FiringBeam')or p.Target:GetAttribute('State_ChargingBeam')then return false,'beam_not_melee' end
+        return true,nil,false,distance,hum.Health
+    end
+    function p.OnAnimation(track)
+        if not p.Enabled then return end
+        local id=track.Animation and tostring(track.Animation.AnimationId):match('%d+$')
+        local profile=id and p.Profiles[id]
+        if not profile then return end -- Locomotion, later combo hits, heavy attacks and other styles are not mapped.
+        local now=os.clock()
+        if p.LastTrack==track and now-p.LastTrackAt<0.1 then return end
+        p.LastTrack=track;p.LastTrackAt=now
+        if p.Pending then p.Skip('new_attack_replaced_pending',{animation=p.Pending.id});p.Pending=nil end
+        local allowed,reason,fatal=p.Check()
+        -- Recovery can occur between the cue and the timed press (as in the confirmed capture).
+        if not allowed and reason~='stunned_reported'then if fatal then p.Stop(reason)else p.Skip(reason,{animation=id})end;return end
+        local speed=track.Speed
+        local position=track.TimePosition
+        if type(speed)~='number'or speed<=0 or type(position)~='number'or position<0 then p.Skip('invalid_animation_clock',{animation=id});return end
+        if position>profile.phase+0.1 then p.Skip('late_animation_cue',{animation=id,position=position});return end
+        p.Pending={id=id,track=track,profile=profile,started=now,speed=speed,at=now+math.max(0,(profile.phase-position)/speed)}
+        p.Log('attack',{animation=id,speed=speed,position=position,delay=p.Pending.at-now,profile=profile.label})
+        p.Update() -- The provisional first-punch profile has no added delay.
+    end
+    function p.Update()
+        local now=os.clock()
+        if p.Held and (not p.Enabled or now>=p.ReleaseAt or b.Busy())then
+            if not p.Release('pulse ended')then p.Stop('F release failed; automation stopped');return end
+            p.Save()
+        end
+        if not p.Enabled then return end
+        if now-p.Started>=60 then p.Stop('60-second test finished');return end
+        local allowed,reason,fatal,distance,health=p.Check()
+        if not allowed then
+            if fatal then p.Stop(reason);return end
+            if p.Held then p.Release(reason);p.Save()end
+            if reason=='stunned_reported'and p.Pending and now<p.Pending.at then return end
+            if p.Pending then local id=p.Pending.id;p.Pending=nil;p.Skip(reason,{animation=id})end
+            return
+        end
+        local pending=p.Pending
+        if not pending then return end
+        if pending.track.IsPlaying==false or pending.track.Speed<=0 or math.abs(pending.track.Speed-pending.speed)>0.02 then
+            p.Pending=nil;p.Skip('attack_cancelled_or_speed_changed',{animation=pending.id});return
+        end
+        if now<pending.at then return end
+        p.Pending=nil -- No retries on the same swing.
+        local details={animation=pending.id,sinceAnimation=now-pending.started,lateness=now-pending.at,
+            distance=distance,health=health,speed=pending.speed}
+        local skip=details.lateness>0.1 and 'late_frame' or d.KeyOwner and 'F_owned_by_defense'
+            or now<p.Cooldown and 'cooldown' or UserInputService:IsKeyDown(Enum.KeyCode.F)and 'F_already_down'
+            or p.Character:GetAttribute('State_Blocking')and 'blocking_reported'
+        if skip then p.Skip(skip,details);return end
+        d.KeyOwner=p;p.Held=true;p.ReleaseAt=now+pending.profile.hold;p.Cooldown=now+0.3
+        local ok=pcall(VirtualInputManager.SendKeyEvent,VirtualInputManager,true,Enum.KeyCode.F,false,game)
+        if not ok then p.Stop('F input unavailable');return end
+        p.Log('F_down',details);p.Save()
+        d.Status('PARRY TEST // F sent; outcome unverified'..(p.SaveFailed and ' // Log save failed' or ''))
+    end
+    connect(RunService.Heartbeat,function()
+        local ok,err=pcall(p.Update)
+        if not ok then p.Stop('Error: '..d.Text(err))end
+    end)
+    -- END AUTO PARRY TEST
     -- BEGIN DEFENSE UI
     local card=create('Frame',{Name='CombatDefense',Position=UDim2.fromOffset(16,210),Size=UDim2.new(1,-32,0,228),
         BackgroundColor3=colors.SurfaceRaised,BorderSizePixel=0},configStore.CombatPage)
     create('UICorner',{CornerRadius=UDim.new(0,9)},card)
     create('TextLabel',{Position=UDim2.fromOffset(14,8),Size=UDim2.new(1,-28,0,22),BackgroundTransparency=1,
-        Text='COMBAT DEFENSE // F // BEAM TEST + CALIBRATION',Font=Enum.Font.GothamBold,TextSize=11,TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Left},card)
+        Text='COMBAT DEFENSE // F // PARRY + BEAM TESTS',Font=Enum.Font.GothamBold,TextSize=11,TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Left},card)
     local function button(name,text,x,y,width,callback)
         local result=create('TextButton',{Name=name,Position=UDim2.new(x,14,0,y),Size=UDim2.new(width,-28,0,30),
             BackgroundColor3=colors.Surface,BorderSizePixel=0,Text=text,Font=Enum.Font.GothamSemibold,TextSize=10,TextColor3=colors.Text},card)
@@ -8193,16 +8347,18 @@ do
         local mode,title=entry[1],entry[2]
         if mode=='BeamDeflect'then
             b.Button=button(mode,title..': OFF (TEST)',0,36+(index-1)*36,0.65,function()b.SetEnabled(not b.Enabled)end)
+        elseif mode=='Parry'then
+            p.Button=button(mode,title..': OFF (TEST)',0,36+(index-1)*36,0.65,function()p.SetEnabled(not p.Enabled)end)
         else
             button(mode,title..': NEEDS CALIBRATION',0,36+(index-1)*36,0.65,function()d.Status(title..' is not active yet. Record manual examples first; no automatic F is sent.')end)
         end
         button('Record'..mode,'Record '..mode,0.65,36+(index-1)*36,0.35,function()d.Start(mode)end)
     end
-    button('Stop','Stop / Save',0,148,1/3,function()d.Stop('User stopped');b.SetEnabled(false)end)
-    button('Success','Mark SUCCESS',1/3,148,1/3,function()d.Log('user_outcome','success');if b.Enabled then b.Log('user_outcome','success');b.Save()end end)
-    button('Miss','Mark MISS',2/3,148,1/3,function()d.Log('user_outcome','miss');if b.Enabled then b.Log('user_outcome','miss');b.Save()end end)
+    button('Stop','Stop / Save',0,148,1/3,function()d.Stop('User stopped');b.SetEnabled(false);p.SetEnabled(false)end)
+    button('Success','Mark SUCCESS',1/3,148,1/3,function()d.Log('user_outcome','success');for _,mode in ipairs({b,p})do if mode.Enabled then mode.Log('user_outcome','success');mode.Save()end end end)
+    button('Miss','Mark MISS',2/3,148,1/3,function()d.Log('user_outcome','miss');for _,mode in ipairs({b,p})do if mode.Enabled then mode.Log('user_outcome','miss');mode.Save()end end end)
     d.Label=create('TextLabel',{Position=UDim2.fromOffset(14,184),Size=UDim2.new(1,-28,0,38),BackgroundTransparency=1,
-        Text='Beam: 60-second, one-attacker test; OFF by default. Parry / Sonic Sway still need calibration.',Font=Enum.Font.Gotham,TextSize=10,
+        Text='Parry / Beam: 60-second tests, OFF by default. Test one at a time. Sonic Sway needs calibration.',Font=Enum.Font.Gotham,TextSize=10,
         TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left},card)
 end
 -- END COMBAT DEFENSE CALIBRATION
@@ -22743,7 +22899,9 @@ function controller.Unload()
 		end
 	end
 	step("server browser",qolState.ServerNavigation.StopServerBrowser)
-	step("combat defense recorder",function()configStore.CombatDefense.Stop('Hub unloaded');configStore.CombatDefense.Beam.Stop('Hub unloaded')end)
+	step("combat defense recorder",function()configStore.CombatDefense.Stop('Hub unloaded')end)
+	step("beam defense input",function()configStore.CombatDefense.Beam.Stop('Hub unloaded')end)
+	step("parry defense input",function()configStore.CombatDefense.Parry.Stop('Hub unloaded')end)
 	step("reload request",function()
 		local state=configStore.Reload
 		state.Serial+=1;state.Busy=false

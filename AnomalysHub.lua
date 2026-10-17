@@ -13537,6 +13537,7 @@ end
 
 function npcSafety.StopDirectLightDiagnostic(reason)
 	local diagnostic = npcSafety.DirectLight
+	if npcSafety.FightLog then npcSafety.FightLog.Finish("Fast Attack stopped (" .. tostring(reason) .. ")") end
 	npcSafety.RestoreDirectLightStartup()
 	if diagnostic.BenchmarkRunning then
 		npcSafety.RecordDirectLightBenchmarkRow("DISCARDED", reason or "Fast Attack disabled")
@@ -13705,6 +13706,90 @@ function npcSafety.FirstHit.Finish(outcome)
 	end)
 end
 
+-- FIGHT LOG (local, passive): after the first damage on a target, records
+-- no-damage stretches (>=1.5 s while attacking), tuning/level changes and wait
+-- reasons until the target dies or changes. Written on finish to
+-- GohanHub/autofarm_fight_latest.txt (last 8 fights). Never sends anything.
+npcSafety.FightLog = {History = {}}
+
+function npcSafety.FightLog.Begin(target)
+	local log = npcSafety.FightLog
+	if log.Current then log.Finish("target changed") end
+	local now = os.clock()
+	log.Current = {Target = target, Name = target.Name, StartedAt = now, LastDamageAt = now, Damage = 0,
+		RequestsAtStart = npcSafety.DirectLight.RequestsSent, Lines = {}, DrySince = nil, DryCount = 0, DryTotal = 0}
+end
+
+function npcSafety.FightLog.Event(text)
+	local current = npcSafety.FightLog.Current
+	if not current or #current.Lines >= 120 then return end
+	table.insert(current.Lines, string.format("+%.2fs %s", os.clock() - current.StartedAt, text))
+end
+
+function npcSafety.FightLog.Damage(target, loss)
+	local current = npcSafety.FightLog.Current
+	if not current or current.Target ~= target then return end
+	local now = os.clock()
+	if current.DrySince then
+		local length = now - current.DrySince
+		current.DryTotal += length
+		npcSafety.FightLog.Event(string.format("DRY END after %.2fs (%d requests, level %s)", length,
+			npcSafety.DirectLight.RequestsSent - current.DryRequests, tostring(npcSafety.DirectLight.Level)))
+		current.DrySince = nil
+	end
+	current.Damage += loss
+	current.LastDamageAt = now
+end
+
+function npcSafety.FightLog.Tick(ready, waitReason)
+	local current = npcSafety.FightLog.Current
+	if not current then return end
+	local d = npcSafety.DirectLight
+	if not ready then
+		local reason = tostring(waitReason)
+		if current.LastWait ~= reason then
+			current.LastWait = reason
+			npcSafety.FightLog.Event("WAIT " .. reason)
+		end
+		return
+	end
+	if current.LastWait then
+		current.LastWait = nil
+		npcSafety.FightLog.Event("ready again")
+	end
+	local now = os.clock()
+	if not current.DrySince and now - current.LastDamageAt >= 1.5 then
+		current.DrySince, current.DryRequests = current.LastDamageAt, d.RequestsSent
+		current.DryCount += 1
+		npcSafety.FightLog.Event(string.format("DRY START no damage 1.5s | level %s delay=%.2f pairs=%s interval=%.3f tuning=%s %s",
+			tostring(d.Level), tonumber(d.SwingDelay) or -1, tostring(d.Pairs), tonumber(d.Interval) or -1,
+			tostring(d.Tuning and d.Tuning.Phase), npcSafety.FirstHit.Delta(current.Target)))
+	end
+end
+
+function npcSafety.FightLog.Finish(outcome)
+	local log = npcSafety.FightLog
+	local current = log.Current
+	if not current then return end
+	log.Current = nil
+	local now = os.clock()
+	if current.DrySince then current.DryTotal += now - current.DrySince end
+	local seconds = now - current.StartedAt
+	table.insert(current.Lines, string.format("+%.2fs END %s | %.0f dmg in %.1fs (%.0f dmg/s) | %d requests | %d dry spells, %.1fs dry",
+		seconds, outcome, current.Damage, seconds, seconds > 0 and current.Damage / seconds or 0,
+		npcSafety.DirectLight.RequestsSent - current.RequestsAtStart, current.DryCount, current.DryTotal))
+	table.insert(log.History, "FIGHT " .. tostring(current.Name) .. "\n" .. table.concat(current.Lines, "\n"))
+	while #log.History > 8 do table.remove(log.History, 1) end
+	pcall(function()
+		local writefile = configStore.GetFunction("writefile")
+		if not writefile then return end
+		pcall(configStore.EnsureFolders)
+		writefile(configStore.Root .. "/autofarm_fight_latest.txt",
+			"AUTOFARM FIGHT LOG // after first damage; HP loss is client-observed, not a server ack\n\n"
+			.. table.concat(log.History, "\n---\n"))
+	end)
+end
+
 -- Mirrors Core Combat's Light: Run Terminate + LightSwing, then the hit. The
 -- server pairs a hit with the latest swing, so swings never overlap; once the
 -- delay reaches zero, whole swing+hit pairs are sent back to back instead.
@@ -13800,6 +13885,10 @@ end
 function npcSafety.ApplyDirectLightLevel(level)
 	local diagnostic = npcSafety.DirectLight
 	level = math.clamp(level, 1, #diagnostic.Levels)
+	if level ~= diagnostic.Level and npcSafety.FightLog then
+		npcSafety.FightLog.Event(string.format("level %s -> %d (%.2fs x%d) tuning=%s", tostring(diagnostic.Level), level,
+			diagnostic.Levels[level][1], diagnostic.Levels[level][2], tostring(diagnostic.Tuning and diagnostic.Tuning.Phase)))
+	end
 	diagnostic.Level = level
 	diagnostic.SwingDelay = diagnostic.Levels[level][1]
 	diagnostic.Pairs = diagnostic.Levels[level][2]
@@ -13818,6 +13907,7 @@ function npcSafety.BeginDirectLightSearch()
 	end
 	diagnostic.Tuning = {Phase = "TESTING", Queue = queue, Index = 1, BestScore = 0,
 		Mode = npcSafety.PositionMode, BadWindows = 0}
+	if npcSafety.FightLog then npcSafety.FightLog.Event("TUNING SEARCH starts, levels " .. table.concat(queue, ",")) end
 	diagnostic.LastBenchmarkSummary = nil
 	npcSafety.ApplyDirectLightLevel(queue[1])
 end
@@ -14094,6 +14184,10 @@ function npcSafety.SetDirectLightTarget(target)
 		npcSafety.FirstHit.Finish("abandoned: target changed/lost before any damage ("
 			.. tostring(select(2, npcSafety.IsDirectLightTargetAllowed(npcSafety.FirstHit.Current.Target)) or "now allowed") .. ")")
 	end
+	if npcSafety.FightLog.Current and npcSafety.FightLog.Current.Target ~= target then
+		npcSafety.FightLog.Finish("target ended (" .. tostring(select(2,
+			npcSafety.IsDirectLightTargetAllowed(npcSafety.FightLog.Current.Target)) or "switched") .. ")")
+	end
 	diagnostic.Target = nil
 	if not diagnostic.BenchmarkRunning then
 		npcSafety.RebaseDirectLightTuning()
@@ -14147,6 +14241,10 @@ function npcSafety.SetDirectLightTarget(target)
 			if npcSafety.FirstHit.Current and npcSafety.FirstHit.Current.Target == target then
 				npcSafety.FirstHit.Finish(string.format("FIRST DAMAGE %.1f", loss))
 			end
+			if not npcSafety.FightLog.Current or npcSafety.FightLog.Current.Target ~= target then
+				npcSafety.FightLog.Begin(target)
+			end
+			npcSafety.FightLog.Damage(target, loss)
 			if diagnostic.Startup then
 				diagnostic.Startup.Confirmed = true
 				if diagnostic.Startup.OriginalLevel then npcSafety.RestoreDirectLightStartup() end
@@ -14593,6 +14691,7 @@ function npcSafety.StartDirectLightDiagnostic()
 		-- etc.), so idle wall time cannot be scored as poor attack timing.
 		local ready, waitReason = npcSafety.GetDirectLightAttackReadiness()
 		if ready then npcSafety.FirstHit.ReadyTick() else npcSafety.FirstHit.Wait(waitReason) end
+		npcSafety.FightLog.Tick(ready, waitReason)
 		if not ready then
 			npcSafety.ResetDirectLightWindow()
 			if diagnostic.Tuning then diagnostic.Tuning.BadWindows = 0 end

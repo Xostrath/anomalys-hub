@@ -2954,7 +2954,7 @@ local npcSafety = {
 	DirectLight = {
 		Authorized = configStore.FeatureAccess.FastAttack,
 		Enabled = false,
-		Interval = 0.100,
+		Interval = 0.075,
 		-- Keep one delayed swing in flight. Timing uses bounded comparisons of
 		-- observed HP loss, then holds; these observations are not server acks.
 		SwingDelay = 0.13,
@@ -13884,7 +13884,9 @@ end
 
 function npcSafety.ImportAttackPresets(saved)
 	local d = npcSafety.DirectLight
-	d.Presets = d.Presets or {Below={Interval=0.100, Level=8, SwingDelay=0, Pairs=2}}
+	-- 0.075 s: best interval in every completed interval test (2026-10-04 x2,
+	-- 2026-10-17 238-257 dmg/s); 0.050 floods and gets throttled to ~0.
+	d.Presets = d.Presets or {Below={Interval=0.075, Level=8, SwingDelay=0, Pairs=2}}
 	if type(saved) ~= "table" then return end
 	for _, mode in ipairs({"Below", "Above", "FrontBehind"}) do
 		local preset = npcSafety.ValidateAttackPreset(saved[mode])
@@ -14149,6 +14151,7 @@ function npcSafety.SetDirectLightTarget(target)
 				diagnostic.Startup.Confirmed = true
 				if diagnostic.Startup.OriginalLevel then npcSafety.RestoreDirectLightStartup() end
 			end
+			if diagnostic.BenchmarkRunning then diagnostic.BenchmarkSawDamage = true end
 			if npcSafety.IsDirectLightBenchmarkCollecting() then
 				diagnostic.BenchmarkLevelDamage += loss
 			end
@@ -14416,6 +14419,7 @@ function npcSafety.StartDirectLightBenchmark(kind)
 	diagnostic.BenchmarkBestScore = 0
 	diagnostic.LastBenchmarkSummary = nil
 	diagnostic.BenchmarkRunning = true
+	diagnostic.BenchmarkSawDamage = false
 	if diagnostic.BenchmarkButton then
 		diagnostic.BenchmarkButton.Text = "Cancel Test"
 		diagnostic.BenchmarkButton.BackgroundColor3 = colors.Warning
@@ -14493,7 +14497,10 @@ function npcSafety.UpdateDirectLightBenchmark(deltaTime)
 	npcSafety.SaveDirectLightBenchmark("RUNNING", false)
 	if not diagnostic.BenchmarkCollecting then
 		diagnostic.BenchmarkWarmupRemaining = math.max(diagnostic.BenchmarkWarmupRemaining - deltaTime, 0)
-		if diagnostic.BenchmarkWarmupRemaining > 0 then
+		-- Also wait for the first observed hit on this target: the first sample on a
+		-- fresh NPC used to score the first-hit delay (0.100 s read 0-19 dmg/s,
+		-- then 238-257 mid-fight on 2026-10-17). The test timeout still applies.
+		if diagnostic.BenchmarkWarmupRemaining > 0 or not diagnostic.BenchmarkSawDamage then
 			return
 		end
 		diagnostic.BenchmarkCollecting = true

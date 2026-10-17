@@ -8367,9 +8367,11 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v11-dash-defense',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v12-close-dash-lead',RecoveryOpportunitySpan=0.75,
         DashAnimation='88929057646501',DashPairWindow=0.15,
-        DashDefense=true,DashMaxAge=0.65,DashNearRange=8,DashContactRange=6,DashLead=0.18,
+        -- v11's three 10-17 stud starts waited 150-200ms before F and took damage.
+        -- Try earlier close-cue coverage; keep successful far-approach settings.
+        DashDefense=true,DashMaxAge=0.65,DashNearRange=18,DashNearHold=0.35,DashContactRange=6,DashLead=0.18,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
@@ -8566,7 +8568,7 @@ do
             profile={phase=0,hold=0.16,reach=40,facing=0.25,label='forward Q dash / experimental approach'},
             phase=0,taps=0,burst=false,speed=cue.track.Speed,position=cue.track.TimePosition,clockAt=now,at=now+0.05}
         p.Log('attack',{animation=p.DashAnimation,kind='forward_q_dash',maxAge=p.DashMaxAge,
-            nearRange=p.DashNearRange,contactRange=p.DashContactRange,lead=p.DashLead})
+            nearRange=p.DashNearRange,nearHold=p.DashNearHold,contactRange=p.DashContactRange,lead=p.DashLead})
     end
     function p.DashThreat(pending,now)
         if not p.Target then return false,'missing_target' end
@@ -8875,7 +8877,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v11 experimental Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v12 earlier close Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -9076,6 +9078,7 @@ do
         pending.burst=not pending.dash and(pending.burst or stunned)
         local limit=pending.recovery and p.RecoveryLimit or p.BurstLimit
         local hold=pending.recovery and p.RecoveryHold or(pending.burst and p.BurstHold or pending.profile.hold)
+        if pending.dash and pending.prediction and pending.prediction.method=='near' then hold=p.DashNearHold end
         pending.gap=pending.recovery and p.RecoveryGap or p.BurstGap
         local details={animation=pending.id,sinceAnimation=now-pending.started,lateness=now-pending.at,
             distance=distance,health=health,speed=pending.speed,phase=pending.phase,

@@ -19232,8 +19232,9 @@ function autoTransformState.ReadFatiguePercent(forceScan)
 					local text = (object:IsA("TextLabel") or object:IsA("TextButton"))
 						and string.lower(object.Text:gsub("<[^>]+>", "")) or ""
 					local panel
-					if name == "fatigue" or name == "fatiguebar" or name == "fatigueframe" then panel = object end
-					if text:match("^%s*fatigue%s*[:%d%%%.%s]*$") then panel = object.Parent end
+					-- Prefixed variants (e.g. KaiokenFatigue / "KAIOKEN FATIGUE: 40%") count too.
+					if name:find("fatigue", 1, true) and not name:find("text", 1, true) and not name:find("label", 1, true) then panel = object end
+					if text:match("^%s*[%a%s]-fatigue%s*[:%d%%%.%s]*$") then panel = object.Parent end
 					if panel and panel:IsA("GuiObject") and not seen[panel] then
 						seen[panel] = true
 						table.insert(state.FatiguePanels, panel)
@@ -19255,7 +19256,7 @@ function autoTransformState.ReadFatiguePercent(forceScan)
 					if (object:IsA("TextLabel") or object:IsA("TextButton")) and state.IsOwnVisibleGui(object) then
 						local text = object.Text:gsub("<[^>]+>", "")
 						local percent = state.FiniteNumber(text:match("^%s*([%d%.]+)%s*%%%s*$")
-							or string.lower(text):match("^%s*fatigue%s*:?%s*([%d%.]+)%s*%%%s*$"))
+							or string.lower(text):match("^%s*[%a%s]-fatigue%s*:?%s*([%d%.]+)%s*%%%s*$"))
 						if percent and percent >= 0 and percent <= 100 then highest = math.max(highest or 0, percent) end
 					end
 				end
@@ -19332,6 +19333,25 @@ function autoTransformState.CaptureKaiokenStatus(character,coreStats,misc,active
 					lines[#lines+1]=entry[1].."."..text(object.Name).." ["..object.ClassName.."]="..text(object:IsA("ValueBase")and object.Value or "present")
 				end
 			end
+		end
+		-- Own visible GUI that looks like a Kaioken/fatigue/strain meter, so an
+		-- undetected bar can be identified from this file instead of guessed.
+		local playerGui=localPlayer:FindFirstChildOfClass("PlayerGui")
+		local guiLines=0
+		for _,root in ipairs({playerGui or character,character})do
+			for index,object in ipairs(root:GetDescendants())do
+				if index>6000 or guiLines>=20 then break end
+				if object:IsA("GuiObject")and autoTransformState.IsOwnVisibleGui(object)then
+					local label=(object:IsA("TextLabel")or object:IsA("TextButton"))and object.Text:gsub("<[^>]+>","")or ""
+					local probe=(object.Name.." "..label):lower()
+					if probe:find("fatigue",1,true)or probe:find("kaio",1,true)or probe:find("strain",1,true)
+						or probe:find("exhaust",1,true)or probe:find("overload",1,true)then
+						guiLines+=1
+						lines[#lines+1]="Gui."..text(object:GetFullName():sub(-90)).." ["..object.ClassName.."] text="..text(label:sub(1,40))
+					end
+				end
+			end
+			if not playerGui then break end
 		end
 		local snapshot=table.concat(lines,"\n")
 		if snapshot==autoTransformState.LastKaiokenReport then return end

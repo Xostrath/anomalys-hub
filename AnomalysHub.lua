@@ -7837,6 +7837,192 @@ npcSafety.DirectLight.TelemetryLabel = create("TextLabel", {
 	TextYAlignment = Enum.TextYAlignment.Top,
 }, npcSafety.DirectLight.Card)
 
+-- BEGIN COMBAT DEFENSE CALIBRATION
+do
+    local d={Active=false,Connections={},Rows={},Effects={},Modes={Parry=0.5,SonicSway=0.25,BeamDeflect=0.5}}
+    configStore.CombatDefense=d
+    function d.Status(message)if d.Label then d.Label.Text=message end end
+    function d.Root(model)return model and model:FindFirstChild('HumanoidRootPart')end
+    function d.Text(value)return tostring(value):gsub('%c',' '):sub(1,100)end
+    function d.Vector(value)return {x=value.X,y=value.Y,z=value.Z}end
+    function d.Save()
+        if not d.File or type(writefile)~='function' then return false end
+        local ok=pcall(function()
+            if type(isfolder)=='function' and type(makefolder)=='function' and not isfolder(configStore.Root)then makefolder(configStore.Root)end
+            local body=HttpService:JSONEncode({version=1,place=game.PlaceId,mode=d.Mode,
+                provisionalWindow=d.Modes[d.Mode],note='Passive observations, not verified hit times or server acceptance. User marks are subjective. One nearest attacker within 100 studs; new beam effects only, capped at 48; 20Hz frame samples.',rows=d.Rows})
+            assert(#body<=8*1024*1024,'Recording exceeds 8MB limit')
+            writefile(d.File,body)
+        end)
+        return ok
+    end
+    function d.Log(kind,data)
+        if not d.Active then return end
+        if #d.Rows>=1800 then d.Stop('Capture limit');return end
+        d.Rows[#d.Rows+1]={t=os.clock()-d.Started,event=kind,data=data}
+    end
+    function d.Stop(reason)
+        if not d.Active then return end
+        d.Rows[#d.Rows+1]={t=os.clock()-d.Started,event='STOP',data=reason}
+        d.Active=false
+        for _,connection in ipairs(d.Connections)do pcall(function()connection:Disconnect()end)end
+        table.clear(d.Connections);table.clear(d.Effects);table.clear(d.EffectSeen or {})
+        local saved=d.Save()
+        d.Status(saved and ('Saved '..d.File..' // '..reason) or 'Save failed. Check executor file support.')
+        d.Character=nil;d.Target=nil
+    end
+    function d.Listen(signal,callback)
+        local connection=connect(signal,function(...)
+            if not d.Active then return end
+            local ok,err=pcall(callback,...)
+            if not ok then d.Stop('Recorder error: '..d.Text(err))end
+        end)
+        table.insert(d.Connections,connection)
+    end
+    function d.Actor(model)
+        local root=d.Root(model)
+        local hum=model and model:FindFirstChildOfClass('Humanoid')
+        if not root or not hum then return nil end
+        local result={position=d.Vector(root.Position),forward=d.Vector(root.CFrame.LookVector),health=hum.Health,states={},animations={}}
+        local stateCount=0
+        for key,value in pairs(model:GetAttributes())do
+            if stateCount>=24 then break end
+            local lower=key:lower()
+            if lower:find('block') or lower:find('parry') or lower:find('sway') or lower:find('attack') or lower:find('stun')
+                or lower:find('beam') or lower:find('evad') or lower:find('deflect') or lower:find('posture')then
+                if type(value)=='boolean' or type(value)=='number' then result.states[d.Text(key)]=value
+                elseif type(value)=='string' then result.states[d.Text(key)]=d.Text(value)end
+                stateCount+=1
+            end
+        end
+        local animator=hum:FindFirstChildOfClass('Animator')
+        if animator then
+            for index,track in ipairs(animator:GetPlayingAnimationTracks())do
+                if index>12 then break end
+                result.animations[#result.animations+1]={id=track.Animation and d.Text(track.Animation.AnimationId) or 'unknown',
+                    time=track.TimePosition,speed=track.Speed,length=track.Length}
+            end
+        end
+        return result
+    end
+    function d.FindTarget()
+        local char=localPlayer.Character
+        local root=d.Root(char)
+        if not root then return nil end
+        local best,distance=nil,100
+        local function consider(model)
+            local other=d.Root(model)
+            local hum=model and model:FindFirstChildOfClass('Humanoid')
+            if model~=char and other and hum and hum.Health>0 then
+                local gap=(other.Position-root.Position).Magnitude
+                if gap<distance then best=model;distance=gap end
+            end
+        end
+        for _,player in ipairs(Players:GetPlayers())do consider(player.Character)end
+        local world=workspace:FindFirstChild('World')
+        local live=world and world:FindFirstChild('Live')
+        if live then
+            for index,object in ipairs(live:GetDescendants())do
+                if index>3000 then break end
+                if object:IsA('Humanoid')then consider(object.Parent)end
+            end
+        end
+        return best
+    end
+    function d.Effect(object)
+        if not object.Parent then return nil end
+        local root=d.Root(d.Character)
+        if not root then return nil end
+        if object:IsA('Beam') then
+            local a,b=object.Attachment0,object.Attachment1
+            if a and b then
+                local start,finish=a.WorldPosition,b.WorldPosition
+                local delta=finish-start
+                local alpha=delta:Dot(delta)>0 and math.clamp((root.Position-start):Dot(delta)/delta:Dot(delta),0,1) or 0
+                if (root.Position-(start+delta*alpha)).Magnitude<=300 then
+                    return {kind='Beam',enabled=object.Enabled,a=d.Vector(start),b=d.Vector(finish)}
+                end
+            end
+        elseif object:IsA('BasePart') and (root.Position-object.Position).Magnitude<=300 then
+            local name=object.Name:lower()
+            local parent=object.Parent
+            for _=1,3 do if not parent or parent==workspace then break end;name..=' '..parent.Name:lower();parent=parent.Parent end
+            if name:find('beam') or name:find('projectile') or name:find('blast') then
+                return {kind=d.Text(object.Name),position=d.Vector(object.Position),size=d.Vector(object.Size)}
+            end
+        end
+    end
+    function d.WatchEffect(object)
+        if #d.Effects>=48 or d.EffectSeen[object] then return end
+        if d.Effect(object)then d.EffectSeen[object]=true;table.insert(d.Effects,object);d.Log('effect_added',{id=#d.Effects,kind=d.Text(object.ClassName)})end
+    end
+    function d.Start(mode)
+        if unloaded or d.Active or not d.Modes[mode] then return end
+        local char=localPlayer.Character
+        local hum=char and char:FindFirstChildOfClass('Humanoid')
+        if not hum or hum.Health<=0 or not d.Root(char)then d.Status('Wait for a living character.');return end
+        local target=d.FindTarget()
+        if not target then d.Status('Stand within 100 studs of ONE test attacker, then record.');return end
+        d.Mode=mode;d.Character=char;d.Target=target;d.Rows={};d.Effects={};d.EffectSeen={}
+        d.Started=os.clock();d.Next=0;d.LastSave=d.Started;d.Active=true
+        d.File=configStore.Root..'/defense_'..mode:lower()..'_latest.json'
+        if not d.Save()then d.Active=false;d.Status('Cannot write local recording; no test started.');return end
+        d.Log('start',{target='attacker',duration=60,framesPerSecond=20})
+        local function actorEvents(model,label)
+            local actorHum=model:FindFirstChildOfClass('Humanoid')
+            local animator=actorHum and actorHum:FindFirstChildOfClass('Animator')
+            if animator then d.Listen(animator.AnimationPlayed,function(track)
+                d.Log('animation',{actor=label,id=track.Animation and d.Text(track.Animation.AnimationId) or 'unknown',speed=track.Speed,length=track.Length})
+            end)else d.Log('missing_animator',label)end
+            if actorHum then d.Listen(actorHum.HealthChanged,function(value)d.Log('health',{actor=label,value=value})end)end
+        end
+        actorEvents(char,'self');actorEvents(target,'attacker')
+        d.Listen(UserInputService.InputBegan,function(input,processed)
+            if input.KeyCode==Enum.KeyCode.F then d.Log('F_down',{processed=processed,typing=UserInputService:GetFocusedTextBox()~=nil})end
+        end)
+        d.Listen(UserInputService.InputEnded,function(input,processed)
+            if input.KeyCode==Enum.KeyCode.F then d.Log('F_up',{processed=processed})end
+        end)
+        if mode=='BeamDeflect' then d.Listen(workspace.DescendantAdded,d.WatchEffect)end
+        d.Listen(RunService.Heartbeat,function()
+            local now=os.clock()
+            if unloaded or localPlayer.Character~=char or not target.Parent or hum.Health<=0 then d.Stop('Character/target changed');return end
+            if now-d.Started>=60 then d.Stop('60 seconds elapsed');return end
+            if now<d.Next then return end
+            d.Next=now+0.05
+            local effects={}
+            for index,object in ipairs(d.Effects)do local effect=d.Effect(object);if effect then effect.id=index;effects[#effects+1]=effect end end
+            d.Log('frame',{self=d.Actor(char),attacker=d.Actor(target),effects=effects})
+            if d.Active and now-d.LastSave>=2 then d.LastSave=now;if not d.Save()then d.Stop('Write failed')end end
+        end)
+        d.Status('Recording '..mode..' // attacker: '..d.Text(target.Name)..' // manually use F; 60 seconds.')
+    end
+    -- No automatic F requests until attack cues and outcomes have been calibrated.
+    -- BEGIN DEFENSE UI
+    local card=create('Frame',{Name='CombatDefense',Position=UDim2.fromOffset(16,530),Size=UDim2.new(1,-32,0,228),
+        BackgroundColor3=colors.SurfaceRaised,BorderSizePixel=0},npcPage)
+    create('UICorner',{CornerRadius=UDim.new(0,9)},card)
+    create('TextLabel',{Position=UDim2.fromOffset(14,8),Size=UDim2.new(1,-28,0,22),BackgroundTransparency=1,
+        Text='COMBAT DEFENSE // F // CALIBRATION',Font=Enum.Font.GothamBold,TextSize=11,TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Left},card)
+    local function button(name,text,x,y,width,callback)
+        local result=create('TextButton',{Name=name,Position=UDim2.new(x,14,0,y),Size=UDim2.new(width,-28,0,30),
+            BackgroundColor3=colors.Surface,BorderSizePixel=0,Text=text,Font=Enum.Font.GothamSemibold,TextSize=10,TextColor3=colors.Text},card)
+        create('UICorner',{CornerRadius=UDim.new(0,6)},result);connect(result.Activated,callback);return result
+    end
+    for index,entry in ipairs({{'Parry','Auto Parry'},{'SonicSway','Auto Sonic Sway'},{'BeamDeflect','Auto Beam Deflect'}})do
+        local mode,title=entry[1],entry[2]
+        button(mode,title..': NEEDS CALIBRATION',0,36+(index-1)*36,0.65,function()d.Status(title..' is not active yet. Record manual examples first; no automatic F is sent.')end)
+        button('Record'..mode,'Record '..mode,0.65,36+(index-1)*36,0.35,function()d.Start(mode)end)
+    end
+    button('Stop','Stop / Save',0,148,1/3,function()d.Stop('User stopped')end)
+    button('Success','Mark SUCCESS',1/3,148,1/3,function()d.Log('user_outcome','success')end)
+    button('Miss','Mark MISS',2/3,148,1/3,function()d.Log('user_outcome','miss')end)
+    d.Label=create('TextLabel',{Position=UDim2.fromOffset(14,184),Size=UDim2.new(1,-28,0,38),BackgroundTransparency=1,
+        Text='Passive recorder only. Three separate actions; automatic timing requires calibration.',Font=Enum.Font.Gotham,TextSize=10,
+        TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left},card)
+end
+-- END COMBAT DEFENSE CALIBRATION
+
 local npcDropdownList = create("ScrollingFrame", {
 	Name = "NpcTypeList",
 	Position = UDim2.fromOffset(30, 148),
@@ -22371,6 +22557,7 @@ function controller.Unload()
 		end
 	end
 	step("server browser",qolState.ServerNavigation.StopServerBrowser)
+	step("combat defense recorder",function()configStore.CombatDefense.Stop('Hub unloaded')end)
 	step("reload request",function()
 		local state=configStore.Reload
 		state.Serial+=1;state.Busy=false

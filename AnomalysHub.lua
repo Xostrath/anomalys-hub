@@ -19339,6 +19339,28 @@ function autoTransformState.CaptureKaiokenStatus(character,coreStats,misc,active
 	end)
 end
 
+function autoTransformState.FormBlockReason(selected,character,coreStats,activeForm)
+	local function isKaioken(value)return tostring(value):lower():gsub("[^%a]", ""):find("kaioken",1,true)~=nil end
+	if not isKaioken(selected)then
+		if activeForm~="None" and activeForm~="" then return "Active: "..activeForm:sub(1,32)end
+		return nil
+	end
+	local sub=coreStats:FindFirstChild("SubForm")
+	local subForm=sub and tostring(sub.Value)
+	local run=autoTransformState.FiniteNumber(character:GetAttribute("KaiokenRun"))
+	if isKaioken(activeForm)or(subForm and isKaioken(subForm))or(run and run>0)then
+		-- Observing Kaioken active acknowledges the previous request. Once its
+		-- own state clears, fatigue gates the next activation, not the main form.
+		autoTransformState.KaiokenRequestedCharacter=nil
+		return "Active: Kaioken"
+	end
+	if subForm and subForm~="None" and subForm~="" then return "Subform: "..subForm:sub(1,30)end
+	if activeForm~="None" and activeForm~="" and(run~=0 or subForm==nil)then
+		return "Waiting for Kaioken state"
+	end
+	return nil
+end
+
 function autoTransformState.GetReadyCharacter(selected, forceScan)
 	if unloaded or not autoTransformState.Enabled or autoTransformState.Selected ~= selected or npcSafety.LootMode then
 		return nil, nil, "Paused"
@@ -19358,12 +19380,8 @@ function autoTransformState.GetReadyCharacter(selected, forceScan)
 	if string.lower(selected):gsub("[^%a]", "")=="kaioken" then
 		autoTransformState.CaptureKaiokenStatus(character,coreStats,misc,activeForm)
 	end
-	if activeForm ~= "None" and activeForm ~= "" then
-		-- An actual active form is also an acknowledgement; the active-form
-		-- guard now prevents repeats until it ends and resources are ready.
-		autoTransformState.KaiokenRequestedCharacter=nil
-		return nil, nil, "Active: "..activeForm:sub(1,32)
-	end
+	local formReason=autoTransformState.FormBlockReason(selected,character,coreStats,activeForm)
+	if formReason then return nil,nil,formReason end
 	local ready, reason = autoTransformState.ResourceReady(selected, forceScan)
 	if not ready then return nil, nil, reason end
 	local ok, allowed = pcall(function()
@@ -19374,7 +19392,8 @@ function autoTransformState.GetReadyCharacter(selected, forceScan)
 	if unloaded or not autoTransformState.Enabled or autoTransformState.Selected ~= selected
 		or localPlayer.Character ~= character or humanoid.Health <= 0 or npcSafety.LootMode then return nil, nil, "Paused" end
 	activeForm = tostring(formValue.Value)
-	if activeForm ~= "None" and activeForm ~= "" then return nil, nil, "Active: "..activeForm:sub(1,32) end
+	formReason=autoTransformState.FormBlockReason(selected,character,coreStats,activeForm)
+	if formReason then return nil,nil,formReason end
 	ready, reason = autoTransformState.ResourceReady(selected)
 	if not ready then return nil, nil, reason end
 	return character, configuredValue, reason

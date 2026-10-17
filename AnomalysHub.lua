@@ -10210,8 +10210,9 @@ configStore.NearbyAlert.Gui = create("ScreenGui", {
 }, playerGui)
 configStore.NearbyAlert.Banner = create("Frame", {
 	Name = "Banner",
-	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.new(0.5, 0, 0, 58),
+	-- Bottom-left corner (user request), clear of the top-center alert banners.
+	AnchorPoint = Vector2.new(0, 1),
+	Position = UDim2.new(0, 16, 1, -16),
 	Size = UDim2.fromOffset(380, 46),
 	BackgroundColor3 = Color3.fromRGB(26, 12, 14),
 	BackgroundTransparency = 0.08,
@@ -10422,7 +10423,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -28, 0, 17),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
-	Text = "Only affects Left Shift + W boost flight; slow flight stays native.",
+	Text = "Applies to normal flight and Left Shift + W boost flight.",
 	TextColor3 = colors.Muted,
 	TextSize = 10,
 	TextXAlignment = Enum.TextXAlignment.Left,
@@ -10757,12 +10758,13 @@ local function applyFlightSpeed()
 		controller.FlightWasBoosting = true
 		return true
 	end
-	-- Repair sessions affected by older versions and preserve native slow flight.
-	if controller.FlightWasBoosting or tonumber(session.currentSpeed) and session.currentSpeed > 15 then
-		session.currentSpeed = 15
-	end
+	-- Normal (unboosted) flight also flies at the slider speed (user request,
+	-- 2026-10-17; previously forced back to the native 15). currentSpeed drives
+	-- unboosted flight, so hold both fields at the chosen speed.
+	session.speed = flightSpeed
+	session.currentSpeed = flightSpeed
 	controller.FlightWasBoosting = false
-	return false
+	return true
 end
 
 local function setFlightSpeed(value)
@@ -13586,6 +13588,91 @@ function npcSafety.NextDirectLightCombo()
 	return diagnostic.Combo
 end
 
+-- FIRST-HIT TIMELINE (local, passive): per target, where the time between
+-- "target picked" and "first HP loss" goes: positioning waits, readiness,
+-- requests, opener retry. Never sends anything. Written on finish only, to
+-- GohanHub/autofarm_first_hit_latest.txt (last 10 targets).
+npcSafety.FirstHit = {History = {}}
+
+function npcSafety.FirstHit.Delta(target)
+	local character = localPlayer.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local targetRoot = target and getNpcRoot(target)
+	if not root or not targetRoot then return "pos=?" end
+	local d = targetRoot.Position - root.Position
+	return string.format("dy=%.1f horiz=%.1f dist=%.1f", d.Y, math.sqrt(d.X * d.X + d.Z * d.Z), d.Magnitude)
+end
+
+function npcSafety.FirstHit.Begin(target, humanoid)
+	local log = npcSafety.FirstHit
+	if log.Current then log.Finish("abandoned: target changed before any damage") end
+	local d = npcSafety.DirectLight
+	log.Current = {Target = target, Name = target.Name, StartedAt = os.clock(), Requests = 0, Lines = {},
+		LastWait = nil, Ready = false}
+	log.Event(string.format("picked hp=%.0f/%.0f mode=%s level=%s delay=%.2f pairs=%s interval=%.3f phase=%s %s",
+		tonumber(humanoid.Health) or -1, tonumber(humanoid.MaxHealth) or -1, tostring(npcSafety.PositionMode), tostring(d.Level),
+		tonumber(d.SwingDelay) or -1, tostring(d.Pairs), tonumber(d.Interval) or -1,
+		tostring(npcApproachPhase), log.Delta(target)))
+end
+
+function npcSafety.FirstHit.Event(text)
+	local current = npcSafety.FirstHit.Current
+	if not current or #current.Lines >= 40 then return end
+	table.insert(current.Lines, string.format("+%.2fs %s", os.clock() - current.StartedAt, text))
+end
+
+function npcSafety.FirstHit.Wait(reason)
+	local current = npcSafety.FirstHit.Current
+	if not current then return end
+	reason = tostring(reason)
+	if current.Ready then
+		current.Ready = false
+		npcSafety.FirstHit.Event("not ready again")
+	end
+	if current.LastWait ~= reason then
+		current.LastWait = reason
+		npcSafety.FirstHit.Event("WAIT " .. reason .. " " .. npcSafety.FirstHit.Delta(current.Target))
+	end
+end
+
+function npcSafety.FirstHit.ReadyTick()
+	local current = npcSafety.FirstHit.Current
+	if not current or current.Ready then return end
+	current.Ready, current.LastWait = true, nil
+	npcSafety.FirstHit.Event("READY " .. npcSafety.FirstHit.Delta(current.Target))
+end
+
+function npcSafety.FirstHit.Sent(kind)
+	local current = npcSafety.FirstHit.Current
+	if not current then return end
+	current.Requests += 1
+	if current.Requests <= 4 or current.Requests % 10 == 0 then
+		local d = npcSafety.DirectLight
+		npcSafety.FirstHit.Event(string.format("%s #%d level=%s delay=%.2f pairs=%s %s", kind, current.Requests,
+			tostring(d.Level), tonumber(d.SwingDelay) or -1, tostring(d.Pairs), npcSafety.FirstHit.Delta(current.Target)))
+	end
+end
+
+function npcSafety.FirstHit.Finish(outcome)
+	local log = npcSafety.FirstHit
+	local current = log.Current
+	if not current then return end
+	log.Current = nil
+	table.insert(current.Lines, string.format("+%.2fs %s after %d requests", os.clock() - current.StartedAt,
+		outcome, current.Requests))
+	table.insert(log.History, "TARGET " .. tostring(current.Name) .. "\n" .. table.concat(current.Lines, "\n"))
+	while #log.History > 10 do table.remove(log.History, 1) end
+	-- A diagnostic must never break combat: the whole write is isolated.
+	pcall(function()
+		local writefile = configStore.GetFunction("writefile")
+		if not writefile then return end
+		pcall(configStore.EnsureFolders)
+		writefile(configStore.Root .. "/autofarm_first_hit_latest.txt",
+			"AUTOFARM FIRST HIT // local observations; HP loss is client-observed, not a server ack\n\n"
+			.. table.concat(log.History, "\n---\n"))
+	end)
+end
+
 -- Mirrors Core Combat's Light: Run Terminate + LightSwing, then the hit. The
 -- server pairs a hit with the latest swing, so swings never overlap; once the
 -- delay reaches zero, whole swing+hit pairs are sent back to back instead.
@@ -13621,6 +13708,7 @@ function npcSafety.SendDirectLightRequest()
 			diagnostic.RequestsSent += 1
 			diagnostic.WindowHits += 1
 			npcSafety.ObserveDirectLightTiming("HitCalls")
+			npcSafety.FirstHit.Sent("swing+hit")
 		end
 		if sentAny then
 			npcSafety.AdaptDirectLightDelay()
@@ -13656,6 +13744,7 @@ function npcSafety.SendDirectLightRequest()
 			diagnostic.RequestsSent += 1
 			diagnostic.WindowHits += 1
 			npcSafety.ObserveDirectLightTiming("HitCalls", os.clock() - queuedAt)
+			npcSafety.FirstHit.Sent(string.format("delayed hit (%.2fs after swing)", os.clock() - queuedAt))
 			npcSafety.AdaptDirectLightDelay()
 		end
 	end)
@@ -13898,9 +13987,11 @@ function npcSafety.AdaptDirectLightDelay()
 			startup.ProbeUsed, startup.OriginalLevel = true, diagnostic.Level
 			startup.ReadyElapsed, startup.RequestsAtStart = 0, diagnostic.RequestsSent
 			npcSafety.ApplyDirectLightLevel(diagnostic.Level == 4 and 1 or 4)
+			npcSafety.FirstHit.Event("FIRST HIT RETRY -> level " .. tostring(diagnostic.Level))
 			return
 		elseif startup.OriginalLevel then
 			if startup.ReadyElapsed >= 3 and hits >= 4 then
+				npcSafety.FirstHit.Event("opener also got no damage -> tuning search")
 				npcSafety.RestoreDirectLightStartup()
 				npcSafety.BeginDirectLightSearch()
 			end
@@ -13965,6 +14056,10 @@ function npcSafety.SetDirectLightTarget(target)
 		diagnostic.HealthConnection:Disconnect()
 		diagnostic.HealthConnection = nil
 	end
+	if npcSafety.FirstHit.Current then
+		npcSafety.FirstHit.Finish("abandoned: target changed/lost before any damage ("
+			.. tostring(select(2, npcSafety.IsDirectLightTargetAllowed(npcSafety.FirstHit.Current.Target)) or "now allowed") .. ")")
+	end
 	diagnostic.Target = nil
 	if not diagnostic.BenchmarkRunning then
 		npcSafety.RebaseDirectLightTuning()
@@ -13988,6 +14083,7 @@ function npcSafety.SetDirectLightTarget(target)
 	diagnostic.Startup = not diagnostic.BenchmarkRunning and {
 		Confirmed=false, ProbeUsed=false, ReadyElapsed=0, RequestsAtStart=diagnostic.RequestsSent,
 	} or nil
+	if not diagnostic.BenchmarkRunning then npcSafety.FirstHit.Begin(target, humanoid) end
 	diagnostic.StartHealth = humanoid.Health
 	diagnostic.CurrentHealth = humanoid.Health
 	diagnostic.LastHealth = humanoid.Health
@@ -14002,6 +14098,9 @@ function npcSafety.SetDirectLightTarget(target)
 			diagnostic.HealthChangeEvents += 1
 			diagnostic.WindowDamage += 1
 			diagnostic.WindowLoss += loss
+			if npcSafety.FirstHit.Current and npcSafety.FirstHit.Current.Target == target then
+				npcSafety.FirstHit.Finish(string.format("FIRST DAMAGE %.1f", loss))
+			end
 			if diagnostic.Startup then
 				diagnostic.Startup.Confirmed = true
 				if diagnostic.Startup.OriginalLevel then npcSafety.RestoreDirectLightStartup() end
@@ -14442,6 +14541,7 @@ function npcSafety.StartDirectLightDiagnostic()
 		-- Reset even when no request is sent (player exclusion, travel, loot,
 		-- etc.), so idle wall time cannot be scored as poor attack timing.
 		local ready, waitReason = npcSafety.GetDirectLightAttackReadiness()
+		if ready then npcSafety.FirstHit.ReadyTick() else npcSafety.FirstHit.Wait(waitReason) end
 		if not ready then
 			npcSafety.ResetDirectLightWindow()
 			if diagnostic.Tuning then diagnostic.Tuning.BadWindows = 0 end

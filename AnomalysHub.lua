@@ -3542,12 +3542,17 @@ create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, configStore.Sidebar)
 
-local tabBar = create("Frame", {
+local tabBar = create("ScrollingFrame", {
 	Name = "TabBar",
 	Position = UDim2.fromOffset(10, 76),
 	Size = UDim2.new(1, -20, 1, -142),
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	ScrollBarThickness = 2,
+	ScrollBarImageColor3 = colors.Accent,
 }, configStore.Sidebar)
 
 create("UIPadding", {
@@ -3644,13 +3649,14 @@ end
 local homePage = makePage("Home")
 local mainPage = makePage("Training")
 local npcPage = makePage("NPCs")
+configStore.CombatPage = makePage("Combat")
 tpState.Page = makePage("TP")
 local doctorPage = makePage("Doctor")
 local otherworldPage = makePage("Otherworld")
 qolState.Page = makePage("QoL")
--- Build Planner shares the Training scroll canvas below the minigames.
+-- Build Planner shares the Training scroll canvas below the stat training controls.
 configStore.BuildPanel = create("Frame", {
-	Name = "BuildPlanner", Position = UDim2.fromOffset(0, 336),
+	Name = "BuildPlanner", Position = UDim2.fromOffset(0, 136),
 	Size = UDim2.new(1, 0, 0, 518), BackgroundTransparency = 1, BorderSizePixel = 0,
 }, mainPage)
 makePage("Character")
@@ -7322,11 +7328,11 @@ configStore.AutoClash = {
 }
 configStore.AutoClash.Card = create("Frame", {
 	Name = "AutoClash",
-	Position = UDim2.fromOffset(16, 136),
+	Position = UDim2.fromOffset(16, 14),
 	Size = UDim2.new(1, -32, 0, 184),
 	BackgroundColor3 = colors.SurfaceRaised,
 	BorderSizePixel = 0,
-}, mainPage)
+}, configStore.CombatPage)
 create("UICorner", {CornerRadius = UDim.new(0, 8)}, configStore.AutoClash.Card)
 create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.35}, configStore.AutoClash.Card)
 create("TextLabel", {
@@ -7335,7 +7341,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -190, 0, 20),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamBold,
-	Text = "AUTO CLASH",
+	Text = "COMBAT MINIGAMES",
 	TextColor3 = colors.Text,
 	TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
@@ -7999,8 +8005,8 @@ do
     end
     -- No automatic F requests until attack cues and outcomes have been calibrated.
     -- BEGIN DEFENSE UI
-    local card=create('Frame',{Name='CombatDefense',Position=UDim2.fromOffset(16,530),Size=UDim2.new(1,-32,0,228),
-        BackgroundColor3=colors.SurfaceRaised,BorderSizePixel=0},npcPage)
+    local card=create('Frame',{Name='CombatDefense',Position=UDim2.fromOffset(16,210),Size=UDim2.new(1,-32,0,228),
+        BackgroundColor3=colors.SurfaceRaised,BorderSizePixel=0},configStore.CombatPage)
     create('UICorner',{CornerRadius=UDim.new(0,9)},card)
     create('TextLabel',{Position=UDim2.fromOffset(14,8),Size=UDim2.new(1,-28,0,22),BackgroundTransparency=1,
         Text='COMBAT DEFENSE // F // CALIBRATION',Font=Enum.Font.GothamBold,TextSize=11,TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Left},card)
@@ -21903,11 +21909,13 @@ function configStore.SelectTab(name)
 end
 
 configStore.TabLabels = {
+	Combat = "[C]  Combat",
 	Home = "[D]  Dashboard", NPCs = "[F]  Auto Farm", TP = "[T]  Travel", Doctor = "[S]  Statistics", Otherworld = "[O]  Otherworld",
 	Training = "[R]  Auto Training", ESP = "[E]  Player ESP",
 	QoL = "[U]  Utilities", Config = "[=]  Settings",
 }
 configStore.PageMeta = {
+	Combat={Title="COMBAT",Subtitle="Clash, Pong, Maze, and defensive timing calibration"},
 	Home={Title="FIELD DASHBOARD",Subtitle="Live server, planet, and connection telemetry"},
 	NPCs={Title="AUTOMATED FARMING",Subtitle="Target selection, combat safety, selling, and transformations"},
 	TP={Title="TRAVEL NETWORK",Subtitle="Fast routing to stops, landmarks, story NPCs, and players"},
@@ -21921,7 +21929,7 @@ configStore.PageMeta = {
 	QoL={Title="FIELD UTILITIES",Subtitle="Movement, camera, food, commerce, and convenience tools"},
 	Config={Title="SYSTEM SETTINGS",Subtitle="Appearance, persistence, keybinds, and saved profiles"},
 }
-for order, tabName in ipairs({"Home", "NPCs", "Training", "TP", "Doctor", "Otherworld", "ESP", "QoL", "Config"}) do
+for order, tabName in ipairs({"Home", "NPCs", "Combat", "Training", "TP", "Doctor", "Otherworld", "ESP", "QoL", "Config"}) do
 	local button = create("TextButton", {
 		Name = tabName,
 		LayoutOrder = order,

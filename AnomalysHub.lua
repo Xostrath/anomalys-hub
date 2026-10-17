@@ -5113,6 +5113,15 @@ function configStore.ESP.GetVisualMetrics(character, root)
 	return boxWidth,boxHeight,1,centerOffset,Vector3.new(0,highestPoint+0.8,0)
 end
 
+function configStore.ESP.ShouldShowTuffleization(player, humanoid, localRace)
+	if player==localPlayer or not humanoid then return false end
+	if tostring(localRace):lower():match("^%s*(.-)%s*$")~="tuffle" then return false end
+	local health,maximum=humanoid.Health,humanoid.MaxHealth
+	return type(health)=="number" and type(maximum)=="number"
+		and health>0 and health<math.huge and maximum>0 and maximum<math.huge
+		and health/maximum<=0.35
+end
+
 function configStore.ESP.CreateEntry(player)
 	if player == localPlayer and not configStore.ESP.Settings.Self then return nil end
 	if configStore.ESP.Entries[player] then return configStore.ESP.Entries[player] end
@@ -5151,7 +5160,7 @@ function configStore.ESP.CreateEntry(player)
 		BorderSizePixel = 0,
 	}, entry.DistanceStubBack)
 	create("UICorner", {CornerRadius = UDim.new(0, 2)}, entry.DistanceStubFill)
-	entry.BoxBillboard=create("BillboardGui",{Name="GohanESPBox",Size=UDim2.fromOffset(76,132),StudsOffsetWorldSpace=Vector3.new(0,1.4,0),AlwaysOnTop=true,LightInfluence=0,MaxDistance=configStore.ESP.MaxDistance or 100000,Enabled=false},screenGui)
+	entry.BoxBillboard=create("BillboardGui",{Name="GohanESPBox",Size=UDim2.fromOffset(76,132),StudsOffsetWorldSpace=Vector3.new(0,1.4,0),AlwaysOnTop=true,LightInfluence=0,MaxDistance=configStore.ESP.MaxDistance or 100000,ClipsDescendants=false,Enabled=false},screenGui)
 	entry.BoxFrame=create("Frame",{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,BorderSizePixel=0},entry.BoxBillboard)
 	entry.BoxStroke=create("UIStroke",{Color=Color3.new(1,1,1),Thickness=1.4,Transparency=0},entry.BoxFrame)
 	local function bar(name,rightOffset,color)
@@ -5164,6 +5173,13 @@ function configStore.ESP.CreateEntry(player)
 	end
 	entry.HealthBack,entry.HealthFill=bar("Health",-12,Color3.fromRGB(239,55,62))
 	entry.KiBack,entry.KiFill=bar("Ki",-3,Color3.fromRGB(48,145,255))
+	entry.Tuffleization=create("TextLabel",{
+		Name="Tuffleization",AnchorPoint=Vector2.new(0,0.5),Position=UDim2.new(1,24,0.5,0),
+		Size=UDim2.fromOffset(134,18),BackgroundTransparency=1,Visible=false,
+		Text="TUFFLEIZATION",Font=Enum.Font.GothamBold,TextSize=11,
+		TextColor3=colors.Accent,TextStrokeColor3=Color3.new(0,0,0),TextStrokeTransparency=0.1,
+		TextXAlignment=Enum.TextXAlignment.Left,ZIndex=5,
+	},entry.HealthBack)
 	configStore.ESP.Entries[player]=entry
 	return entry
 end
@@ -5214,6 +5230,8 @@ function configStore.ESP.Update(deltaTime)
 	if configStore.ESP.UpdateElapsed<0.1 then return end
 	configStore.ESP.UpdateElapsed=0
 	local localRoot=localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+	-- Reuse the cached local race lookup once per refresh, not once per target.
+	local localRace=configStore.ESP.GetRace(localPlayer)
 	for _,player in ipairs(Players:GetPlayers()) do
 		if player~=localPlayer or configStore.ESP.Settings.Self then
 			local entry=configStore.ESP.CreateEntry(player)
@@ -5223,6 +5241,7 @@ function configStore.ESP.Update(deltaTime)
 			local root=character and character:FindFirstChild("HumanoidRootPart")
 			local head=character and character:FindFirstChild("Head")
 			local active=humanoid~=nil and humanoid.Health>0 and root~=nil and head~=nil
+			entry.Tuffleization.Visible=active==true and configStore.ESP.ShouldShowTuffleization(player,humanoid,localRace)
 			local distance=(localRoot and root) and (root.Position-localRoot.Position).Magnitude or math.huge
 			local maxDistance=configStore.ESP.MaxDistance or 100000
 			local inRange=distance<=maxDistance

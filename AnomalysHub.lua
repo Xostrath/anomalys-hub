@@ -7845,7 +7845,7 @@ npcSafety.DirectLight.TelemetryLabel = create("TextLabel", {
 
 -- BEGIN COMBAT DEFENSE CALIBRATION
 do
-    local d={Active=false,Connections={},Rows={},Effects={},Modes={Parry=0.5,SonicSway=0.25,BeamDeflect=0.5}}
+    local d={Active=false,Connections={},Rows={},Effects={},Modes={Parry=0.5,SonicSway=0.25,BeamDeflect=0.5,QDash=true}}
     configStore.CombatDefense=d
     function d.Status(message)if d.Label then d.Label.Text=message end end
     function d.Root(model)return model and model:FindFirstChild('HumanoidRootPart')end
@@ -7855,8 +7855,9 @@ do
         if not d.File or type(writefile)~='function' then return false end
         local ok=pcall(function()
             if type(isfolder)=='function' and type(makefolder)=='function' and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            local body=HttpService:JSONEncode({version=1,place=game.PlaceId,mode=d.Mode,
-                provisionalWindow=d.Modes[d.Mode],note='Passive observations, not verified hit times or server acceptance. User marks are subjective. One nearest attacker within 100 studs; new beam effects only, capped at 48; 20Hz frame samples.',rows=d.Rows})
+            local body=HttpService:JSONEncode({version=2,place=game.PlaceId,mode=d.Mode,
+                provisionalWindow=type(d.Modes[d.Mode])=='number'and d.Modes[d.Mode]or nil,
+                note='Passive observations, not verified hit times or server acceptance. User marks are subjective. One nearest attacker within 100 studs; new beam effects only, capped at 48; 20Hz frame samples. QDash records local Q/WASD only; remote keys are NOT observable and dash animations are not automatically attack confirmations.',rows=d.Rows})
             assert(#body<=8*1024*1024,'Recording exceeds 8MB limit')
             writefile(d.File,body)
         end)
@@ -7911,6 +7912,19 @@ do
             end
         end
         return result
+    end
+    function d.DashMotion(model)
+        local root=d.Root(model)
+        local hum=model and model:FindFirstChildOfClass('Humanoid')
+        if not root or not hum then return nil end
+        local state=hum:GetState()
+        return {velocity=d.Vector(root.AssemblyLinearVelocity),moveDirection=d.Vector(hum.MoveDirection),
+            humanoidState=state and d.Text(state.Name),floorMaterial=d.Text(hum.FloorMaterial.Name)}
+    end
+    function d.DashKeys()
+        local keys={}
+        for _,name in ipairs({'Q','W','A','S','D'})do keys[name]=UserInputService:IsKeyDown(Enum.KeyCode[name])end
+        return keys
     end
     function d.FindTarget()
         local char=localPlayer.Character
@@ -7983,16 +7997,30 @@ do
             local actorHum=model:FindFirstChildOfClass('Humanoid')
             local animator=actorHum and actorHum:FindFirstChildOfClass('Animator')
             if animator then d.Listen(animator.AnimationPlayed,function(track)
-                d.Log('animation',{actor=label,id=track.Animation and d.Text(track.Animation.AnimationId) or 'unknown',speed=track.Speed,length=track.Length})
+                d.Log('animation',{actor=label,id=track.Animation and d.Text(track.Animation.AnimationId) or 'unknown',speed=track.Speed,length=track.Length,
+                    position=track.TimePosition,motion=mode=='QDash'and d.DashMotion(model)or nil})
             end)else d.Log('missing_animator',label)end
             if actorHum then d.Listen(actorHum.HealthChanged,function(value)d.Log('health',{actor=label,value=value})end)end
+            if mode=='QDash'then d.Listen(model.AttributeChanged,function(name)
+                local lower=name:lower()
+                if not(lower:find('dash',1,true)or lower:find('attack',1,true)or lower:find('stun',1,true))then return end
+                local value=model:GetAttribute(name)
+                if value~=nil and type(value)~='boolean'and type(value)~='number'and type(value)~='string'then return end
+                d.Log('dash_attribute',{actor=label,name=d.Text(name),value=type(value)=='string'and d.Text(value)or value,
+                    removed=value==nil,motion=d.DashMotion(model)})
+            end)end
         end
         actorEvents(char,'self');actorEvents(target,'attacker')
         d.Listen(UserInputService.InputBegan,function(input,processed)
             if input.KeyCode==Enum.KeyCode.F then d.Log('F_down',{processed=processed,typing=UserInputService:GetFocusedTextBox()~=nil})end
+            if mode=='QDash'and input.KeyCode==Enum.KeyCode.Q then
+                d.Log('Q_down',{actor='self',processed=processed,typing=UserInputService:GetFocusedTextBox()~=nil,
+                    keys=d.DashKeys(),self=d.Actor(char),motion=d.DashMotion(char)})
+            end
         end)
         d.Listen(UserInputService.InputEnded,function(input,processed)
             if input.KeyCode==Enum.KeyCode.F then d.Log('F_up',{processed=processed})end
+            if mode=='QDash'and input.KeyCode==Enum.KeyCode.Q then d.Log('Q_up',{actor='self',processed=processed,keys=d.DashKeys()})end
         end)
         if mode=='BeamDeflect' then d.Listen(workspace.DescendantAdded,d.WatchEffect)end
         d.Listen(RunService.Heartbeat,function()
@@ -8003,10 +8031,14 @@ do
             d.Next=now+0.05
             local effects={}
             for index,object in ipairs(d.Effects)do local effect=d.Effect(object);if effect then effect.id=index;effects[#effects+1]=effect end end
-            d.Log('frame',{self=d.Actor(char),attacker=d.Actor(target),effects=effects})
+            d.Log('frame',{self=d.Actor(char),attacker=d.Actor(target),effects=effects,
+                selfMotion=mode=='QDash'and d.DashMotion(char)or nil,
+                attackerMotion=mode=='QDash'and d.DashMotion(target)or nil,
+                localKeys=mode=='QDash'and d.DashKeys()or nil})
             if d.Active and now-d.LastSave>=2 then d.LastSave=now;if not d.Save()then d.Stop('Write failed')end end
         end)
-        d.Status('Recording '..mode..' // attacker: '..d.Text(target.Name)..' // manually use F; 60 seconds.')
+        d.Status('Recording '..mode..' // attacker: '..d.Text(target.Name)..(mode=='QDash'
+            and ' // Q dashes only, no M1s; 60 seconds. No automatic defense.'or ' // manually use F; 60 seconds.'))
     end
     -- BEGIN BEAM DEFLECT TEST
     -- One bounded request per mode. Earliest expiring due request wins; an active
@@ -9080,7 +9112,7 @@ do
     end
     -- END BLOCK RULE CAPTURE
     -- BEGIN DEFENSE UI
-    local card=create('Frame',{Name='CombatDefense',Position=UDim2.fromOffset(16,210),Size=UDim2.new(1,-32,0,264),
+    local card=create('Frame',{Name='CombatDefense',Position=UDim2.fromOffset(16,210),Size=UDim2.new(1,-32,0,300),
         BackgroundColor3=colors.SurfaceRaised,BorderSizePixel=0},configStore.CombatPage)
     create('UICorner',{CornerRadius=UDim.new(0,9)},card)
     create('TextLabel',{Position=UDim2.fromOffset(14,8),Size=UDim2.new(1,-28,0,22),BackgroundTransparency=1,
@@ -9105,7 +9137,8 @@ do
     button('Success','Mark SUCCESS',1/3,148,1/3,function()d.Log('user_outcome','success');for _,mode in ipairs({b,p})do if mode.Enabled then mode.Log('user_outcome','success');mode.Save()end end end)
     button('Miss','Mark MISS',2/3,148,1/3,function()d.Log('user_outcome','miss');for _,mode in ipairs({b,p})do if mode.Enabled then mode.Log('user_outcome','miss');mode.Save()end end end)
     button('CaptureBlockRules','Capture block rules (read only)',0,184,1,function()c.Start()end)
-    d.Label=create('TextLabel',{Position=UDim2.fromOffset(14,220),Size=UDim2.new(1,-28,0,38),BackgroundTransparency=1,
+    button('RecordQDash','Record Q Dash (60s / passive)',0,220,1,function()d.Start('QDash')end)
+    d.Label=create('TextLabel',{Position=UDim2.fromOffset(14,256),Size=UDim2.new(1,-28,0,38),BackgroundTransparency=1,
         Text='Parry / Beam: 60-second tests, OFF by default. Test one at a time. Sonic Sway needs calibration.',Font=Enum.Font.Gotham,TextSize=10,
         TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left},card)
 end

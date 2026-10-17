@@ -5021,6 +5021,11 @@ function configStore.ESP.FetchLocalSnapshot()
 		snapshot.Name=characterData.Name
 		snapshot.Race=type(characterData.Race)=="table" and characterData.Race.Race or characterData.Race
 	end
+	-- Use the same direct race query as the form tools; CharacterData may not
+	-- expose Race as the string/nested shape the ESP previously assumed.
+	local okRace,race=pcall(statRetrieveRemote.InvokeServer,statRetrieveRemote,"Race")
+	if okRace and type(race)=="string" and race:match("%S") then snapshot.Race=race end
+	if type(snapshot.Race)~="string" or not snapshot.Race:match("%S") then snapshot.Race=nil end
 	local okStats,statData=pcall(statRetrieveRemote.InvokeServer,statRetrieveRemote,"StatData","TableStat")
 	if okStats and type(statData)=="table" and type(statData.CharacterStats)=="table" then
 		snapshot.Ki=statData.CharacterStats.Ki
@@ -5160,8 +5165,8 @@ function configStore.ESP.CreateEntry(player)
 		BorderSizePixel = 0,
 	}, entry.DistanceStubBack)
 	create("UICorner", {CornerRadius = UDim.new(0, 2)}, entry.DistanceStubFill)
-	entry.BoxBillboard=create("BillboardGui",{Name="GohanESPBox",Size=UDim2.fromOffset(76,132),StudsOffsetWorldSpace=Vector3.new(0,1.4,0),AlwaysOnTop=true,LightInfluence=0,MaxDistance=configStore.ESP.MaxDistance or 100000,ClipsDescendants=false,Enabled=false},screenGui)
-	entry.BoxFrame=create("Frame",{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,BorderSizePixel=0},entry.BoxBillboard)
+	entry.BoxBillboard=create("BillboardGui",{Name="GohanESPBox",Size=UDim2.fromOffset(396,132),StudsOffsetWorldSpace=Vector3.new(0,1.4,0),AlwaysOnTop=true,LightInfluence=0,MaxDistance=configStore.ESP.MaxDistance or 100000,ClipsDescendants=false,Enabled=false},screenGui)
+	entry.BoxFrame=create("Frame",{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(76,132),BackgroundTransparency=1,BorderSizePixel=0},entry.BoxBillboard)
 	entry.BoxStroke=create("UIStroke",{Color=Color3.new(1,1,1),Thickness=1.4,Transparency=0},entry.BoxFrame)
 	local function bar(name,rightOffset,color)
 		local back=create("Frame",{Name=name,AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,rightOffset,0,3),Size=UDim2.new(0,7,1,-6),BackgroundColor3=Color3.fromRGB(8,8,8),BackgroundTransparency=0.02,BorderSizePixel=0,ZIndex=3},entry.BoxFrame)
@@ -5257,7 +5262,10 @@ function configStore.ESP.Update(deltaTime)
 				entry.Panel.Size=UDim2.fromOffset(240,88)
 				entry.Billboard.StudsOffsetWorldSpace=infoOffset
 				entry.InfoScale.Scale=1
-				entry.BoxBillboard.Size=UDim2.fromOffset(boxWidth,boxHeight)
+				-- Reserve real canvas space for the side label, retaining the exact
+				-- centered body box and bar sizes rather than relying on overflow.
+				entry.BoxBillboard.Size=UDim2.fromOffset(boxWidth+320,boxHeight)
+				entry.BoxFrame.Size=UDim2.fromOffset(boxWidth,boxHeight)
 				entry.BoxBillboard.StudsOffsetWorldSpace=centerOffset
 				entry.Username.Visible=configStore.ESP.Settings.Username
 				entry.Username.Text="@"..player.Name
@@ -19510,6 +19518,12 @@ function autoTransformState.Update(deltaTime)
 			})
 		end)
 		autoTransformState.Status = ok and "Activation requested" or "Request failed; retrying"
+		-- Kaioken can stack without populating CoreStats.Form. Never send a
+		-- second activation automatically; a sent request is not proof of success.
+		if ok and string.lower(selected):gsub("[^%a]", "")=="kaioken" then
+			autoTransformState.SetEnabled(false)
+			autoTransformState.Status = "Kaioken requested once; Auto Form off"
+		end
 		autoTransformState.Render()
 	end)
 end

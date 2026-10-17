@@ -19290,6 +19290,14 @@ function autoTransformState.ResourceReady(selected, forceScan)
 		return true, "Ki full"
 	end
 	local fatigue, visibleBar = autoTransformState.ReadFatiguePercent(forceScan)
+	if string.lower(selected):gsub("[^%a]", "")=="kaioken"
+		and autoTransformState.KaiokenRequestedCharacter==localPlayer.Character then
+		if visibleBar and fatigue and fatigue>1 then
+			autoTransformState.KaiokenRequestedCharacter=nil
+		else
+			return false, "Kaioken: waiting for fatigue cycle"
+		end
+	end
 	if not visibleBar then return true, "No fatigue bar; ready" end
 	if fatigue == nil then return false, "Fatigue unavailable" end
 	if fatigue > 1 then return false, string.format("Fatigue %.1f%% > 1%%", fatigue) end
@@ -19312,7 +19320,12 @@ function autoTransformState.GetReadyCharacter(selected, forceScan)
 		return nil, nil, "Waiting for character"
 	end
 	local activeForm = tostring(formValue.Value)
-	if activeForm ~= "None" and activeForm ~= "" then return nil, nil, "Form active" end
+	if activeForm ~= "None" and activeForm ~= "" then
+		-- An actual active form is also an acknowledgement; the active-form
+		-- guard now prevents repeats until it ends and resources are ready.
+		autoTransformState.KaiokenRequestedCharacter=nil
+		return nil, nil, "Form active"
+	end
 	local ready, reason = autoTransformState.ResourceReady(selected, forceScan)
 	if not ready then return nil, nil, reason end
 	local ok, allowed = pcall(function()
@@ -19365,6 +19378,7 @@ end
 
 function autoTransformState.SetEnabled(enabled)
 	autoTransformState.CancelPending()
+	if enabled~=true then autoTransformState.KaiokenRequestedCharacter=nil end
 	if enabled == true and qolState.FormMastery.Enabled and qolState.FormMastery.SetEnabled then
 		qolState.FormMastery.SetEnabled(false)
 	end
@@ -19518,11 +19532,11 @@ function autoTransformState.Update(deltaTime)
 			})
 		end)
 		autoTransformState.Status = ok and "Activation requested" or "Request failed; retrying"
-		-- Kaioken can stack without populating CoreStats.Form. Never send a
-		-- second activation automatically; a sent request is not proof of success.
+		-- Kaioken may not populate Form. Latch this low-fatigue cycle so it
+		-- cannot stack before fatigue rises; keep Auto Form enabled throughout.
 		if ok and string.lower(selected):gsub("[^%a]", "")=="kaioken" then
-			autoTransformState.SetEnabled(false)
-			autoTransformState.Status = "Kaioken requested once; Auto Form off"
+			autoTransformState.KaiokenRequestedCharacter=character
+			autoTransformState.Status = "Kaioken: waiting for fatigue cycle"
 		end
 		autoTransformState.Render()
 	end)

@@ -8333,12 +8333,14 @@ do
     -- First punch: earlier user-confirmed sequence began with F ~0.003s after the cue;
     -- attribution was less certain because later taps followed. Second punch: one confirmed
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v7-release-settle',RecoveryOpportunitySpan=0.75,
+    -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
+    -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v8-second-hit-lead',RecoveryOpportunitySpan=0.75,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
         ['99346182354558']={phase=0,hold=0.12,reach=12,facing=0.25,label='first punch / provisional'},
-        ['137006829454244']={phase=0.31,hold=0.16,reach=12,facing=0.25,label='second punch / confirmed manual example'},
+        ['137006829454244']={phase=0.20,hold=0.16,reach=12,facing=0.25,label='second punch / experimental earlier window'},
         -- Experimental input windows, NOT proven parry timings. At the observed
         -- speed 1.40759 these span ~0.18-0.32, ~0.16-0.31 and ~0.09-0.23s.
         -- Captured damage followed at ~0.35-0.40, ~0.33-0.39 and ~0.24-0.29s.
@@ -8673,7 +8675,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v7 recovery + settled release checks // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v8 earlier second hit + settled release checks // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)

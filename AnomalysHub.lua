@@ -8333,7 +8333,7 @@ do
     -- First punch: earlier user-confirmed sequence began with F ~0.003s after the cue;
     -- attribution was less certain because later taps followed. Second punch: one confirmed
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v4-client-gates',
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v5-opportunity',RecoveryOpportunitySpan=0.75,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
         ['99346182354558']={phase=0,hold=0.12,reach=12,facing=0.25,label='first punch / provisional'},
@@ -8363,7 +8363,8 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=7,build=p.Build,place=game.PlaceId,run=p.RunId,
+            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=8,build=p.Build,place=game.PlaceId,run=p.RunId,
+                recoveryOpportunitySpan=p.RecoveryOpportunitySpan,
                 recoveryHold=p.RecoveryHold,recoveryGap=p.RecoveryGap,recoveryLimit=p.RecoveryLimit,
                 burstLimit=p.BurstLimit,burstSpan=p.BurstSpan,burstPhaseStep=p.BurstPhaseStep,droppedRows=p.DroppedRows or 0,
                 observationsFile='defense_parry_observed_latest.json',
@@ -8438,6 +8439,21 @@ do
         if not p.Enabled or not p.Observations or p.ObservationError then return end
         local now=os.clock()
         p.ObserveResponses(now)
+        -- Sample the live query every observed heartbeat, even without a pending
+        -- attack. Log transitions separately so they cannot exhaust action rows.
+        local eligible,gate,signals=p.BlockEligibility()
+        local capture=p.Observations
+        capture.eligibilitySamples+=1
+        local key=tostring(eligible)..':'..gate..':'..tostring(signals.stunnedReported)
+            ..':'..table.concat(signals.activeStates or {},',')
+        if key~=p.LastEligibilityKey then
+            p.LastEligibilityKey=key
+            if #capture.eligibilityTransitions<600 then
+                capture.eligibilityTransitions[#capture.eligibilityTransitions+1]={t=now-p.Started,
+                    eligible=eligible,gate=gate,signals=signals,pending=p.Pending and p.Pending.id or nil,held=p.Held}
+            else capture.droppedEligibilityTransitions+=1 end
+        end
+        p.ObservationDirty=true
         if now-(p.LastObservationFrame or -math.huge)>=0.05 then
             p.LastObservationFrame=now
             local capture=p.Observations
@@ -8569,10 +8585,11 @@ do
         p.InputHistory={};p.ResponseStates={State_Blocking=char:GetAttribute('State_Blocking')==true,
             State_SonicSway=char:GetAttribute('State_SonicSway')==true}
         p.RunId=tostring(p.Started);p.ObservationError=nil;p.ObservationSaveFailed=false
-        p.ObservedTrack=nil;p.ObservedAt=nil;p.LastObservationFrame=nil;p.LastObservationSave=p.Started
-        p.Observations={version=1,build=p.Build,run=p.RunId,place=game.PlaceId,framesPerSecond=20,
+        p.ObservedTrack=nil;p.ObservedAt=nil;p.LastObservationFrame=nil;p.LastObservationSave=p.Started;p.LastEligibilityKey=nil
+        p.Observations={version=2,build=p.Build,run=p.RunId,place=game.PlaceId,framesPerSecond=20,
             note='Passive observations during Auto Parry, NOT confirmed attacks, hit times, parries or Sonic Sways. Unknown animations may be idle/locomotion. One locked attacker; local file only.',
-            frames={},animations={},droppedFrames=0,droppedAnimations=0}
+            frames={},animations={},droppedFrames=0,droppedAnimations=0,
+            eligibilityTransitions={},eligibilitySamples=0,droppedEligibilityTransitions=0}
         p.ObservationDirty=true;p.SaveObservations()
         p.Connection=animator.AnimationPlayed:Connect(function(track)
             if not p.Enabled then return end
@@ -8580,7 +8597,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v4 client eligibility gates // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v5 bounded recovery opportunities // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -8674,8 +8691,19 @@ do
                 p.Pending=nil;defenseQueue.Cancel(p);p.Skip('attack_cancelled_or_clock_reset',{animation=pending.id});return
             end
             if position~=pending.position then pending.clockAt=now
-            elseif now-pending.clockAt>0.25 and pending.phase>0 then
+            elseif now-pending.clockAt>0.25 and(pending.phase>0 or pending.recoveryUntil)then
                 p.Pending=nil;defenseQueue.Cancel(p);p.Skip('animation_clock_stalled',{animation=pending.id});return
+            end
+            if pending.recoveryUntil then
+                local length=pending.track.Length
+                if type(length)~='number'or length~=length or length<=0 or length==math.huge then
+                    p.Pending=nil;defenseQueue.Cancel(p);p.Skip('recovery_clip_unavailable',{animation=pending.id});return
+                end
+                -- A speed/length change may shorten but never extend the window.
+                pending.recoveryUntil=math.min(pending.recoveryUntil,now+math.max(0,(length-position)/speed))
+                if now>=pending.recoveryUntil then
+                    p.Pending=nil;defenseQueue.Cancel(p);p.Skip('recovery_opportunity_expired',{animation=pending.id});return
+                end
             end
             if not pending.dueAt and pending.phase>0 then
                 pending.at=math.max(now+(pending.phase-position)/speed,pending.notBefore or -math.huge)
@@ -8699,11 +8727,11 @@ do
             return
         end
         if not pending then defenseQueue.Cancel(p);return end
-        -- A closed client gate waits only inside this swing's existing deadline.
-        -- Do not count a rejected opportunity as a tap or invent a fresh window
-        -- when stun/lock clears. Query again at dispatch to avoid stale readiness.
+        -- A demonstrated stun rejection may arm ONE recovery input for this
+        -- still-playing attack. All other gates keep the old narrow deadline.
+        -- Query again at dispatch; a readiness observation is not permission later.
         if now>=pending.at and not p.Held then
-            if pending.gateReason and now>pending.at+0.1 then
+            if pending.gateReason and not pending.recoveryUntil and now>pending.at+0.1 then
                 p.Pending=nil;defenseQueue.Cancel(p)
                 p.Skip('block_gate_window_expired',{animation=pending.id,gate=pending.gateReason});return
             end
@@ -8711,11 +8739,28 @@ do
             if eligible==nil then p.Log('eligibility_error',signals);p.Stop(gate);return end
             pending.eligibility=signals
             if not eligible then
+                local states=signals.activeStates or {}
+                local inStun=signals.stunnedReported or table.find(states,'Stunned')~=nil
+                local knocked=table.find(states,'Knocked')or table.find(states,'TempKnock')
+                if pending.recoveryUntil and knocked then
+                    p.Pending=nil;defenseQueue.Cancel(p);p.Skip('recovery_knocked',{animation=pending.id});return
+                end
+                local length=pending.track.Length
+                if not pending.recoveryUntil and pending.taps==0 and gate=='state_disallows_block'
+                    and inStun and not knocked and now<=pending.at+0.1
+                    and type(length)=='number'and length==length and length<math.huge and length>pending.position then
+                    local deadline=math.min(pending.started+p.RecoveryOpportunitySpan,now+(length-pending.position)/pending.speed)
+                    if deadline>pending.at+0.1 then
+                        pending.recoveryUntil=deadline;pending.recovery=true
+                        p.Log('recovery_opportunity',{animation=pending.id,untilTime=deadline-p.Started,
+                            maxAge=p.RecoveryOpportunitySpan,clipLength=length})
+                    end
+                end
                 if pending.gateReason~=gate then
                     p.Log('block_gate_wait',{animation=pending.id,gate=gate,signals=signals});pending.gateReason=gate
                 end
                 defenseQueue.Cancel(p)
-                if now>pending.at+0.1 then
+                if not pending.recoveryUntil and now>pending.at+0.1 then
                     p.Pending=nil;p.Skip('block_gate_window_expired',{animation=pending.id,gate=gate})
                 end
                 return
@@ -8724,10 +8769,9 @@ do
                 pending.gateReason=nil
             end
         end
-        -- Each distinct swing owns its deadline. Only wait for the real key-up
-        -- gap, not a cooldown inherited from a different swing. Do not extend
-        -- the original expiry if that gap would make this attack too late.
-        defenseQueue.Request(p,math.max(pending.at,p.NextPressAt),pending.at+0.1)
+        -- The normal timing deadline or the already-bounded recovery opportunity
+        -- also applies while waiting for another defense to release the shared F.
+        defenseQueue.Request(p,math.max(pending.at,p.NextPressAt),pending.recoveryUntil or(pending.at+0.1))
         if not dispatch then return end
         if now<pending.at or now<p.NextPressAt then return end
         p.Pending=nil;defenseQueue.Cancel(p) -- Only explicitly bounded bursts may schedule another tap.
@@ -8740,8 +8784,10 @@ do
         local details={animation=pending.id,sinceAnimation=now-pending.started,lateness=now-pending.at,
             distance=distance,health=health,speed=pending.speed,phase=pending.phase,
             stunnedReported=stunned,recovery=pending.recovery or false,plannedHold=hold,
-            burst=pending.burst,tap=pending.taps+1,profile=pending.profile.label,clientEligibility=pending.eligibility}
-        local skip=pending.taps>=limit and 'recovery_tap_limit' or details.lateness>0.1 and 'late_frame' or d.KeyOwner and 'F_owned_by_defense'
+            burst=pending.burst,tap=pending.taps+1,profile=pending.profile.label,clientEligibility=pending.eligibility,
+            recoveryOpportunity=pending.recoveryUntil~=nil}
+        local skip=pending.taps>=limit and 'recovery_tap_limit'
+            or(not pending.recoveryUntil and details.lateness>0.1)and 'late_frame' or d.KeyOwner and 'F_owned_by_defense'
             or UserInputService:IsKeyDown(Enum.KeyCode.F)and 'F_already_down'
             or p.Character:GetAttribute('State_Blocking')and 'blocking_reported'
         if skip then p.Skip(skip,details);return end
@@ -8751,7 +8797,7 @@ do
         pending.taps+=1
         p.InputHistory[#p.InputHistory+1]={at=now,id=pending.id,tap=pending.taps,recovery=pending.recovery or false,hold=hold}
         if #p.InputHistory>8 then table.remove(p.InputHistory,1)end
-        if pending.burst and pending.taps<limit then
+        if pending.burst and pending.taps<limit and not pending.recoveryUntil then
             pending.expires=pending.expires or(now+p.BurstSpan)
             pending.phase+=p.BurstPhaseStep;pending.dueAt=nil
             pending.notBefore=now+hold+pending.gap

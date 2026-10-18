@@ -8476,11 +8476,12 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v14-dash-contact-timing',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v15-dash-dual-window',RecoveryOpportunitySpan=0.75,
         DashAnimation='88929057646501',DashPairWindow=0.15,
-        -- v13 spent the parry window at dash start: both immediate 11-14 stud
-        -- presses took full damage. Wait for measured approach or actual contact.
-        DashDefense=true,DashMaxAge=0.65,DashNearRange=8,DashNearHold=0.16,DashContactRange=6,DashLead=0.08,
+        -- v14's single late input was delivered seven times but all seven dashes
+        -- damaged. Cover one earlier server-facing estimate plus one bounded retry.
+        DashDefense=true,DashMaxAge=0.80,DashNearRange=8,DashNearHold=0.04,DashContactRange=6,DashLead=0.18,
+        DashTapHold=0.04,DashTapGap=0.06,DashTapLimit=2,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
@@ -8513,6 +8514,8 @@ do
             if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
             writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=11,build=p.Build,place=game.PlaceId,run=p.RunId,
                 recoveryOpportunitySpan=p.RecoveryOpportunitySpan,
+                dashMaxAge=p.DashMaxAge,dashNearRange=p.DashNearRange,dashContactRange=p.DashContactRange,
+                dashLead=p.DashLead,dashTapHold=p.DashTapHold,dashTapGap=p.DashTapGap,dashTapLimit=p.DashTapLimit,
                 releaseCheckDelay=p.ReleaseCheckDelay,releaseRetryLimit=p.ReleaseRetryLimit,releaseWatchSpan=p.ReleaseWatchSpan,
                 recoveryHold=p.RecoveryHold,recoveryGap=p.RecoveryGap,recoveryLimit=p.RecoveryLimit,
                 burstLimit=p.BurstLimit,burstSpan=p.BurstSpan,burstPhaseStep=p.BurstPhaseStep,droppedRows=p.DroppedRows or 0,
@@ -8677,7 +8680,8 @@ do
             profile={phase=0,hold=0.16,reach=40,facing=0.25,label='forward Q dash / experimental approach'},
             phase=0,taps=0,burst=false,speed=cue.track.Speed,position=cue.track.TimePosition,clockAt=now,at=now+0.05}
         p.Log('attack',{animation=p.DashAnimation,kind='forward_q_dash',maxAge=p.DashMaxAge,
-            nearRange=p.DashNearRange,nearHold=p.DashNearHold,contactRange=p.DashContactRange,lead=p.DashLead})
+            nearRange=p.DashNearRange,nearHold=p.DashNearHold,contactRange=p.DashContactRange,lead=p.DashLead,
+            tapHold=p.DashTapHold,tapGap=p.DashTapGap,tapLimit=p.DashTapLimit})
     end
     function p.DashThreat(pending,now)
         if not p.Target then return false,'missing_target' end
@@ -8986,7 +8990,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v12 earlier close Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v15 dual-window Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -9120,10 +9124,13 @@ do
         end
         if pending and pending.dash then
             local ready,reason,prediction=p.DashThreat(pending,now)
-            if reason or(pending.dashDue and not ready)then
+            if reason or(not pending.dashFollowup and pending.dashDue and not ready)then
                 p.Pending=nil;defenseQueue.Cancel(p);p.Skip(reason or 'dash_no_longer_approaching',{animation=pending.id});return
             end
-            if ready then
+            if pending.dashFollowup then
+                pending.at=math.max(pending.at,pending.notBefore or -math.huge)
+                pending.dueAt=pending.at
+            elseif ready then
                 pending.dashDue=pending.dashDue or now;pending.at=pending.dashDue;pending.prediction=prediction
             else pending.at=now+0.05;pending.dueAt=nil end
         end
@@ -9193,16 +9200,17 @@ do
         local stunned=p.Character:GetAttribute('State_Stunned')==true
         pending.recovery=not pending.dash and(pending.recovery or stunned)
         pending.burst=not pending.dash and(pending.burst or stunned)
-        local limit=pending.recovery and p.RecoveryLimit or p.BurstLimit
-        local hold=pending.recovery and p.RecoveryHold or(pending.burst and p.BurstHold or pending.profile.hold)
-        if pending.dash and pending.prediction and pending.prediction.method=='near' then hold=p.DashNearHold end
-        pending.gap=pending.recovery and p.RecoveryGap or p.BurstGap
+        local limit=pending.dash and p.DashTapLimit or(pending.recovery and p.RecoveryLimit or p.BurstLimit)
+        local hold=pending.dash and p.DashTapHold
+            or(pending.recovery and p.RecoveryHold or(pending.burst and p.BurstHold or pending.profile.hold))
+        pending.gap=pending.dash and p.DashTapGap or(pending.recovery and p.RecoveryGap or p.BurstGap)
         local details={animation=pending.id,sinceAnimation=now-pending.started,lateness=now-pending.at,
             distance=distance,health=health,speed=pending.speed,phase=pending.phase,
             stunnedReported=stunned,recovery=pending.recovery or false,plannedHold=hold,
             burst=pending.burst,tap=pending.taps+1,profile=pending.profile.label,clientEligibility=pending.eligibility,
-            recoveryOpportunity=pending.recoveryUntil~=nil,dash=pending.dash or false,dashPrediction=pending.prediction}
-        local skip=pending.taps>=limit and 'recovery_tap_limit'
+            recoveryOpportunity=pending.recoveryUntil~=nil,dash=pending.dash or false,
+            dashFollowup=pending.dashFollowup or false,dashPrediction=pending.prediction}
+        local skip=pending.taps>=limit and(pending.dash and 'dash_tap_limit'or'recovery_tap_limit')
             or(not pending.recoveryUntil and details.lateness>0.1)and 'late_frame' or d.KeyOwner and 'F_owned_by_defense'
             or UserInputService:IsKeyDown(Enum.KeyCode.F)and 'F_already_down'
             or p.Character:GetAttribute('State_Blocking')and 'blocking_reported'
@@ -9214,7 +9222,11 @@ do
         pending.taps+=1
         p.InputHistory[#p.InputHistory+1]={at=now,id=pending.id,tap=pending.taps,recovery=pending.recovery or false,hold=hold}
         if #p.InputHistory>8 then table.remove(p.InputHistory,1)end
-        if pending.burst and pending.taps<limit and not pending.recoveryUntil then
+        if pending.dash and pending.taps<limit then
+            pending.dashFollowup=true;pending.dueAt=nil
+            pending.notBefore=now+hold+pending.gap;pending.at=pending.notBefore
+            p.Pending=pending
+        elseif pending.burst and pending.taps<limit and not pending.recoveryUntil then
             pending.expires=pending.expires or(now+p.BurstSpan)
             pending.phase+=p.BurstPhaseStep;pending.dueAt=nil
             pending.notBefore=now+hold+pending.gap

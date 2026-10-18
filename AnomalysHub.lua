@@ -5161,7 +5161,11 @@ end
 
 function configStore.ESP.ShouldShowTuffleization(player, humanoid, localRace)
 	if player==localPlayer or not humanoid then return false end
-	if tostring(localRace):lower():match("^%s*(.-)%s*$")~="tuffle" then return false end
+	-- Race labels are not guaranteed to be exactly "Tuffle" (variants can
+	-- include prefixes/suffixes). The public ESP only needs a positive local
+	-- Tuffle signal, so normalize punctuation and accept a contained token.
+	local normalized=tostring(localRace):lower():gsub("[^%a]","")
+	if not normalized:find("tuffle",1,true)then return false end
 	local health,maximum=humanoid.Health,humanoid.MaxHealth
 	return type(health)=="number" and type(maximum)=="number"
 		and health>0 and health<math.huge and maximum>0 and maximum<math.huge
@@ -5219,13 +5223,15 @@ function configStore.ESP.CreateEntry(player)
 	end
 	entry.HealthBack,entry.HealthFill=bar("Health",-12,Color3.fromRGB(239,55,62))
 	entry.KiBack,entry.KiFill=bar("Ki",-3,Color3.fromRGB(48,145,255))
+	-- Keep this directly on the billboard canvas. Parenting it to the 7-pixel
+	-- health bar made visibility dependent on overflow/clipping behavior.
 	entry.Tuffleization=create("TextLabel",{
-		Name="Tuffleization",AnchorPoint=Vector2.new(0,0.5),Position=UDim2.new(1,24,0.5,0),
-		Size=UDim2.fromOffset(134,18),BackgroundTransparency=1,Visible=false,
+		Name="Tuffleization",AnchorPoint=Vector2.new(0,0.5),Position=UDim2.new(0.5,58,0.5,0),
+		Size=UDim2.fromOffset(150,20),BackgroundTransparency=1,Visible=false,
 		Text="TUFFLEIZATION",Font=Enum.Font.GothamBold,TextSize=11,
-		TextColor3=colors.Accent,TextStrokeColor3=Color3.new(0,0,0),TextStrokeTransparency=0.1,
+		TextColor3=Color3.fromRGB(239,125,255),TextStrokeColor3=Color3.new(0,0,0),TextStrokeTransparency=0,
 		TextXAlignment=Enum.TextXAlignment.Left,ZIndex=5,
-	},entry.HealthBack)
+	},entry.BoxBillboard)
 	configStore.ESP.Entries[player]=entry
 	return entry
 end
@@ -5287,10 +5293,11 @@ function configStore.ESP.Update(deltaTime)
 			local root=character and character:FindFirstChild("HumanoidRootPart")
 			local head=character and character:FindFirstChild("Head")
 			local active=humanoid~=nil and humanoid.Health>0 and root~=nil and head~=nil
-			entry.Tuffleization.Visible=active==true and configStore.ESP.ShouldShowTuffleization(player,humanoid,localRace)
 			local distance=(localRoot and root) and (root.Position-localRoot.Position).Magnitude or math.huge
 			local maxDistance=configStore.ESP.MaxDistance or 100000
 			local inRange=distance<=maxDistance
+			entry.Tuffleization.Visible=active==true and inRange and configStore.ESP.Settings.HealthBar
+				and configStore.ESP.ShouldShowTuffleization(player,humanoid,localRace)
 			local showInfo=configStore.ESP.Settings.Username or configStore.ESP.Settings.InGameName or configStore.ESP.Settings.Race or configStore.ESP.Settings.PowerLevel or configStore.ESP.Settings.Distance
 			entry.Billboard.Enabled=active==true and inRange and showInfo
 			entry.BoxBillboard.Enabled=active==true and inRange and (configStore.ESP.Settings.Box or configStore.ESP.Settings.HealthBar or configStore.ESP.Settings.KiBar)
@@ -5307,6 +5314,7 @@ function configStore.ESP.Update(deltaTime)
 				-- centered body box and bar sizes rather than relying on overflow.
 				entry.BoxBillboard.Size=UDim2.fromOffset(boxWidth+320,boxHeight)
 				entry.BoxFrame.Size=UDim2.fromOffset(boxWidth,boxHeight)
+				entry.Tuffleization.Position=UDim2.new(0.5,boxWidth/2+20,0.5,0)
 				entry.BoxBillboard.StudsOffsetWorldSpace=centerOffset
 				entry.Username.Visible=configStore.ESP.Settings.Username
 				entry.Username.Text="@"..player.Name

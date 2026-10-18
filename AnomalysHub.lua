@@ -8476,12 +8476,12 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v16-dash-spatial-followup',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v17-dash-close-prime',RecoveryOpportunitySpan=0.75,
         DashAnimation='88929057646501',DashPairWindow=0.15,
-        -- v15 succeeded from 43/57 studs: its second taps landed at 14-15 studs.
-        -- At 20-30 stud starts the fixed delay landed at 7-8.5; gate retry spatially.
+        -- v16 succeeded when the second tap landed at 12.5-15.3 studs. Close starts
+        -- crossed that range while the late first tap was still cycling; prime early.
         DashDefense=true,DashMaxAge=0.80,DashNearRange=8,DashNearHold=0.04,DashContactRange=6,DashLead=0.18,
-        DashTapHold=0.04,DashTapGap=0.02,DashTapLimit=2,DashFollowupRange=16,
+        DashTapHold=0.04,DashTapGap=0.02,DashTapLimit=2,DashFollowupRange=16,DashCloseStartRange=30,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
@@ -8516,7 +8516,7 @@ do
                 recoveryOpportunitySpan=p.RecoveryOpportunitySpan,
                 dashMaxAge=p.DashMaxAge,dashNearRange=p.DashNearRange,dashContactRange=p.DashContactRange,
                 dashLead=p.DashLead,dashTapHold=p.DashTapHold,dashTapGap=p.DashTapGap,dashTapLimit=p.DashTapLimit,
-                dashFollowupRange=p.DashFollowupRange,
+                dashFollowupRange=p.DashFollowupRange,dashCloseStartRange=p.DashCloseStartRange,
                 releaseCheckDelay=p.ReleaseCheckDelay,releaseRetryLimit=p.ReleaseRetryLimit,releaseWatchSpan=p.ReleaseWatchSpan,
                 recoveryHold=p.RecoveryHold,recoveryGap=p.RecoveryGap,recoveryLimit=p.RecoveryLimit,
                 burstLimit=p.BurstLimit,burstSpan=p.BurstSpan,burstPhaseStep=p.BurstPhaseStep,droppedRows=p.DroppedRows or 0,
@@ -8659,11 +8659,12 @@ do
             or math.abs(p.ForwardDashEdge-cue.at)>p.DashPairWindow then return end
         p.DashCandidate=nil
         local own,other=d.Root(p.Character),d.Root(p.Target)
+        local distance=own and other and(own.Position-other.Position).Magnitude or nil
         p.Log('forward_q_dash_recognized',{animation=p.DashAnimation,speed=cue.speed,
             sinceAnimation=now-cue.at,stateEdgeOffset=p.ForwardDashEdge-cue.at,
-            distance=own and other and (own.Position-other.Position).Magnitude or nil,
+            distance=distance,
             attackerMotion=p.Motion(p.Target),recognitionOnly=not p.DashDefense})
-        if p.DashDefense then p.DashReady=cue
+        if p.DashDefense then cue.distance=distance;p.DashReady=cue
         else d.Status('PARRY TEST // Forward Q dash recognized // recognition only.')end
     end
     function p.ArmDash(now)
@@ -8679,10 +8680,12 @@ do
         defenseQueue.Cancel(p)
         p.Pending={dash=true,id=p.DashAnimation,track=cue.track,started=cue.at,expires=cue.at+p.DashMaxAge,
             profile={phase=0,hold=0.16,reach=40,facing=0.25,label='forward Q dash / experimental approach'},
-            phase=0,taps=0,burst=false,speed=cue.track.Speed,position=cue.track.TimePosition,clockAt=now,at=now+0.05}
+            phase=0,taps=0,burst=false,speed=cue.track.Speed,position=cue.track.TimePosition,clockAt=now,
+            closeStart=type(cue.distance)=='number'and cue.distance<=p.DashCloseStartRange,at=now+0.05}
         p.Log('attack',{animation=p.DashAnimation,kind='forward_q_dash',maxAge=p.DashMaxAge,
             nearRange=p.DashNearRange,nearHold=p.DashNearHold,contactRange=p.DashContactRange,lead=p.DashLead,
-            tapHold=p.DashTapHold,tapGap=p.DashTapGap,tapLimit=p.DashTapLimit,followupRange=p.DashFollowupRange})
+            tapHold=p.DashTapHold,tapGap=p.DashTapGap,tapLimit=p.DashTapLimit,followupRange=p.DashFollowupRange,
+            closeStart=p.Pending.closeStart,closeStartRange=p.DashCloseStartRange})
     end
     function p.DashThreat(pending,now)
         if not p.Target then return false,'missing_target' end
@@ -8700,6 +8703,9 @@ do
             pending.motionVelocity=measured
         end
         if not pending.motionAt or measured then pending.motionAt=now;pending.motionDelta=delta end
+        if pending.closeStart and pending.taps==0 then
+            return true,nil,{distance=distance,method='close_start_prime',arrival=0,range=p.DashCloseStartRange}
+        end
         local details={distance=distance,method='near',arrival=0}
         if distance<=p.DashNearRange then return true,nil,details end
         local best
@@ -8991,7 +8997,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v16 spatial-follow-up Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v17 close-prime Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)

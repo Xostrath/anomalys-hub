@@ -12601,6 +12601,23 @@ function npcSafety.FindFlatLurePoint(character, characterRoot, targetRoot)
 	return bestPoint
 end
 
+-- Never send the character below the void: parts under FallenPartsDestroyHeight
+-- are destroyed and the game respawns you. Timeline 2026-10-17: travelling 60
+-- studs under low terrain (Iceru) respawned the player every ~12 s for 2+ min.
+function npcSafety.GetVoidFloorY()
+	local ok, height = pcall(function() return workspace.FallenPartsDestroyHeight end)
+	height = ok and tonumber(height) or -500
+	return height + 40
+end
+
+function npcSafety.ClampAboveVoid(position)
+	local floorY = npcSafety.GetVoidFloorY()
+	if position and position.Y < floorY then
+		return Vector3.new(position.X, floorY, position.Z), true
+	end
+	return position, false
+end
+
 local function enforceNpcUndergroundCeiling(character, characterRoot, clearance)
 	if not character or not characterRoot then
 		return false
@@ -13122,8 +13139,9 @@ local function applyUpdatedAutofarmMovement(characterRoot, desiredPosition, move
 	-- from where we placed the character last frame.
 	local lastPlaced = npcSafety.LastUpdatedMovePosition
 	if lastPlaced and (characterRoot.Position - lastPlaced).Magnitude > 50 and npcSafety.FirstHit then
-		npcSafety.FirstHit.Event(string.format("SNAP-BACK %.0f studs during %s", (characterRoot.Position - lastPlaced).Magnitude,
-			tostring(npcApproachPhase)))
+		npcSafety.FirstHit.Event(string.format("SNAP-BACK %.0f studs during %s (y %.0f -> %.0f, void floor %.0f)",
+			(characterRoot.Position - lastPlaced).Magnitude, tostring(npcApproachPhase), lastPlaced.Y,
+			characterRoot.Position.Y, npcSafety.GetVoidFloorY()))
 	end
 	local position = desiredPosition
 	if movementDistance > 15 and type(speed) == "number" and speed > 0 then
@@ -13304,6 +13322,7 @@ function npcSafety.NavigateToSpawn(character, humanoid, characterRoot, destinati
 			and Vector3.new(destination.X, safeY, destination.Z)
 			or Vector3.new(characterPosition.X, safeY, characterPosition.Z)
 	end
+	desiredPosition = npcSafety.ClampAboveVoid(desiredPosition)
 	local movementDelta = desiredPosition - characterPosition
 	local movementDistance = movementDelta.Magnitude
 	local speed = getNpcGlideSpeed(math.max(horizontalDistance, movementDistance))
@@ -13649,7 +13668,7 @@ function npcSafety.FirstHit.Delta(target)
 	local targetRoot = target and getNpcRoot(target)
 	if not root or not targetRoot then return "pos=?" end
 	local d = targetRoot.Position - root.Position
-	return string.format("dy=%.1f horiz=%.1f dist=%.1f", d.Y, math.sqrt(d.X * d.X + d.Z * d.Z), d.Magnitude)
+	return string.format("dy=%.1f horiz=%.1f dist=%.1f y=%.0f", d.Y, math.sqrt(d.X * d.X + d.Z * d.Z), d.Magnitude, root.Position.Y)
 end
 
 function npcSafety.FirstHit.Begin(target, humanoid)
@@ -13742,6 +13761,35 @@ function npcSafety.FightLog.Event(text)
 	table.insert(current.Lines, string.format("+%.2fs %s", os.clock() - current.StartedAt, text))
 end
 
+-- Snapshot of combat-relevant state on the NPC and on us, to tell an NPC
+-- invulnerability/block window apart from a request limit during dry spells.
+function npcSafety.FightLog.StateText(model)
+	if not model then return "?" end
+	local parts = {}
+	local function relevant(name)
+		name = string.lower(name)
+		for _, key in ipairs({"state", "block", "stun", "knock", "iframe", "invul", "immune", "ragdoll", "guard",
+			"armor", "combo", "hit", "grab", "grip", "parry", "dodge", "counter", "rage", "shield"}) do
+			if name:find(key, 1, true) then return true end
+		end
+		return false
+	end
+	pcall(function()
+		for name, value in pairs(model:GetAttributes()) do
+			if relevant(name) and #parts < 14 then parts[#parts + 1] = "@" .. name .. "=" .. tostring(value):sub(1, 20) end
+		end
+		for index, child in ipairs(model:GetChildren()) do
+			if index > 200 or #parts >= 24 then break end
+			if relevant(child.Name) then
+				parts[#parts + 1] = child.Name .. (child:IsA("ValueBase") and ("=" .. tostring(child.Value):sub(1, 20)) or "")
+			end
+		end
+		local humanoid = model:FindFirstChildOfClass("Humanoid")
+		if humanoid then parts[#parts + 1] = "hum=" .. humanoid:GetState().Name end
+	end)
+	return #parts > 0 and table.concat(parts, " ") or "(none)"
+end
+
 function npcSafety.FightLog.Damage(target, loss)
 	local current = npcSafety.FightLog.Current
 	if not current or current.Target ~= target then return end
@@ -13749,8 +13797,9 @@ function npcSafety.FightLog.Damage(target, loss)
 	if current.DrySince then
 		local length = now - current.DrySince
 		current.DryTotal += length
-		npcSafety.FightLog.Event(string.format("DRY END after %.2fs (%d requests, level %s)", length,
-			npcSafety.DirectLight.RequestsSent - current.DryRequests, tostring(npcSafety.DirectLight.Level)))
+		npcSafety.FightLog.Event(string.format("DRY END after %.2fs (%d requests, level %s) | npc: %s", length,
+			npcSafety.DirectLight.RequestsSent - current.DryRequests, tostring(npcSafety.DirectLight.Level),
+			npcSafety.FightLog.StateText(target)))
 		current.DrySince = nil
 	end
 	current.Damage += loss
@@ -13780,6 +13829,15 @@ function npcSafety.FightLog.Tick(ready, waitReason)
 		npcSafety.FightLog.Event(string.format("DRY START no damage 1.5s | level %s delay=%.2f pairs=%s interval=%.3f tuning=%s %s",
 			tostring(d.Level), tonumber(d.SwingDelay) or -1, tostring(d.Pairs), tonumber(d.Interval) or -1,
 			tostring(d.Tuning and d.Tuning.Phase), npcSafety.FirstHit.Delta(current.Target)))
+		npcSafety.FightLog.Event("  npc: " .. npcSafety.FightLog.StateText(current.Target)
+			.. " | me: " .. npcSafety.FightLog.StateText(localPlayer.Character)
+			.. string.format(" | requests in fight so far %d, %.1f/s", d.RequestsSent - current.RequestsAtStart,
+				(d.RequestsSent - current.RequestsAtStart) / math.max(now - current.StartedAt, 0.1)))
+	end
+	-- Mid-damage reference snapshot, once per fight, to compare against dry spells.
+	if not current.SnapshotTaken and current.Damage > 0 and now - current.LastDamageAt < 0.5 then
+		current.SnapshotTaken = true
+		npcSafety.FightLog.Event("while damaging | npc: " .. npcSafety.FightLog.StateText(current.Target))
 	end
 end
 
@@ -21245,6 +21303,7 @@ connect(RunService.Heartbeat, function(deltaTime)
 		end
 	end
 
+	desiredPosition = npcSafety.ClampAboveVoid(desiredPosition)
 	local movementDelta = desiredPosition - characterPosition
 	local movementDistance = movementDelta.Magnitude
 	npcSafety.MovementSampleElapsed += deltaTime

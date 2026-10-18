@@ -8476,7 +8476,7 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v22-second-hit-immediate',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v22-second-hit-immediate',DisplayVersion='v22',RecoveryOpportunitySpan=0.75,
         FirstHitAnimation='99346182354558',SecondHitAnimation='137006829454244',FirstHitDefense=false,ComboStunDefense=true,
         ComboStunStates={Idle=true,InCombat=true,Stunned=true},
         DashAnimation='88929057646501',DashPairWindow=0.15,
@@ -9408,7 +9408,7 @@ do
         BackgroundColor3=colors.SurfaceRaised,BorderSizePixel=0},configStore.CombatPage)
     create('UICorner',{CornerRadius=UDim.new(0,9)},card)
     create('TextLabel',{Position=UDim2.fromOffset(14,8),Size=UDim2.new(1,-28,0,22),BackgroundTransparency=1,
-        Text='COMBAT DEFENSE // F // PARRY + BEAM TESTS',Font=Enum.Font.GothamBold,TextSize=11,TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Left},card)
+        Text='COMBAT DEFENSE // '..p.DisplayVersion..' // F // PARRY + BEAM TESTS',Font=Enum.Font.GothamBold,TextSize=11,TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Left},card)
     local function button(name,text,x,y,width,callback)
         local result=create('TextButton',{Name=name,Position=UDim2.new(x,14,0,y),Size=UDim2.new(width,-28,0,30),
             BackgroundColor3=colors.Surface,BorderSizePixel=0,Text=text,Font=Enum.Font.GothamSemibold,TextSize=10,TextColor3=colors.Text},card)

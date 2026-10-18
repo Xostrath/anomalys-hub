@@ -8476,8 +8476,8 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v21-stun-probe',RecoveryOpportunitySpan=0.75,
-        FirstHitAnimation='99346182354558',FirstHitDefense=false,ComboStunDefense=true,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v22-second-hit-immediate',RecoveryOpportunitySpan=0.75,
+        FirstHitAnimation='99346182354558',SecondHitAnimation='137006829454244',FirstHitDefense=false,ComboStunDefense=true,
         ComboStunStates={Idle=true,InCombat=true,Stunned=true},
         DashAnimation='88929057646501',DashPairWindow=0.15,
         -- v17 defended all five <=30-stud trials. A 56-stud cue predicted before
@@ -9073,12 +9073,20 @@ do
         end
         local speed=track.Speed
         local position=track.TimePosition
+        -- In the isolated live strings, the flowing second punch landed about
+        -- 70ms after its cue while the normal .20 phase pressed ~80ms too late.
+        -- Preserve the calibrated phase outside hitstun; only combo recovery
+        -- primes this known second-hit cue immediately.
+        local comboImmediate=p.ComboStunDefense and id==p.SecondHitAnimation
+            and p.Character:GetAttribute('State_Stunned')==true
+        local phase=comboImmediate and 0 or profile.phase
         if type(speed)~='number'or speed<=0 or type(position)~='number'or position<0 then p.Skip('invalid_animation_clock',{animation=id});return end
-        if position>profile.phase+0.1 then p.Skip('late_animation_cue',{animation=id,position=position});return end
-        p.Pending={id=id,track=track,profile=profile,phase=profile.phase,taps=0,burst=profile.burst==true,
+        if position>phase+0.1 then p.Skip('late_animation_cue',{animation=id,position=position});return end
+        p.Pending={id=id,track=track,profile=profile,phase=phase,taps=0,burst=profile.burst==true,
             started=now,speed=speed,position=position,clockAt=now,
-            at=now+math.max(0,(profile.phase-position)/speed)}
-        p.Log('attack',{animation=id,speed=speed,position=position,delay=p.Pending.at-now,profile=profile.label})
+            at=now+math.max(0,(phase-position)/speed)}
+        p.Log('attack',{animation=id,speed=speed,position=position,delay=p.Pending.at-now,
+            profile=profile.label,comboImmediate=comboImmediate})
         p.Update() -- The provisional first-punch profile has no added delay.
         defenseQueue.Drain()
     end
@@ -9197,7 +9205,11 @@ do
                     and inStun and not knocked and onlyComboStun and now<=pending.at+0.1
                 if comboStunProbe then
                     pending.recovery=true;pending.stunProbe=true;pending.gateReason=nil
-                    p.Log('combo_stun_probe',{animation=pending.id,tap=pending.taps+1,signals=signals})
+                    local probeTap=pending.taps+1
+                    if pending.lastStunProbeTap~=probeTap then
+                        pending.lastStunProbeTap=probeTap
+                        p.Log('combo_stun_probe',{animation=pending.id,tap=probeTap,signals=signals})
+                    end
                 end
                 local length=pending.track.Length
                 if not comboStunProbe and not pending.dash and not pending.recoveryUntil and pending.taps==0 and gate=='state_disallows_block'

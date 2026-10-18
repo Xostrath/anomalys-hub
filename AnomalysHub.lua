@@ -8476,12 +8476,12 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v15-dash-dual-window',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v16-dash-spatial-followup',RecoveryOpportunitySpan=0.75,
         DashAnimation='88929057646501',DashPairWindow=0.15,
-        -- v14's single late input was delivered seven times but all seven dashes
-        -- damaged. Cover one earlier server-facing estimate plus one bounded retry.
+        -- v15 succeeded from 43/57 studs: its second taps landed at 14-15 studs.
+        -- At 20-30 stud starts the fixed delay landed at 7-8.5; gate retry spatially.
         DashDefense=true,DashMaxAge=0.80,DashNearRange=8,DashNearHold=0.04,DashContactRange=6,DashLead=0.18,
-        DashTapHold=0.04,DashTapGap=0.06,DashTapLimit=2,
+        DashTapHold=0.04,DashTapGap=0.02,DashTapLimit=2,DashFollowupRange=16,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
@@ -8516,6 +8516,7 @@ do
                 recoveryOpportunitySpan=p.RecoveryOpportunitySpan,
                 dashMaxAge=p.DashMaxAge,dashNearRange=p.DashNearRange,dashContactRange=p.DashContactRange,
                 dashLead=p.DashLead,dashTapHold=p.DashTapHold,dashTapGap=p.DashTapGap,dashTapLimit=p.DashTapLimit,
+                dashFollowupRange=p.DashFollowupRange,
                 releaseCheckDelay=p.ReleaseCheckDelay,releaseRetryLimit=p.ReleaseRetryLimit,releaseWatchSpan=p.ReleaseWatchSpan,
                 recoveryHold=p.RecoveryHold,recoveryGap=p.RecoveryGap,recoveryLimit=p.RecoveryLimit,
                 burstLimit=p.BurstLimit,burstSpan=p.BurstSpan,burstPhaseStep=p.BurstPhaseStep,droppedRows=p.DroppedRows or 0,
@@ -8681,7 +8682,7 @@ do
             phase=0,taps=0,burst=false,speed=cue.track.Speed,position=cue.track.TimePosition,clockAt=now,at=now+0.05}
         p.Log('attack',{animation=p.DashAnimation,kind='forward_q_dash',maxAge=p.DashMaxAge,
             nearRange=p.DashNearRange,nearHold=p.DashNearHold,contactRange=p.DashContactRange,lead=p.DashLead,
-            tapHold=p.DashTapHold,tapGap=p.DashTapGap,tapLimit=p.DashTapLimit})
+            tapHold=p.DashTapHold,tapGap=p.DashTapGap,tapLimit=p.DashTapLimit,followupRange=p.DashFollowupRange})
     end
     function p.DashThreat(pending,now)
         if not p.Target then return false,'missing_target' end
@@ -8990,7 +8991,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v15 dual-window Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v16 spatial-follow-up Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -9128,8 +9129,12 @@ do
                 p.Pending=nil;defenseQueue.Cancel(p);p.Skip(reason or 'dash_no_longer_approaching',{animation=pending.id});return
             end
             if pending.dashFollowup then
-                pending.at=math.max(pending.at,pending.notBefore or -math.huge)
-                pending.dueAt=pending.at
+                local own,other=d.Root(p.Character),d.Root(p.Target)
+                local followDistance=own and other and(own.Position-other.Position).Magnitude or math.huge
+                if now>=(pending.notBefore or 0)and followDistance<=p.DashFollowupRange then
+                    pending.at=now;pending.dueAt=now
+                    pending.prediction={method='followup_range',distance=followDistance,range=p.DashFollowupRange}
+                else pending.at=math.max(now+0.02,pending.notBefore or -math.huge);pending.dueAt=nil end
             elseif ready then
                 pending.dashDue=pending.dashDue or now;pending.at=pending.dashDue;pending.prediction=prediction
             else pending.at=now+0.05;pending.dueAt=nil end

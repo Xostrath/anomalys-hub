@@ -8476,12 +8476,12 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v18-dash-reach-arm',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v19-dash-contact-cover',RecoveryOpportunitySpan=0.75,
         DashAnimation='88929057646501',DashPairWindow=0.15,
         -- v17 defended all five <=30-stud trials. A 56-stud cue predicted before
         -- the 40-stud safety reach and was discarded; retain it until reach entry.
         DashDefense=true,DashMaxAge=0.80,DashNearRange=8,DashNearHold=0.04,DashContactRange=6,DashLead=0.18,
-        DashTapHold=0.04,DashTapGap=0.02,DashTapLimit=2,DashFollowupRange=16,DashCloseStartRange=30,
+        DashTapHold=0.04,DashTapGap=0.02,DashTapLimit=3,DashFollowupRange=16,DashCloseStartRange=30,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={
@@ -9138,9 +9138,13 @@ do
             if pending.dashFollowup then
                 local own,other=d.Root(p.Character),d.Root(p.Target)
                 local followDistance=own and other and(own.Position-other.Position).Magnitude or math.huge
-                if now>=(pending.notBefore or 0)and followDistance<=p.DashFollowupRange then
+                -- The first fallback covers the observed 15-16 stud corridor. If
+                -- the server accepts neither of those taps, keep one final pulse
+                -- for actual contact instead of repeating immediately at 16.
+                local followRange=pending.taps>=2 and p.DashNearRange or p.DashFollowupRange
+                if now>=(pending.notBefore or 0)and followDistance<=followRange then
                     pending.at=now;pending.dueAt=now
-                    pending.prediction={method='followup_range',distance=followDistance,range=p.DashFollowupRange}
+                    pending.prediction={method=pending.taps>=2 and'contact_fallback'or'followup_range',distance=followDistance,range=followRange}
                 else pending.at=math.max(now+0.02,pending.notBefore or -math.huge);pending.dueAt=nil end
             elseif ready then
                 pending.dashDue=pending.dashDue or now;pending.at=pending.dashDue;pending.prediction=prediction

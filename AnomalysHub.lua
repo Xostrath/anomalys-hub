@@ -8476,11 +8476,11 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v13-dash-animation-pause',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v14-dash-contact-timing',RecoveryOpportunitySpan=0.75,
         DashAnimation='88929057646501',DashPairWindow=0.15,
-        -- v11's three 10-17 stud starts waited 150-200ms before F and took damage.
-        -- Try earlier close-cue coverage; keep successful far-approach settings.
-        DashDefense=true,DashMaxAge=0.65,DashNearRange=18,DashNearHold=0.35,DashContactRange=6,DashLead=0.18,
+        -- v13 spent the parry window at dash start: both immediate 11-14 stud
+        -- presses took full damage. Wait for measured approach or actual contact.
+        DashDefense=true,DashMaxAge=0.65,DashNearRange=8,DashNearHold=0.16,DashContactRange=6,DashLead=0.08,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
         BurstHold=0.04,BurstGap=0.03,BurstPhaseStep=0.10,BurstLimit=3,BurstSpan=0.30,Profiles={

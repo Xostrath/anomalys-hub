@@ -8476,8 +8476,9 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v20-followup-isolation',RecoveryOpportunitySpan=0.75,
-        FirstHitAnimation='99346182354558',FirstHitDefense=false,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v21-stun-probe',RecoveryOpportunitySpan=0.75,
+        FirstHitAnimation='99346182354558',FirstHitDefense=false,ComboStunDefense=true,
+        ComboStunStates={Idle=true,InCombat=true,Stunned=true},
         DashAnimation='88929057646501',DashPairWindow=0.15,
         -- v17 defended all five <=30-stud trials. A 56-stud cue predicted before
         -- the 40-stud safety reach and was discarded; retain it until reach entry.
@@ -9188,8 +9189,18 @@ do
                 if pending.recoveryUntil and knocked then
                     p.Pending=nil;defenseQueue.Cancel(p);p.Skip('recovery_knocked',{animation=pending.id});return
                 end
+                local onlyComboStun=signals.stunnedReported==true and #states>0
+                for _,state in ipairs(states)do
+                    if not p.ComboStunStates[state]then onlyComboStun=false;break end
+                end
+                local comboStunProbe=p.ComboStunDefense and not pending.dash and gate=='state_disallows_block'
+                    and inStun and not knocked and onlyComboStun and now<=pending.at+0.1
+                if comboStunProbe then
+                    pending.recovery=true;pending.stunProbe=true;pending.gateReason=nil
+                    p.Log('combo_stun_probe',{animation=pending.id,tap=pending.taps+1,signals=signals})
+                end
                 local length=pending.track.Length
-                if not pending.dash and not pending.recoveryUntil and pending.taps==0 and gate=='state_disallows_block'
+                if not comboStunProbe and not pending.dash and not pending.recoveryUntil and pending.taps==0 and gate=='state_disallows_block'
                     and inStun and not knocked and now<=pending.at+0.1
                     and type(length)=='number'and length==length and length<math.huge and length>pending.position then
                     local deadline=math.min(pending.started+p.RecoveryOpportunitySpan,now+(length-pending.position)/pending.speed)
@@ -9199,14 +9210,16 @@ do
                             maxAge=p.RecoveryOpportunitySpan,clipLength=length})
                     end
                 end
-                if pending.gateReason~=gate then
-                    p.Log('block_gate_wait',{animation=pending.id,gate=gate,signals=signals});pending.gateReason=gate
+                if not comboStunProbe then
+                    if pending.gateReason~=gate then
+                        p.Log('block_gate_wait',{animation=pending.id,gate=gate,signals=signals});pending.gateReason=gate
+                    end
+                    defenseQueue.Cancel(p)
+                    if not pending.recoveryUntil and now>pending.at+0.1 then
+                        p.Pending=nil;p.Skip('block_gate_window_expired',{animation=pending.id,gate=gate})
+                    end
+                    return
                 end
-                defenseQueue.Cancel(p)
-                if not pending.recoveryUntil and now>pending.at+0.1 then
-                    p.Pending=nil;p.Skip('block_gate_window_expired',{animation=pending.id,gate=gate})
-                end
-                return
             elseif pending.gateReason then
                 p.Log('block_gate_ready',{animation=pending.id,previousGate=pending.gateReason,signals=signals})
                 pending.gateReason=nil

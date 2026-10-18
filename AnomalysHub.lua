@@ -8476,8 +8476,8 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v22-second-hit-immediate',DisplayVersion='v22',RecoveryOpportunitySpan=0.75,
-        FirstHitAnimation='99346182354558',SecondHitAnimation='137006829454244',FirstHitDefense=false,ComboStunDefense=true,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v23-first-hit-restored',DisplayVersion='v23',RecoveryOpportunitySpan=0.75,
+        FirstHitAnimation='99346182354558',SecondHitAnimation='137006829454244',FirstHitDefense=true,ComboStunDefense=false,
         ComboStunStates={Idle=true,InCombat=true,Stunned=true},
         DashAnimation='88929057646501',DashPairWindow=0.15,
         -- v17 defended all five <=30-stud trials. A 56-stud cue predicted before
@@ -9000,7 +9000,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // follow-up isolation (first hit OFF) // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // '..p.DisplayVersion..' // first-hit defense restored // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)

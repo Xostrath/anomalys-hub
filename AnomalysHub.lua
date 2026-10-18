@@ -5061,12 +5061,16 @@ function configStore.ESP.FetchLocalSnapshot()
 	if okCharacter and type(characterData)=="table" then
 		snapshot.Name=characterData.Name
 		snapshot.Race=type(characterData.Race)=="table" and characterData.Race.Race or characterData.Race
+		snapshot.SubType=type(characterData.Race)=="table" and characterData.Race.SubType or characterData.SubType
 	end
 	-- Use the same direct race query as the form tools; CharacterData may not
 	-- expose Race as the string/nested shape the ESP previously assumed.
 	local okRace,race=configStore.ReadStatBounded(4,nil,"Race")
 	if okRace and type(race)=="string" and race:match("%S") then snapshot.Race=race end
+	local okSubType,subType=configStore.ReadStatBounded(4,nil,"SubType")
+	if okSubType and type(subType)=="string" and subType:match("%S") then snapshot.SubType=subType end
 	if type(snapshot.Race)~="string" or not snapshot.Race:match("%S") then snapshot.Race=nil end
+	if type(snapshot.SubType)~="string" or not snapshot.SubType:match("%S") then snapshot.SubType=nil end
 	local okStats,statData=configStore.ReadStatBounded(4,nil,"StatData","TableStat")
 	if okStats and type(statData)=="table" and type(statData.CharacterStats)=="table" then
 		snapshot.Ki=statData.CharacterStats.Ki
@@ -5084,6 +5088,23 @@ function configStore.ESP.GetRace(player)
 	end
 	return tostring(configStore.ESP.ReadNamedValue(player:FindFirstChild("PlayerStats"), {"Race"})
 		or configStore.ESP.ReadNamedValue(player.Character, {"Race"}) or player:GetAttribute("Race") or "Unknown")
+end
+
+function configStore.ESP.GetSubType(player)
+	if player==localPlayer then
+		local snapshot=configStore.ESP.GetLocalSnapshot()
+		if snapshot.SubType then return tostring(snapshot.SubType) end
+	end
+	local value=configStore.ESP.ReadNamedValue(player:FindFirstChild("PlayerStats"),{"SubType","Subtype","SubRace"})
+		or configStore.ESP.ReadNamedValue(player.Character,{"SubType","Subtype","SubRace"})
+		or player:GetAttribute("SubType")or player:GetAttribute("Subtype")or player:GetAttribute("SubRace")
+	return value and tostring(value)or nil
+end
+
+function configStore.ESP.GetRaceIdentity(player)
+	local race=configStore.ESP.GetRace(player)
+	local subType=configStore.ESP.GetSubType(player)
+	return subType and(race.." / "..subType)or race
 end
 
 function configStore.ESP.GetInGameName(player)
@@ -5283,7 +5304,7 @@ function configStore.ESP.Update(deltaTime)
 	configStore.ESP.UpdateElapsed=0
 	local localRoot=localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
 	-- Reuse the cached local race lookup once per refresh, not once per target.
-	local localRace=configStore.ESP.GetRace(localPlayer)
+	local localRace=configStore.ESP.GetRaceIdentity(localPlayer)
 	for _,player in ipairs(Players:GetPlayers()) do
 		if player~=localPlayer or configStore.ESP.Settings.Self then
 			local entry=configStore.ESP.CreateEntry(player)
@@ -5326,7 +5347,7 @@ function configStore.ESP.Update(deltaTime)
 				if not entry.StatsRefreshedAt or now-entry.StatsRefreshedAt>=1 then
 					entry.StatsRefreshedAt=now
 					entry.InGameName.Text=configStore.ESP.GetInGameName(player)
-					entry.Race.Text="RACE // "..configStore.ESP.GetRace(player)
+					entry.Race.Text="RACE // "..configStore.ESP.GetRaceIdentity(player)
 					local powerLevel=configStore.ESP.GetPowerLevel(player)
 					entry.PowerLevel.Text=powerLevel and "POWER // "..configStore.ESP.FormatInteger(powerLevel) or "POWER // --"
 					entry.CachedKi,entry.CachedMaxKi=configStore.ESP.GetKi(player)

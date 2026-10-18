@@ -8476,10 +8476,10 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v17-dash-close-prime',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v18-dash-reach-arm',RecoveryOpportunitySpan=0.75,
         DashAnimation='88929057646501',DashPairWindow=0.15,
-        -- v16 succeeded when the second tap landed at 12.5-15.3 studs. Close starts
-        -- crossed that range while the late first tap was still cycling; prime early.
+        -- v17 defended all five <=30-stud trials. A 56-stud cue predicted before
+        -- the 40-stud safety reach and was discarded; retain it until reach entry.
         DashDefense=true,DashMaxAge=0.80,DashNearRange=8,DashNearHold=0.04,DashContactRange=6,DashLead=0.18,
         DashTapHold=0.04,DashTapGap=0.02,DashTapLimit=2,DashFollowupRange=16,DashCloseStartRange=30,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
@@ -8706,6 +8706,7 @@ do
         if pending.closeStart and pending.taps==0 then
             return true,nil,{distance=distance,method='close_start_prime',arrival=0,range=p.DashCloseStartRange}
         end
+        if pending.taps==0 and distance>pending.profile.reach then return false,nil,nil end
         local details={distance=distance,method='near',arrival=0}
         if distance<=p.DashNearRange then return true,nil,details end
         local best
@@ -8997,7 +8998,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v17 close-prime Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // v18 reach-armed Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)

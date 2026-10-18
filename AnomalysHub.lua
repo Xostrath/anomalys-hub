@@ -8476,7 +8476,8 @@ do
     -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
     -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
     -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v19-dash-contact-cover',RecoveryOpportunitySpan=0.75,
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v20-followup-isolation',RecoveryOpportunitySpan=0.75,
+        FirstHitAnimation='99346182354558',FirstHitDefense=false,
         DashAnimation='88929057646501',DashPairWindow=0.15,
         -- v17 defended all five <=30-stud trials. A 56-stud cue predicted before
         -- the 40-stud safety reach and was discarded; retain it until reach entry.
@@ -8998,7 +8999,7 @@ do
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
         p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // v18 reach-armed Q-dash defense // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        d.Status('PARRY TEST // follow-up isolation (first hit OFF) // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -9060,6 +9061,10 @@ do
         p.DashCandidate=nil;p.DashReady=nil -- A newer melee cue supersedes an unarmed dash.
         if p.Pending then p.Skip('new_attack_replaced_pending',{animation=p.Pending.id});p.Pending=nil end
         defenseQueue.Cancel(p)
+        if id==p.FirstHitAnimation and not p.FirstHitDefense then
+            p.Skip('first_hit_temporarily_disabled',{animation=id,profile=profile.label})
+            return
+        end
         local allowed,reason,fatal=p.Check()
         if not allowed and reason~='outside_melee_range'
             and reason~='attacker_not_facing_you'and reason~='not_facing_attacker'then

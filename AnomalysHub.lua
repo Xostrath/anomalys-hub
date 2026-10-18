@@ -2954,7 +2954,7 @@ local npcSafety = {
 	DirectLight = {
 		Authorized = configStore.FeatureAccess.FastAttack,
 		Enabled = false,
-		Interval = 0.075,
+		Interval = 0.300,
 		-- Keep one delayed swing in flight. Timing uses bounded comparisons of
 		-- observed HP loss, then holds; these observations are not server acks.
 		SwingDelay = 0.13,
@@ -12170,7 +12170,8 @@ local function findNearestNpc(npcType, excludedTarget)
 				table.insert(allNpcRoots, {Model = model, Root = root})
 			end
 			if model and model ~= excludedTarget and model:IsA("Model")
-				and not npcSafety.IsExcludedFarmTarget(model) and isLivingNpcOfType(model, npcType) then
+				and not npcSafety.IsExcludedFarmTarget(model) and isLivingNpcOfType(model, npcType)
+				and not npcSafety.IsTooDeepToFarm(model) then
 				if npcType ~= npcSafety.StrongestOptionName then npcSafety.RememberSpawn(npcType, root.Position) end
 				if not npcSafety.IsNpcOutsidePlayerRange(model) then
 					npcSafety.ContestedNpcCount += 1
@@ -12304,6 +12305,7 @@ local function attachToNpc(target)
 	end
 	if not npcSafety.IsNpcOutsidePlayerRange(target) then return false end
 	if npcSafety.IsExcludedFarmTarget(target) then return false end
+	if npcSafety.LastAttachedTarget ~= target and npcSafety.IsTooDeepToFarm(target) then return false end
 
 	local isNewTarget = npcSafety.LastAttachedTarget ~= target
 	if isNewTarget then
@@ -12604,10 +12606,24 @@ end
 -- Never send the character below the void: parts under FallenPartsDestroyHeight
 -- are destroyed and the game respawns you. Timeline 2026-10-17: travelling 60
 -- studs under low terrain (Iceru) respawned the player every ~12 s for 2+ min.
+-- The game also respawns players well above the Roblox void: timeline
+-- 2026-10-17 showed a respawn while travelling at y=-315 (void is -2000),
+-- while y=-60 and y=-27 were fine. Treat -300 as the limit and keep 25 studs
+-- of margin; NPCs that can only be attacked from below it are ignored.
+npcSafety.DepthLimitY = -300
+npcSafety.DepthMargin = 25
+
 function npcSafety.GetVoidFloorY()
 	local ok, height = pcall(function() return workspace.FallenPartsDestroyHeight end)
 	height = ok and tonumber(height) or -500
-	return height + 40
+	return math.max(height + 40, npcSafety.DepthLimitY + npcSafety.DepthMargin)
+end
+
+-- Below mode attacks ~10 studs under the NPC; if that is under the floor the
+-- NPC can't be farmed without being respawned, so skip it (user request).
+function npcSafety.IsTooDeepToFarm(model)
+	local root = model and getNpcRoot(model)
+	return root ~= nil and root.Position.Y - 12 < npcSafety.GetVoidFloorY()
 end
 
 function npcSafety.ClampAboveVoid(position)
@@ -13139,9 +13155,32 @@ local function applyUpdatedAutofarmMovement(characterRoot, desiredPosition, move
 	-- from where we placed the character last frame.
 	local lastPlaced = npcSafety.LastUpdatedMovePosition
 	if lastPlaced and (characterRoot.Position - lastPlaced).Magnitude > 50 and npcSafety.FirstHit then
+		local jump = (characterRoot.Position - lastPlaced).Magnitude
 		npcSafety.FirstHit.Event(string.format("SNAP-BACK %.0f studs during %s (y %.0f -> %.0f, void floor %.0f)",
-			(characterRoot.Position - lastPlaced).Magnitude, tostring(npcApproachPhase), lastPlaced.Y,
-			characterRoot.Position.Y, npcSafety.GetVoidFloorY()))
+			jump, tostring(npcApproachPhase), lastPlaced.Y, characterRoot.Position.Y, npcSafety.GetVoidFloorY()))
+		if jump > 500 then
+			-- Likely a game respawn ("sent too far under" in certain directions).
+			-- Record what was around the spot we were sent back from.
+			pcall(function()
+				local character = characterRoot.Parent
+				local groundY = getGroundYAt(lastPlaced, character)
+				npcSafety.FirstHit.Event(string.format("  RESPAWN PROBE at (%.0f, %.0f, %.0f): ground y=%s, depth under ground %s",
+					lastPlaced.X, lastPlaced.Y, lastPlaced.Z, groundY and string.format("%.0f", groundY) or "none",
+					groundY and string.format("%.0f", groundY - lastPlaced.Y) or "?"))
+				local params = OverlapParams.new()
+				params.FilterType = Enum.RaycastFilterType.Exclude
+				params.FilterDescendantsInstances = {character}
+				local listed = 0
+				for _, part in ipairs(workspace:GetPartBoundsInRadius(lastPlaced, 25, params)) do
+					if listed >= 8 then break end
+					listed += 1
+					npcSafety.FirstHit.Event(string.format("  near: %s [%s] touch=%s collide=%s transp=%.1f size=%.0fx%.0fx%.0f",
+						part:GetFullName():sub(-80), part.ClassName, tostring(part:FindFirstChildOfClass("TouchTransmitter") ~= nil),
+						tostring(part.CanCollide), part.Transparency, part.Size.X, part.Size.Y, part.Size.Z))
+				end
+				if listed == 0 then npcSafety.FirstHit.Event("  near: (no parts within 25 studs)") end
+			end)
+		end
 	end
 	local position = desiredPosition
 	if movementDistance > 15 and type(speed) == "number" and speed > 0 then
@@ -13834,9 +13873,12 @@ function npcSafety.FightLog.Damage(target, loss)
 	if current.DrySince then
 		local length = now - current.DrySince
 		current.DryTotal += length
-		npcSafety.FightLog.Event(string.format("DRY END after %.2fs (%d requests, level %s) | npc: %s", length,
-			npcSafety.DirectLight.RequestsSent - current.DryRequests, tostring(npcSafety.DirectLight.Level),
+		local ticks = math.max(current.DryTicks or 0, 1)
+		npcSafety.FightLog.Event(string.format("DRY END after %.2fs (%d requests, level %s) | npc blocking %d%% of dry, we were swinging %d%% | npc: %s",
+			length, npcSafety.DirectLight.RequestsSent - current.DryRequests, tostring(npcSafety.DirectLight.Level),
+			math.floor(100 * (current.DryBlockTicks or 0) / ticks + 0.5), math.floor(100 * (current.DrySwingTicks or 0) / ticks + 0.5),
 			npcSafety.FightLog.StateText(target)) .. " | me: " .. npcSafety.FightLog.GameStateText())
+		current.DryTicks, current.DryBlockTicks, current.DrySwingTicks = 0, 0, 0
 		current.DrySince = nil
 	end
 	current.Damage += loss
@@ -13860,11 +13902,25 @@ function npcSafety.FightLog.Tick(ready, waitReason)
 		npcSafety.FightLog.Event("ready again")
 	end
 	local now = os.clock()
+	-- Sample NPC blocking / our swing state, during dry spells vs while damaging.
+	local npcBlocking, swinging = false, false
+	pcall(function()
+		npcBlocking = current.Target:GetAttribute("State_Blocking") == true
+		swinging = localPlayer.Character:GetAttribute("State_LightSwing") == true
+	end)
+	if current.DrySince then
+		current.DryTicks = (current.DryTicks or 0) + 1
+		if npcBlocking then current.DryBlockTicks = (current.DryBlockTicks or 0) + 1 end
+		if swinging then current.DrySwingTicks = (current.DrySwingTicks or 0) + 1 end
+	else
+		current.ActiveTicks = (current.ActiveTicks or 0) + 1
+		if npcBlocking then current.ActiveBlockTicks = (current.ActiveBlockTicks or 0) + 1 end
+	end
 	if not current.DrySince and now - current.LastDamageAt >= 1.5 then
 		current.DrySince, current.DryRequests = current.LastDamageAt, d.RequestsSent
 		current.DryCount += 1
-		npcSafety.FightLog.Event(string.format("DRY START no damage 1.5s | level %s delay=%.2f pairs=%s interval=%.3f tuning=%s %s",
-			tostring(d.Level), tonumber(d.SwingDelay) or -1, tostring(d.Pairs), tonumber(d.Interval) or -1,
+		npcSafety.FightLog.Event(string.format("DRY START no damage 1.5s | dmg so far %.0f | level %s delay=%.2f pairs=%s interval=%.3f tuning=%s %s",
+			current.Damage, tostring(d.Level), tonumber(d.SwingDelay) or -1, tostring(d.Pairs), tonumber(d.Interval) or -1,
 			tostring(d.Tuning and d.Tuning.Phase), npcSafety.FirstHit.Delta(current.Target)))
 		npcSafety.FightLog.Event("  npc: " .. npcSafety.FightLog.StateText(current.Target)
 			.. " | me: " .. npcSafety.FightLog.StateText(localPlayer.Character) .. " " .. npcSafety.FightLog.GameStateText()
@@ -13887,9 +13943,11 @@ function npcSafety.FightLog.Finish(outcome)
 	local now = os.clock()
 	if current.DrySince then current.DryTotal += now - current.DrySince end
 	local seconds = now - current.StartedAt
-	table.insert(current.Lines, string.format("+%.2fs END %s | %.0f dmg in %.1fs (%.0f dmg/s) | %d requests | %d dry spells, %.1fs dry",
+	table.insert(current.Lines, string.format("+%.2fs END %s | %.0f dmg in %.1fs (%.0f dmg/s) | %d requests | %d dry spells, %.1fs dry | npc blocking %d%% of damaging time | interval %.3f",
 		seconds, outcome, current.Damage, seconds, seconds > 0 and current.Damage / seconds or 0,
-		npcSafety.DirectLight.RequestsSent - current.RequestsAtStart, current.DryCount, current.DryTotal))
+		npcSafety.DirectLight.RequestsSent - current.RequestsAtStart, current.DryCount, current.DryTotal,
+		math.floor(100 * (current.ActiveBlockTicks or 0) / math.max(current.ActiveTicks or 0, 1) + 0.5),
+		tonumber(npcSafety.DirectLight.Interval) or -1))
 	table.insert(log.History, "FIGHT " .. tostring(current.Name) .. "\n" .. table.concat(current.Lines, "\n"))
 	while #log.History > 8 do table.remove(log.History, 1) end
 	pcall(function()
@@ -14086,9 +14144,11 @@ end
 
 function npcSafety.ImportAttackPresets(saved)
 	local d = npcSafety.DirectLight
-	-- 0.075 s: best interval in every completed interval test (2026-10-04 x2,
-	-- 2026-10-17 238-257 dmg/s); 0.050 floods and gets throttled to ~0.
-	d.Presets = d.Presets or {Below={Interval=0.075, Level=8, SwingDelay=0, Pairs=2}}
+	-- 0.300 s (fight logs 2026-10-17): whole-fight 218-279 dmg/s with one ~5 s
+	-- dry spell vs 129-144 dmg/s with 2-3 dry spells at 0.075 (~500 vs ~320 dmg/s
+	-- while damaging). Flooding swings restarts the server swing before hits land.
+	-- Earlier 3-4 s speed-test samples were confounded by those dry spells.
+	d.Presets = d.Presets or {Below={Interval=0.300, Level=8, SwingDelay=0, Pairs=2}}
 	if type(saved) ~= "table" then return end
 	for _, mode in ipairs({"Below", "Above", "FrontBehind"}) do
 		local preset = npcSafety.ValidateAttackPreset(saved[mode])

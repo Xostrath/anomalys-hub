@@ -13747,6 +13747,25 @@ end
 -- GohanHub/autofarm_fight_latest.txt (last 8 fights). Never sends anything.
 npcSafety.FightLog = {History = {}}
 
+-- Keep earlier entries across hub reloads (a reload used to wipe history, so
+-- the next write overwrote the file with a single fight/target).
+function npcSafety.SeedLogHistory(history, fileName, limit)
+	pcall(function()
+		local isfile, readfile = configStore.GetFunction("isfile"), configStore.GetFunction("readfile")
+		local path = configStore.Root .. "/" .. fileName
+		if not isfile or not readfile or not isfile(path) then return end
+		local body = readfile(path)
+		local start = type(body) == "string" and body:find("\n\n", 1, true)
+		if not start then return end
+		for entry in (body:sub(start + 2) .. "\n---\n"):gmatch("(.-)\n%-%-%-\n") do
+			if entry:match("%S") then table.insert(history, entry) end
+		end
+		while #history > limit do table.remove(history, 1) end
+	end)
+end
+npcSafety.SeedLogHistory(npcSafety.FightLog.History, "autofarm_fight_latest.txt", 8)
+npcSafety.SeedLogHistory(npcSafety.FirstHit.History, "autofarm_first_hit_latest.txt", 10)
+
 function npcSafety.FightLog.Begin(target)
 	local log = npcSafety.FightLog
 	if log.Current then log.Finish("target changed") end
@@ -13790,6 +13809,24 @@ function npcSafety.FightLog.StateText(model)
 	return #parts > 0 and table.concat(parts, " ") or "(none)"
 end
 
+-- The game's own client gate: active StateManager states and whether "Light"
+-- (an M1) is currently allowed for our character.
+function npcSafety.FightLog.GameStateText()
+	local text = "states=?"
+	pcall(function()
+		local character = localPlayer.Character
+		local stateManager = require(ReplicatedStorage.Modules.Metadata.ControlData.StateManager)
+		local names = {}
+		for name, on in pairs(stateManager.GetAllStates(character) or {}) do
+			if on then names[#names + 1] = tostring(name) end
+		end
+		table.sort(names)
+		text = string.format("states=[%s] canLight=%s active=%s", table.concat(names, ","),
+			tostring(stateManager.CanPerformAction(character, "Light")), tostring(stateManager.GetState(character)))
+	end)
+	return text
+end
+
 function npcSafety.FightLog.Damage(target, loss)
 	local current = npcSafety.FightLog.Current
 	if not current or current.Target ~= target then return end
@@ -13799,7 +13836,7 @@ function npcSafety.FightLog.Damage(target, loss)
 		current.DryTotal += length
 		npcSafety.FightLog.Event(string.format("DRY END after %.2fs (%d requests, level %s) | npc: %s", length,
 			npcSafety.DirectLight.RequestsSent - current.DryRequests, tostring(npcSafety.DirectLight.Level),
-			npcSafety.FightLog.StateText(target)))
+			npcSafety.FightLog.StateText(target)) .. " | me: " .. npcSafety.FightLog.GameStateText())
 		current.DrySince = nil
 	end
 	current.Damage += loss
@@ -13830,14 +13867,15 @@ function npcSafety.FightLog.Tick(ready, waitReason)
 			tostring(d.Level), tonumber(d.SwingDelay) or -1, tostring(d.Pairs), tonumber(d.Interval) or -1,
 			tostring(d.Tuning and d.Tuning.Phase), npcSafety.FirstHit.Delta(current.Target)))
 		npcSafety.FightLog.Event("  npc: " .. npcSafety.FightLog.StateText(current.Target)
-			.. " | me: " .. npcSafety.FightLog.StateText(localPlayer.Character)
+			.. " | me: " .. npcSafety.FightLog.StateText(localPlayer.Character) .. " " .. npcSafety.FightLog.GameStateText()
 			.. string.format(" | requests in fight so far %d, %.1f/s", d.RequestsSent - current.RequestsAtStart,
 				(d.RequestsSent - current.RequestsAtStart) / math.max(now - current.StartedAt, 0.1)))
 	end
 	-- Mid-damage reference snapshot, once per fight, to compare against dry spells.
 	if not current.SnapshotTaken and current.Damage > 0 and now - current.LastDamageAt < 0.5 then
 		current.SnapshotTaken = true
-		npcSafety.FightLog.Event("while damaging | npc: " .. npcSafety.FightLog.StateText(current.Target))
+		npcSafety.FightLog.Event("while damaging | npc: " .. npcSafety.FightLog.StateText(current.Target)
+			.. " | me: " .. npcSafety.FightLog.StateText(localPlayer.Character) .. " " .. npcSafety.FightLog.GameStateText())
 	end
 end
 

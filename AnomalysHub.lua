@@ -8471,18 +8471,18 @@ do
     end
     -- END BEAM DEFLECT TEST
     -- BEGIN AUTO PARRY TEST
-    -- First punch: earlier user-confirmed sequence began with F ~0.003s after the cue;
-    -- attribution was less certain because later taps followed. Second punch: one confirmed
-    -- F at +0.2303s with animation speed 1.34536 => clip phase ~0.31. Neither is universal.
-    -- v7 still took substantial damage after second-hit inputs. Try phase 0.20 (about
-    -- 78ms earlier at speed 1.40759), keeping its hold unchanged; in-game comparison needed.
-    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='combo-recovery-v23-first-hit-restored',DisplayVersion='v23',RecoveryOpportunitySpan=0.75,
+    -- v24 separates the two server outcomes instead of treating every timed F as "parry".
+    -- The established immediate profiles are the observed Sonic Sway timings. The Parry
+    -- profiles use the later cue-relative inputs from the confirmed manual vanish capture:
+    -- first punch ~0.09-0.13s at speed 1.345, second ~0.23s, third ~0.30s.
+    -- Unknown styles remain observation-only; timing is always scaled by the live track speed.
+    local p={Enabled=false,Held=false,Rows={},NextPressAt=0,Build='defense-split-v24',DisplayVersion='v24',Mode='SonicSway',RecoveryOpportunitySpan=0.75,
         FirstHitAnimation='99346182354558',SecondHitAnimation='137006829454244',FirstHitDefense=true,ComboStunDefense=false,
         ComboStunStates={Idle=true,InCombat=true,Stunned=true},
         DashAnimation='88929057646501',DashPairWindow=0.15,
         -- v17 defended all five <=30-stud trials. A 56-stud cue predicted before
         -- the 40-stud safety reach and was discarded; retain it until reach entry.
-        DashDefense=true,DashMaxAge=0.80,DashNearRange=8,DashNearHold=0.04,DashContactRange=6,DashLead=0.18,
+        DashDefense=true,DashMaxAge=0.80,DashNearRange=8,DashNearHold=0.04,DashContactRange=6,DashLead=0.18,SwayDashLead=0.18,
         DashTapHold=0.04,DashTapGap=0.02,DashTapLimit=3,DashFollowupRange=16,DashCloseStartRange=30,
         ReleaseCheckDelay=0.25,ReleaseRetryGap=0.25,ReleaseRetryLimit=2,ReleaseWatchSpan=1,ReleaseClearSpan=0.12,
         RecoveryHold=0.12,RecoveryGap=0.04,RecoveryLimit=2,
@@ -8499,10 +8499,21 @@ do
         -- Repeated after airborne hit four in run 1702.1613261999737.
         -- Separate experimental input window; do not reuse the other finisher's phase.
         ['5931766729']={phase=0.35,hold=0.04,reach=12,facing=0.25,burst=true,label='air finisher / provisional window'},
+    },ParryProfiles={
+        ['99346182354558']={phase=0.14,hold=0.12,reach=12,facing=0.25,label='first punch / manual vanish timing'},
+        ['137006829454244']={phase=0.31,hold=0.16,reach=12,facing=0.25,label='second punch / manual parry timing'},
+        ['97963169752956']={phase=0.40,hold=0.16,reach=12,facing=0.25,label='third punch / manual vanish timing'},
+        -- These retain the same measured offset from the late-Sway profile but are
+        -- explicitly experimental until a vanish is observed for each animation.
+        ['111254461845322']={phase=0.37,hold=0.16,reach=12,facing=0.25,label='fourth punch / experimental parry timing'},
+        ['90063307770851']={phase=0.26,hold=0.12,reach=12,facing=0.25,label='fifth punch / experimental parry timing'},
+        ['5931766729']={phase=0.49,hold=0.12,reach=12,facing=0.25,label='air finisher / experimental parry timing'},
     }}
     d.Parry=p
     function p.Render()
         if p.Button then p.Button.Text='Auto Parry: '..(p.Enabled and 'ON (TEST)' or 'OFF (TEST)')end
+        if p.ParryButton then p.ParryButton.Text='Auto Parry: '..(p.Enabled and p.Mode=='Parry' and 'ON (TEST)' or 'OFF (TEST)')end
+        if p.SwayButton then p.SwayButton.Text='Auto Sonic Sway: '..(p.Enabled and p.Mode=='SonicSway' and 'ON (TEST)' or 'OFF (TEST)')end
     end
     function p.Log(event,data)
         if #p.Rows>=900 then p.DroppedRows=(p.DroppedRows or 0)+1;p.Dirty=true;return end
@@ -8514,7 +8525,7 @@ do
         local ok=pcall(function()
             assert(type(writefile)=='function','File writing unavailable')
             if type(isfolder)=='function'and type(makefolder)=='function'and not isfolder(configStore.Root)then makefolder(configStore.Root)end
-            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=11,build=p.Build,place=game.PlaceId,run=p.RunId,
+            writefile(configStore.Root..'/defense_parry_auto_latest.json',HttpService:JSONEncode({version=12,build=p.Build,mode=p.Mode,place=game.PlaceId,run=p.RunId,
                 recoveryOpportunitySpan=p.RecoveryOpportunitySpan,
                 dashMaxAge=p.DashMaxAge,dashNearRange=p.DashNearRange,dashContactRange=p.DashContactRange,
                 dashLead=p.DashLead,dashTapHold=p.DashTapHold,dashTapGap=p.DashTapGap,dashTapLimit=p.DashTapLimit,
@@ -8959,6 +8970,7 @@ do
             p.Render();return
         end
         if unloaded or p.Enabled or p.Held or p.Preparing then return end
+        p.ActiveProfiles=p.ActiveProfiles or(p.Mode=='Parry'and p.ParryProfiles or p.Profiles)
         if d.Active then d.Status('Stop the manual recording before enabling Auto Parry.');return end
         local char=localPlayer.Character
         local hum=char and char:FindFirstChildOfClass('Humanoid')
@@ -8988,8 +9000,8 @@ do
             State_SonicSway=char:GetAttribute('State_SonicSway')==true}
         p.RunId=tostring(p.Started);p.ObservationError=nil;p.ObservationSaveFailed=false
         p.ObservedTrack=nil;p.ObservedAt=nil;p.LastObservationFrame=nil;p.LastObservationSave=p.Started;p.LastEligibilityKey=nil
-        p.Observations={version=3,build=p.Build,run=p.RunId,place=game.PlaceId,framesPerSecond=20,
-            note='Passive observations during Auto Parry, NOT confirmed attacks, hit times, parries or Sonic Sways. Unknown animations may be idle/locomotion. One locked attacker; local file only.',
+        p.Observations={version=4,build=p.Build,mode=p.Mode,run=p.RunId,place=game.PlaceId,framesPerSecond=20,
+            note='Passive observations during the selected defense mode, NOT confirmed attacks, parries or Sonic Sways. Unknown animations may be idle/locomotion. One locked attacker; local file only.',
             frames={},animations={},droppedFrames=0,droppedAnimations=0,
             eligibilityTransitions={},eligibilitySamples=0,droppedEligibilityTransitions=0,
             inputEvents={},droppedInputEvents=0,releaseTail={}}
@@ -8999,8 +9011,18 @@ do
             local ok,err=pcall(p.OnAnimation,track)
             if not ok then p.Stop('Error: '..d.Text(err))end
         end)
-        p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build});p.Save();p.Render()
-        d.Status('PARRY TEST // '..p.DisplayVersion..' // first-hit defense restored // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+        p.Log('start',{target=d.Text(target.Name),duration=60,maxDistance=12,build=p.Build,mode=p.Mode});p.Save();p.Render()
+        d.Status(string.upper(p.Mode)..' TEST // '..p.DisplayVersion..' // separated timing profile // '..d.Text(target.Name)..' // 60 seconds.'..((p.SaveFailed or p.ObservationSaveFailed)and ' // Log save failed' or ''))
+    end
+    function p.SetMode(mode)
+        if mode~='Parry'and mode~='SonicSway'then return end
+        if p.Enabled and p.Mode==mode then p.SetEnabled(false);return end
+        if p.Enabled or p.Preparing then p.SetEnabled(false)end
+        p.Mode=mode;p.ActiveProfiles=mode=='Parry'and p.ParryProfiles or p.Profiles
+        -- Q-dash v19 is a demonstrated Sonic Sway calibration. Do not silently
+        -- relabel that same timing as an ordinary vanish parry.
+        p.DashDefense=mode=='SonicSway';p.DashLead=p.SwayDashLead
+        p.Render();p.SetEnabled(true)
     end
     function p.Stop(reason)
         p.Log('stop_reason',reason);p.SetEnabled(false)
@@ -9049,7 +9071,8 @@ do
     function p.OnAnimation(track)
         if not p.Enabled then return end
         local id=track.Animation and tostring(track.Animation.AnimationId):match('%d+$')
-        local profile=id and p.Profiles[id]
+        local profiles=p.ActiveProfiles or(p.Mode=='Parry'and p.ParryProfiles or p.Profiles)
+        local profile=id and profiles[id]
         p.SafeObservation(p.ObserveAnimation,track,id,profile~=nil)
         p.SafeObservation(p.ObserveDash,track,id)
         if not profile then
@@ -9419,9 +9442,9 @@ do
         if mode=='BeamDeflect'then
             b.Button=button(mode,title..': OFF (TEST)',0,36+(index-1)*36,0.65,function()b.SetEnabled(not b.Enabled)end)
         elseif mode=='Parry'then
-            p.Button=button(mode,title..': OFF (TEST)',0,36+(index-1)*36,0.65,function()p.SetEnabled(not p.Enabled)end)
+            p.ParryButton=button(mode,title..': OFF (TEST)',0,36+(index-1)*36,0.65,function()p.SetMode('Parry')end)
         else
-            button(mode,title..': NEEDS CALIBRATION',0,36+(index-1)*36,0.65,function()d.Status(title..' is not active yet. Record manual examples first; no automatic F is sent.')end)
+            p.SwayButton=button(mode,title..': OFF (TEST)',0,36+(index-1)*36,0.65,function()p.SetMode('SonicSway')end)
         end
         button('Record'..mode,'Record '..mode,0.65,36+(index-1)*36,0.35,function()d.Start(mode)end)
     end
@@ -9431,7 +9454,7 @@ do
     button('CaptureBlockRules','Capture block + dash rules (read only)',0,184,1,function()c.Start()end)
     button('RecordQDash','Record Q Dash (60s / passive)',0,220,1,function()d.Start('QDash')end)
     d.Label=create('TextLabel',{Position=UDim2.fromOffset(14,256),Size=UDim2.new(1,-28,0,38),BackgroundTransparency=1,
-        Text='Parry / Beam: 60-second tests, OFF by default. Test one at a time. Sonic Sway needs calibration.',Font=Enum.Font.Gotham,TextSize=10,
+        Text='Parry / Sway / Beam: 60-second tests, OFF by default. Parry and Sonic Sway are mutually exclusive.',Font=Enum.Font.Gotham,TextSize=10,
         TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left},card)
 end
 -- END COMBAT DEFENSE CALIBRATION

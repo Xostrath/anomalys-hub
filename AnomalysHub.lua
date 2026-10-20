@@ -3440,7 +3440,7 @@ formTrackerState.Card = create("Frame", {
 	Name = "FormTimer",
 	AnchorPoint = Vector2.new(1, 0.5),
 	Position = UDim2.new(1, -18, 0.5, 0),
-	Size = UDim2.fromOffset(218, 72),
+	Size = UDim2.fromOffset(218, 92),
 	BackgroundColor3 = colors.SurfaceRaised,
 	BackgroundTransparency = 0.06,
 	BorderSizePixel = 0,
@@ -3449,7 +3449,7 @@ formTrackerState.Card = create("Frame", {
 create("UICorner", {CornerRadius = UDim.new(0, 9)}, formTrackerState.Card)
 create("UIStroke", {Color = colors.AccentSoft, Thickness = 1, Transparency = 0.12}, formTrackerState.Card)
 create("Frame", {
-	Name = "Accent", Position = UDim2.fromOffset(0, 9), Size = UDim2.fromOffset(3, 54),
+	Name = "Accent", Position = UDim2.fromOffset(0, 9), Size = UDim2.fromOffset(3, 74),
 	BackgroundColor3 = colors.Accent, BorderSizePixel = 0,
 }, formTrackerState.Card)
 formTrackerState.NameLabel = create("TextLabel", {
@@ -3458,9 +3458,14 @@ formTrackerState.NameLabel = create("TextLabel", {
 	TextColor3 = colors.Accent, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
 }, formTrackerState.Card)
 formTrackerState.TimeLabel = create("TextLabel", {
-	Name = "Elapsed", Position = UDim2.fromOffset(15, 29), Size = UDim2.new(1, -30, 0, 32),
+	Name = "Elapsed", Position = UDim2.fromOffset(15, 27), Size = UDim2.new(1, -30, 0, 32),
 	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = "00:00.0",
 	TextColor3 = colors.Text, TextSize = 22, TextXAlignment = Enum.TextXAlignment.Left,
+}, formTrackerState.Card)
+formTrackerState.PowerLabel = create("TextLabel", {
+	Name = "PowerMultiplier", Position = UDim2.fromOffset(15, 64), Size = UDim2.new(1, -30, 0, 16),
+	BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold, Text = "POWER // MEASURING",
+	TextColor3 = colors.Muted, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
 }, formTrackerState.Card)
 -- END FORM TRACKER UI
 
@@ -19937,10 +19942,15 @@ function formTrackerState.ReadSnapshot()
 	local coreStats = statData and statData:FindFirstChild("CoreStats")
 	local form = coreStats and coreStats:FindFirstChild("Form")
 	local subForm = coreStats and coreStats:FindFirstChild("SubForm")
+	local power = coreStats and coreStats:FindFirstChild("PowerLevel")
+	if not power and playerStats then power = playerStats:FindFirstChild("PowerLevel", true) end
+	local powerLevel = power and power:IsA("ValueBase") and tonumber(power.Value)
+	if not powerLevel and character then powerLevel = tonumber(character:GetAttribute("PowerLevel")) end
 	local snapshot = {
 		Character = character and character.Name or "nil",
 		Form = form and tostring(form.Value) or "nil",
 		SubForm = subForm and tostring(subForm.Value) or "nil",
+		PowerLevel = powerLevel,
 		Candidates = {},
 	}
 	local activeKey, activeSource
@@ -19989,6 +19999,10 @@ function formTrackerState.Save(event, snapshot, elapsed)
 		Source = snapshot and snapshot.ActiveSource or nil,
 		Form = snapshot and snapshot.Form or nil,
 		SubForm = snapshot and snapshot.SubForm or nil,
+		PowerLevel = snapshot and snapshot.PowerLevel or nil,
+		BaselinePower = formTrackerState.BaselinePower,
+		PowerMultiplier = snapshot and snapshot.PowerLevel and formTrackerState.BaselinePower
+			and formTrackerState.BaselinePower > 0 and snapshot.PowerLevel / formTrackerState.BaselinePower or nil,
 		Candidates = snapshot and snapshot.Candidates or nil,
 	}
 	formTrackerState.Rows[#formTrackerState.Rows + 1] = row
@@ -20016,6 +20030,7 @@ function formTrackerState.Update(deltaTime)
 	formTrackerState.CheckElapsed = 0
 	local snapshot = formTrackerState.ReadSnapshot()
 	local signature = snapshot.Character .. "|" .. snapshot.Form .. "|" .. snapshot.SubForm .. "|" .. tostring(snapshot.ActiveKey)
+		.. "|power=" .. tostring(snapshot.PowerLevel)
 	for _, entry in ipairs(snapshot.Candidates) do signature ..= "|" .. entry.Source .. "=" .. entry.Value end
 	if signature ~= formTrackerState.ObservedSignature then
 		formTrackerState.ObservedSignature = signature
@@ -20028,13 +20043,23 @@ function formTrackerState.Update(deltaTime)
 		formTrackerState.ActiveKey = snapshot.ActiveKey
 		formTrackerState.StartedAt = snapshot.ActiveKey and now or nil
 		if snapshot.ActiveKey then
+			formTrackerState.BaselinePower = formTrackerState.LastInactivePower
 			formTrackerState.NameLabel.Text = formTrackerState.Supported[snapshot.ActiveKey] .. " // ACTIVE"
 			formTrackerState.TimeLabel.Text = "00:00.0"
 			formTrackerState.Card.Visible = true
 			formTrackerState.Save("started", snapshot, 0)
 		else
 			formTrackerState.Card.Visible = false
+			formTrackerState.BaselinePower = nil
 		end
+	end
+	if not snapshot.ActiveKey and snapshot.PowerLevel and snapshot.PowerLevel > 0 then
+		formTrackerState.LastInactivePower = snapshot.PowerLevel
+	elseif snapshot.ActiveKey then
+		local baseline = formTrackerState.BaselinePower
+		local multiplier = baseline and baseline > 0 and snapshot.PowerLevel and snapshot.PowerLevel / baseline
+		formTrackerState.PowerLabel.Text = multiplier and string.format("POWER // x%.2f", multiplier) or "POWER // MEASURING"
+		formTrackerState.PowerLabel.TextColor3 = multiplier and colors.Success or colors.Muted
 	end
 end
 -- END FORM TRACKER LOGIC

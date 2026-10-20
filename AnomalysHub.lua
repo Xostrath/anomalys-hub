@@ -2882,6 +2882,10 @@ do
 	if duplicate then
 		duplicate:Destroy()
 	end
+	local staleFormTracker = playerGui:FindFirstChild("AnomalyHubFormTracker")
+	if staleFormTracker then
+		staleFormTracker:Destroy()
+	end
 end
 
 local controller = {}
@@ -2949,6 +2953,17 @@ local autoTransformState = {
 	ToggleButton = nil,
 	Dropdown = nil,
 	OptionButtons = {},
+}
+local formTrackerState = {
+	Supported = {
+		kiburst = "KI BURST",
+		fullpowerhera = "FULL POWER HERA",
+	},
+	CheckElapsed = 0,
+	ActiveKey = nil,
+	StartedAt = nil,
+	ObservedSignature = nil,
+	Rows = {},
 }
 local npcSafety = {
 	DirectLight = {
@@ -3410,6 +3425,44 @@ local screenGui = create("ScreenGui", {
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	DisplayOrder = 50,
 }, playerGui)
+
+-- BEGIN FORM TRACKER UI
+-- Separate from the main window so the timer remains visible when RightShift
+-- hides the hub. It only appears while a supported form is confirmed active.
+formTrackerState.Gui = create("ScreenGui", {
+	Name = "AnomalyHubFormTracker",
+	ResetOnSpawn = false,
+	IgnoreGuiInset = true,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	DisplayOrder = 59,
+}, playerGui)
+formTrackerState.Card = create("Frame", {
+	Name = "FormTimer",
+	AnchorPoint = Vector2.new(1, 0.5),
+	Position = UDim2.new(1, -18, 0.5, 0),
+	Size = UDim2.fromOffset(218, 72),
+	BackgroundColor3 = colors.SurfaceRaised,
+	BackgroundTransparency = 0.06,
+	BorderSizePixel = 0,
+	Visible = false,
+}, formTrackerState.Gui)
+create("UICorner", {CornerRadius = UDim.new(0, 9)}, formTrackerState.Card)
+create("UIStroke", {Color = colors.AccentSoft, Thickness = 1, Transparency = 0.12}, formTrackerState.Card)
+create("Frame", {
+	Name = "Accent", Position = UDim2.fromOffset(0, 9), Size = UDim2.fromOffset(3, 54),
+	BackgroundColor3 = colors.Accent, BorderSizePixel = 0,
+}, formTrackerState.Card)
+formTrackerState.NameLabel = create("TextLabel", {
+	Name = "FormName", Position = UDim2.fromOffset(15, 9), Size = UDim2.new(1, -30, 0, 20),
+	BackgroundTransparency = 1, Font = Enum.Font.GothamBold, Text = "FORM ACTIVE",
+	TextColor3 = colors.Accent, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+}, formTrackerState.Card)
+formTrackerState.TimeLabel = create("TextLabel", {
+	Name = "Elapsed", Position = UDim2.fromOffset(15, 29), Size = UDim2.new(1, -30, 0, 32),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = "00:00.0",
+	TextColor3 = colors.Text, TextSize = 22, TextXAlignment = Enum.TextXAlignment.Left,
+}, formTrackerState.Card)
+-- END FORM TRACKER UI
 
 configStore.WindowShadow = create("Frame", {
 	Name = "WindowShadow",
@@ -19850,6 +19903,142 @@ function autoTransformState.CancelPending()
 	autoTransformState.Pending = false
 end
 
+-- BEGIN FORM TRACKER LOGIC
+function formTrackerState.Normalize(value)
+	return tostring(value or ""):lower():gsub("[^%a%d]", "")
+end
+
+function formTrackerState.Resolve(value)
+	local key = formTrackerState.Normalize(value)
+	if formTrackerState.Supported[key] then return key end
+	for _, prefix in ipairs({"state", "is", "active"}) do
+		if key:sub(1, #prefix) == prefix then
+			local stripped = key:sub(#prefix + 1)
+			if formTrackerState.Supported[stripped] then return stripped end
+		end
+	end
+	return nil
+end
+
+function formTrackerState.FormatElapsed(seconds)
+	seconds = math.max(0, tonumber(seconds) or 0)
+	local hours = math.floor(seconds / 3600)
+	local minutes = math.floor(seconds / 60) % 60
+	local whole = math.floor(seconds) % 60
+	local tenth = math.floor((seconds - math.floor(seconds)) * 10 + 0.0001)
+	if hours > 0 then return string.format("%d:%02d:%02d.%d", hours, minutes, whole, tenth) end
+	return string.format("%02d:%02d.%d", minutes, whole, tenth)
+end
+
+function formTrackerState.ReadSnapshot()
+	local character = localPlayer.Character
+	local playerStats = localPlayer:FindFirstChild("PlayerStats")
+	local statData = playerStats and playerStats:FindFirstChild("StatData")
+	local coreStats = statData and statData:FindFirstChild("CoreStats")
+	local form = coreStats and coreStats:FindFirstChild("Form")
+	local subForm = coreStats and coreStats:FindFirstChild("SubForm")
+	local snapshot = {
+		Character = character and character.Name or "nil",
+		Form = form and tostring(form.Value) or "nil",
+		SubForm = subForm and tostring(subForm.Value) or "nil",
+		Candidates = {},
+	}
+	local activeKey, activeSource
+	local function candidate(source, value, active)
+		local stringValue = tostring(value)
+		snapshot.Candidates[#snapshot.Candidates + 1] = {Source = source, Value = stringValue}
+		if not activeKey and active ~= false then
+			local resolved = formTrackerState.Resolve(stringValue)
+			if resolved then activeKey, activeSource = resolved, source end
+		end
+	end
+	candidate("CoreStats.Form", snapshot.Form)
+	candidate("CoreStats.SubForm", snapshot.SubForm)
+	if character then
+		local attributes = character:GetAttributes()
+		local names = {}
+		for name in pairs(attributes) do
+			local probe = formTrackerState.Normalize(name)
+			if probe:find("form", 1, true) or probe:find("transform", 1, true)
+				or probe:find("burst", 1, true) or probe:find("hera", 1, true) then
+				names[#names + 1] = name
+			end
+		end
+		table.sort(names)
+		for _, name in ipairs(names) do
+			local value = attributes[name]
+			candidate("Character.Attribute." .. name, type(value) == "boolean" and name or value, value ~= false and value ~= nil and value ~= 0)
+		end
+		for _, name in ipairs({"Form", "SubForm", "Transformation", "CurrentForm", "ActiveForm", "KiBurst", "FullPowerHera"}) do
+			local object = character:FindFirstChild(name)
+			if object and object:IsA("ValueBase") then
+				local value = object.Value
+				candidate("Character.Value." .. name, type(value) == "boolean" and name or value, value ~= false and value ~= nil and value ~= 0)
+			end
+		end
+	end
+	snapshot.ActiveKey = activeKey
+	snapshot.ActiveSource = activeSource
+	return snapshot
+end
+
+function formTrackerState.Save(event, snapshot, elapsed)
+	local row = {
+		At = os.time(), Event = event, Elapsed = elapsed,
+		Active = snapshot and snapshot.ActiveKey or nil,
+		Source = snapshot and snapshot.ActiveSource or nil,
+		Form = snapshot and snapshot.Form or nil,
+		SubForm = snapshot and snapshot.SubForm or nil,
+		Candidates = snapshot and snapshot.Candidates or nil,
+	}
+	formTrackerState.Rows[#formTrackerState.Rows + 1] = row
+	while #formTrackerState.Rows > 80 do table.remove(formTrackerState.Rows, 1) end
+	pcall(function()
+		local writer = configStore.GetFunction("writefile")
+		if not writer or not configStore.EnsureFolders() then return end
+		writer(configStore.Root .. "/form_tracker_latest.json", HttpService:JSONEncode({
+			Version = 1,
+			Note = "Local-only form state transitions. Timers start when this client first confirms a supported active form.",
+			Supported = {"Ki Burst", "Full Power Hera"},
+			Rows = formTrackerState.Rows,
+		}))
+	end)
+end
+
+function formTrackerState.Update(deltaTime)
+	if unloaded then return end
+	local now = os.clock()
+	if formTrackerState.ActiveKey and formTrackerState.StartedAt then
+		formTrackerState.TimeLabel.Text = formTrackerState.FormatElapsed(now - formTrackerState.StartedAt)
+	end
+	formTrackerState.CheckElapsed += deltaTime
+	if formTrackerState.CheckElapsed < 0.05 then return end
+	formTrackerState.CheckElapsed = 0
+	local snapshot = formTrackerState.ReadSnapshot()
+	local signature = snapshot.Character .. "|" .. snapshot.Form .. "|" .. snapshot.SubForm .. "|" .. tostring(snapshot.ActiveKey)
+	for _, entry in ipairs(snapshot.Candidates) do signature ..= "|" .. entry.Source .. "=" .. entry.Value end
+	if signature ~= formTrackerState.ObservedSignature then
+		formTrackerState.ObservedSignature = signature
+		formTrackerState.Save("observed", snapshot, formTrackerState.StartedAt and now - formTrackerState.StartedAt or nil)
+	end
+	if snapshot.ActiveKey ~= formTrackerState.ActiveKey then
+		if formTrackerState.ActiveKey and formTrackerState.StartedAt then
+			formTrackerState.Save("stopped", snapshot, now - formTrackerState.StartedAt)
+		end
+		formTrackerState.ActiveKey = snapshot.ActiveKey
+		formTrackerState.StartedAt = snapshot.ActiveKey and now or nil
+		if snapshot.ActiveKey then
+			formTrackerState.NameLabel.Text = formTrackerState.Supported[snapshot.ActiveKey] .. " // ACTIVE"
+			formTrackerState.TimeLabel.Text = "00:00.0"
+			formTrackerState.Card.Visible = true
+			formTrackerState.Save("started", snapshot, 0)
+		else
+			formTrackerState.Card.Visible = false
+		end
+	end
+end
+-- END FORM TRACKER LOGIC
+
 function autoTransformState.FiniteNumber(value)
 	local number = tonumber(value)
 	return number and number == number and math.abs(number) < math.huge and number or nil
@@ -20926,6 +21115,7 @@ connect(RunService.Heartbeat, function(deltaTime)
 		npcSafety.WatchlistScanElapsed = 0
 		npcSafety.UpdateWatchlistNpcAlerts()
 	end
+	formTrackerState.Update(deltaTime)
 	autoTransformState.Update(deltaTime)
 	qolState.FormMastery.Update(deltaTime)
 	local autoFoodBusy = qolState.AutoFood.Update(deltaTime)
@@ -24753,6 +24943,12 @@ function controller.Unload()
 	step("super17 detector", function()
 		configStore.Super17Detector.SetEnabled(false)
 		configStore.Super17Detector.Gui:Destroy()
+	end)
+	step("form tracker", function()
+		if formTrackerState.ActiveKey and formTrackerState.StartedAt then
+			formTrackerState.Save("unloaded", formTrackerState.ReadSnapshot(), os.clock() - formTrackerState.StartedAt)
+		end
+		if formTrackerState.Gui then formTrackerState.Gui:Destroy() end
 	end)
 	step("auto clash", function()
 		configStore.AutoClash.Enabled = false

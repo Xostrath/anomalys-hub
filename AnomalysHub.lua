@@ -2967,10 +2967,12 @@ local formTrackerState = {
 		kiburst = {Display = "KI BURST", Slot = "SubForm", Duration = 120.50},
 		fullpowerhera = {Display = "FULL POWER HERA", Slot = "Form", Duration = 198.88},
 		kaiokenx10 = {Display = "KAIOKEN X10", Slot = "SubForm", Duration = 66.69},
+		secondform = {Display = "FRIEZA SECOND FORM", Slot = "Form", Duration = 183.39},
 	},
 	Aliases = {
 		herafullpower = "fullpowerhera",
 		kaioken10x = "kaiokenx10",
+		friezasecondform = "secondform",
 	},
 	CheckElapsed = 0,
 	Slots = {Form = {}, SubForm = {}},
@@ -20247,7 +20249,7 @@ function formTrackerState.Save(event, snapshot, slotName, slot, elapsed)
 		writer(configStore.Root .. "/form_tracker_latest.json", HttpService:JSONEncode({
 			Version = 2,
 			Note = "Local-only main-form and subform transitions. Known durations count down; unknown durations count up for calibration.",
-			KnownDurations = {KiBurst = 120.50, FullPowerHera = 198.88, KaiokenX10 = 66.69},
+			KnownDurations = {KiBurst = 120.50, FullPowerHera = 198.88, KaiokenX10 = 66.69, FriezaSecondForm = 183.39},
 			Rows = formTrackerState.Rows,
 		}))
 	end)

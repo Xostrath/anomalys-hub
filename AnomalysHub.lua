@@ -20167,6 +20167,40 @@ function formTrackerState.ReadSnapshot()
 			end
 		end
 	end
+	local function v16Relevant(name)
+		local probe = formTrackerState.Normalize(name)
+		return probe:find("android", 1, true) ~= nil
+			or probe:find("v16", 1, true) ~= nil
+			or probe:find("version", 1, true) ~= nil
+	end
+	local function observeV16Container(container, label)
+		if not container then return end
+		local attributeOk, containerAttributes = pcall(container.GetAttributes, container)
+		if attributeOk and type(containerAttributes) == "table" then
+			for name, value in pairs(containerAttributes) do
+				if v16Relevant(name) then
+					snapshot.Candidates[#snapshot.Candidates + 1] = {
+						Source = label .. ".Attribute." .. tostring(name),
+						Value = tostring(value):sub(1, 100),
+					}
+				end
+			end
+		end
+		local descendantsOk, descendants = pcall(container.GetDescendants, container)
+		if not descendantsOk or type(descendants) ~= "table" then return end
+		local recorded = 0
+		for _, object in ipairs(descendants) do
+			if v16Relevant(object.Name) then
+				recorded += 1
+				local value = object:IsA("ValueBase") and object.Value or (object.ClassName .. " present")
+				snapshot.Candidates[#snapshot.Candidates + 1] = {
+					Source = label .. ".Object." .. object:GetFullName():sub(-120),
+					Value = tostring(value):sub(1, 100),
+				}
+				if recorded >= 80 then break end
+			end
+		end
+	end
 	if not formTrackerState.IsInactive(snapshot.Form) then
 		local key = formTrackerState.Resolve(snapshot.Form)
 		local definition = key and formTrackerState.Definitions[key]
@@ -20202,7 +20236,7 @@ function formTrackerState.ReadSnapshot()
 			local probe = formTrackerState.Normalize(name)
 			if probe:find("form", 1, true) or probe:find("transform", 1, true)
 				or probe:find("burst", 1, true) or probe:find("hera", 1, true)
-				or probe:find("kaio", 1, true) then
+				or probe:find("kaio", 1, true) or v16Relevant(name) then
 				names[#names + 1] = name
 			end
 		end
@@ -20211,7 +20245,8 @@ function formTrackerState.ReadSnapshot()
 			local value = attributes[name]
 			candidate("Character.Attribute." .. name, type(value) == "boolean" and name or value, value ~= false and value ~= nil and value ~= 0)
 		end
-		for _, name in ipairs({"Form", "SubForm", "Transformation", "CurrentForm", "ActiveForm", "KiBurst", "FullPowerHera", "Kaioken"}) do
+		for _, name in ipairs({"Form", "SubForm", "Transformation", "CurrentForm", "ActiveForm", "KiBurst", "FullPowerHera", "Kaioken",
+			"Android", "AndroidVersion", "Version", "V16", "State_V16", "State_AndroidV16"}) do
 			local object = character:FindFirstChild(name)
 			if object and object:IsA("ValueBase") then
 				local value = object.Value
@@ -20226,6 +20261,11 @@ function formTrackerState.ReadSnapshot()
 			setSlot("SubForm", "subform:" .. formTrackerState.Normalize(display), display, "Character.State_Kaioken")
 		end
 	end
+	-- Android V16 did not appear in the ordinary form/subform state during the
+	-- first capture. Record only narrowly named Android/version metadata so a
+	-- second isolated run can reveal its authoritative client-side state path.
+	observeV16Container(character, "CharacterProbe")
+	observeV16Container(statData, "StatDataProbe")
 	return snapshot
 end
 
@@ -20248,7 +20288,7 @@ function formTrackerState.Save(event, snapshot, slotName, slot, elapsed)
 		local writer = configStore.GetFunction("writefile")
 		if not writer or not configStore.EnsureFolders() then return end
 		writer(configStore.Root .. "/form_tracker_latest.json", HttpService:JSONEncode({
-			Version = 2,
+			Version = 3,
 			Note = "Local-only main-form and subform transitions. Known durations count down; unknown durations count up for calibration.",
 			KnownDurations = {KiBurst = 120.50, FullPowerHera = 198.88, KaiokenX10 = 66.69, FriezaSecondForm = 183.39, StrongestForm1 = 176.58},
 			Rows = formTrackerState.Rows,

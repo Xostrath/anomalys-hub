@@ -2959,6 +2959,9 @@ local formTrackerState = {
 		kiburst = "KI BURST",
 		fullpowerhera = "FULL POWER HERA",
 	},
+	Aliases = {
+		herafullpower = "fullpowerhera",
+	},
 	CheckElapsed = 0,
 	ActiveKey = nil,
 	StartedAt = nil,
@@ -19915,10 +19918,12 @@ end
 
 function formTrackerState.Resolve(value)
 	local key = formTrackerState.Normalize(value)
+	key = formTrackerState.Aliases[key] or key
 	if formTrackerState.Supported[key] then return key end
 	for _, prefix in ipairs({"state", "is", "active"}) do
 		if key:sub(1, #prefix) == prefix then
 			local stripped = key:sub(#prefix + 1)
+			stripped = formTrackerState.Aliases[stripped] or stripped
 			if formTrackerState.Supported[stripped] then return stripped end
 		end
 	end
@@ -20054,8 +20059,14 @@ function formTrackerState.Update(deltaTime)
 		end
 	end
 	if not snapshot.ActiveKey and snapshot.PowerLevel and snapshot.PowerLevel > 0 then
-		formTrackerState.LastInactivePower = snapshot.PowerLevel
+		formTrackerState.InactiveSince = formTrackerState.InactiveSince or now
+		-- Transform state can clear a few frames before the replicated power buff.
+		-- Only accept a baseline after the player has remained inactive long enough.
+		if now - formTrackerState.InactiveSince >= 1.5 or not formTrackerState.LastInactivePower then
+			formTrackerState.LastInactivePower = snapshot.PowerLevel
+		end
 	elseif snapshot.ActiveKey then
+		formTrackerState.InactiveSince = nil
 		local baseline = formTrackerState.BaselinePower
 		local multiplier = baseline and baseline > 0 and snapshot.PowerLevel and snapshot.PowerLevel / baseline
 		formTrackerState.PowerLabel.Text = multiplier and string.format("POWER // x%.2f", multiplier) or "POWER // MEASURING"

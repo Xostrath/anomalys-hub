@@ -2956,11 +2956,13 @@ local autoTransformState = {
 }
 local formTrackerState = {
 	Definitions = {
-		kiburst = {Display = "KI BURST", Slot = "Form", Duration = 120.50},
+		kiburst = {Display = "KI BURST", Slot = "SubForm", Duration = 120.50},
 		fullpowerhera = {Display = "FULL POWER HERA", Slot = "Form", Duration = 198.88},
+		kaiokenx10 = {Display = "KAIOKEN X10", Slot = "SubForm", Duration = 66.69},
 	},
 	Aliases = {
 		herafullpower = "fullpowerhera",
+		kaioken10x = "kaiokenx10",
 	},
 	CheckElapsed = 0,
 	Slots = {Form = {}, SubForm = {}},
@@ -19997,6 +19999,20 @@ function formTrackerState.ReadSnapshot()
 	end
 	if not formTrackerState.IsInactive(snapshot.SubForm) then
 		local key = formTrackerState.Resolve(snapshot.SubForm)
+		if formTrackerState.Normalize(snapshot.SubForm) == "kaioken" and character then
+			local currentSlot = formTrackerState.Slots.SubForm
+			if currentSlot.Key == "kaiokenx10" then
+				-- Kaioken 10x visibly steps down before ending. Keep the original
+				-- activation and countdown instead of restarting it as another level.
+				key = "kaiokenx10"
+			else
+				local levelValue = character:FindFirstChild("Kaioken")
+				local level = levelValue and levelValue:IsA("ValueBase") and tonumber(levelValue.Value)
+				if (level and level >= 9.5) or character:GetAttribute("KaiokenX10Since") ~= nil then
+					key = "kaiokenx10"
+				end
+			end
+		end
 		local definition = key and formTrackerState.Definitions[key]
 		setSlot("SubForm", key or ("subform:" .. formTrackerState.Normalize(snapshot.SubForm)),
 			definition and definition.Display or snapshot.SubForm:upper(), "CoreStats.SubForm")
@@ -20058,7 +20074,7 @@ function formTrackerState.Save(event, snapshot, slotName, slot, elapsed)
 		writer(configStore.Root .. "/form_tracker_latest.json", HttpService:JSONEncode({
 			Version = 2,
 			Note = "Local-only main-form and subform transitions. Known durations count down; unknown durations count up for calibration.",
-			KnownDurations = {KiBurst = 120.50, FullPowerHera = 198.88},
+			KnownDurations = {KiBurst = 120.50, FullPowerHera = 198.88, KaiokenX10 = 66.69},
 			Rows = formTrackerState.Rows,
 		}))
 	end)

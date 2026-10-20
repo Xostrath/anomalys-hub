@@ -2905,6 +2905,14 @@ local tpState = {
 	CategoryButtons = {},
 	DestinationButtons = {},
 	Refresh = nil,
+	TravelActive = false,
+	TravelEntry = nil,
+	TravelPhase = "Idle",
+	TravelStartedAt = 0,
+	TravelStatusAt = 0,
+	TravelDepth = 60,
+	ArrivalRadius = 6,
+	MaxGlideSpeed = 650,
 }
 local homeUpdateElapsed = 0
 local lastOtherworldRequestAt = 0
@@ -5475,7 +5483,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -32, 0, 24),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamBold,
-	Text = "TELEPORT",
+	Text = "ROUTE TRAVEL",
 	TextColor3 = colors.Text,
 	TextSize = 14,
 	TextXAlignment = Enum.TextXAlignment.Left,
@@ -5487,7 +5495,7 @@ create("TextLabel", {
 	Size = UDim2.new(1, -32, 0, 18),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
-	Text = "Live destinations from the current map and server",
+	Text = "Fly safely to live destinations; planet changes still use Roblox travel",
 	TextColor3 = colors.Muted,
 	TextSize = 10,
 	TextXAlignment = Enum.TextXAlignment.Left,
@@ -5525,7 +5533,7 @@ end
 tpState.SearchBox = create("TextBox", {
 	Name = "Search",
 	Position = UDim2.fromOffset(16, 108),
-	Size = UDim2.new(1, -132, 0, 34),
+	Size = UDim2.new(1, -240, 0, 34),
 	BackgroundColor3 = colors.SurfaceRaised,
 	BorderSizePixel = 0,
 	ClearTextOnFocus = false,
@@ -5543,7 +5551,7 @@ create("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 1
 tpState.RefreshButton = create("TextButton", {
 	Name = "Refresh",
 	AnchorPoint = Vector2.new(1, 0),
-	Position = UDim2.new(1, -16, 0, 108),
+	Position = UDim2.new(1, -116, 0, 108),
 	Size = UDim2.fromOffset(100, 34),
 	AutoButtonColor = false,
 	BackgroundColor3 = colors.Accent,
@@ -5554,6 +5562,21 @@ tpState.RefreshButton = create("TextButton", {
 	TextSize = 10,
 }, tpState.Page)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, tpState.RefreshButton)
+
+tpState.CancelButton = create("TextButton", {
+	Name = "StopTravel",
+	AnchorPoint = Vector2.new(1, 0),
+	Position = UDim2.new(1, -16, 0, 108),
+	Size = UDim2.fromOffset(92, 34),
+	AutoButtonColor = false,
+	BackgroundColor3 = colors.SurfaceRaised,
+	BorderSizePixel = 0,
+	Font = Enum.Font.GothamSemibold,
+	Text = "STOP",
+	TextColor3 = colors.Muted,
+	TextSize = 10,
+}, tpState.Page)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, tpState.CancelButton)
 
 tpState.StatusLabel = create("TextLabel", {
 	Name = "Status",
@@ -18437,6 +18460,9 @@ local function setNpcTargetingEnabled(enabled)
 	if type(enabled) ~= "boolean" then
 		return false
 	end
+	if enabled and tpState.TravelActive and tpState.FinishTravel then
+		tpState.FinishTravel(false, "Travel stopped; Auto Farm started.")
+	end
 	if enabled and npcSafety.IsExcludedFarmName(selectedNpcType) then
 		selectedNpcType = npcSafety.StrongestOptionName
 		npcSelectorButton.Text = selectedNpcType .. "  v"
@@ -18658,6 +18684,184 @@ local function collectTpEntries(category)
 	return entries
 end
 
+-- BEGIN ROUTE FLIGHT LOGIC
+local function setTpStatus(message, color)
+	if tpState.StatusLabel then
+		tpState.StatusLabel.Text = message
+		tpState.StatusLabel.TextColor3 = color or colors.Muted
+	end
+end
+
+local function resolveTpTravelDestination(entry)
+	if not entry or entry.PlaceId or not entry.Instance or not entry.Instance.Parent then
+		return nil
+	end
+	local position = (entry.Category == "NPCs" or entry.Category == "Players")
+		and getTpEntryWorldPosition(entry.Instance) or getTpPosition(entry.Instance)
+	return position and (position + Vector3.new(0, 4, 0)) or nil
+end
+
+local function getTpTravelSpeed(distance)
+	local maximum = tpState.MaxGlideSpeed
+	if distance > 2500 then return maximum end
+	if distance > 900 then return math.min(maximum, 600) end
+	if distance > 300 then return math.min(maximum, 450) end
+	if distance > 80 then return math.min(maximum, 300) end
+	if distance > 25 then return math.min(maximum, 180) end
+	return math.min(maximum, 95)
+end
+
+function tpState.RenderTravelButton()
+	if not tpState.CancelButton then return end
+	tpState.CancelButton.Text = tpState.TravelActive and "STOP" or "STOP"
+	tpState.CancelButton.BackgroundColor3 = tpState.TravelActive and colors.DangerHover or colors.SurfaceRaised
+	tpState.CancelButton.TextColor3 = tpState.TravelActive and colors.Text or colors.Muted
+end
+
+function tpState.FinishTravel(success, message, silent)
+	local wasActive = tpState.TravelActive
+	tpState.TravelActive = false
+	tpState.TravelEntry = nil
+	tpState.TravelPhase = "Idle"
+	tpState.TravelStartedAt = 0
+	tpState.TravelStatusAt = 0
+	if wasActive then
+		local character = localPlayer.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if root then
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
+		end
+		restoreNpcMovementState()
+	end
+	tpState.RenderTravelButton()
+	if not silent and message then
+		setTpStatus(message, success and colors.Success or colors.Warning)
+	end
+	return success == true
+end
+
+function tpState.BeginTravel(entry)
+	local destination = resolveTpTravelDestination(entry)
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not destination or not character or not humanoid or humanoid.Health <= 0 or not root then
+		setTpStatus("Destination is no longer available; refresh the list.", colors.DangerHover)
+		return false
+	end
+	if tpState.TravelActive then tpState.FinishTravel(false, nil, true) end
+	if npcTargetingEnabled then
+		setNpcTargetingEnabled(false)
+	else
+		restoreNpcMovementState()
+	end
+	qolState.AutoFood.TravelActive = false
+	qolState.AutoFood.TravelPhase = "Idle"
+	if not npcSafety.EnsureMovementRig(character, humanoid, root) then
+		setTpStatus("Could not start the travel flight.", colors.DangerHover)
+		return false
+	end
+	applyNpcNoclip(character, true)
+	if npcLinearVelocity then npcLinearVelocity.VectorVelocity = Vector3.zero end
+	tpState.TravelActive = true
+	tpState.TravelEntry = entry
+	tpState.TravelPhase = "Descend"
+	tpState.TravelStartedAt = os.clock()
+	tpState.TravelStatusAt = 0
+	npcApproachPhase = "Travel"
+	tpState.RenderTravelButton()
+	setTpStatus("Flying safely to " .. entry.Name .. " (descending to route depth)...", colors.Success)
+	return true
+end
+
+function tpState.UpdateTravel(deltaTime)
+	if not tpState.TravelActive then return false end
+	local entry = tpState.TravelEntry
+	local destination = resolveTpTravelDestination(entry)
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not destination then
+		tpState.FinishTravel(false, "Destination moved out of the server; travel stopped.")
+		return false
+	end
+	if not character or not humanoid or humanoid.Health <= 0 or not root then
+		tpState.FinishTravel(false, "Character unavailable; travel stopped.")
+		return false
+	end
+	if not npcSafety.EnsureMovementRig(character, humanoid, root) then
+		tpState.FinishTravel(false, "Travel movement became unavailable.")
+		return false
+	end
+	applyNpcNoclip(character, true)
+	if npcLinearVelocity then
+		npcLinearVelocity.Enabled = true
+		npcLinearVelocity.VectorVelocity = Vector3.zero
+	end
+	if npcAlignOrientation then npcAlignOrientation.Enabled = true end
+	humanoid.PlatformStand = true
+
+	local currentPosition = root.Position
+	local currentGroundY = getGroundYAt(currentPosition, character)
+	local destinationGroundY = getGroundYAt(destination, character)
+	local currentSafeY = currentGroundY and currentGroundY - tpState.TravelDepth
+		or currentPosition.Y - tpState.TravelDepth
+	local destinationSafeY = destinationGroundY and destinationGroundY - tpState.TravelDepth
+		or destination.Y - tpState.TravelDepth
+	local routeY = math.min(currentSafeY, destinationSafeY, destination.Y - tpState.TravelDepth)
+	routeY = math.max(routeY, npcSafety.GetVoidFloorY())
+	local horizontalDistance = Vector2.new(destination.X - currentPosition.X, destination.Z - currentPosition.Z).Magnitude
+	local desiredPosition
+	if tpState.TravelPhase == "Descend" then
+		desiredPosition = Vector3.new(currentPosition.X, math.max(currentSafeY, npcSafety.GetVoidFloorY()), currentPosition.Z)
+		if math.abs(desiredPosition.Y - currentPosition.Y) <= 3 then
+			tpState.TravelPhase = "Travel"
+		end
+	elseif tpState.TravelPhase == "Travel" then
+		desiredPosition = Vector3.new(destination.X, routeY, destination.Z)
+		if horizontalDistance <= 9 then
+			tpState.TravelPhase = "Rise"
+		end
+	else
+		if horizontalDistance > 24 then
+			tpState.TravelPhase = "Travel"
+			desiredPosition = Vector3.new(destination.X, routeY, destination.Z)
+		else
+			desiredPosition = destination
+		end
+	end
+	desiredPosition = npcSafety.ClampAboveVoid(desiredPosition)
+	local movementDelta = desiredPosition - currentPosition
+	local movementDistance = movementDelta.Magnitude
+	if tpState.TravelPhase == "Rise" and (destination - currentPosition).Magnitude <= tpState.ArrivalRadius then
+		root.CFrame = CFrame.new(destination) * root.CFrame.Rotation
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+		local elapsed = os.clock() - tpState.TravelStartedAt
+		tpState.FinishTravel(true, string.format("Arrived at %s in %.1f seconds.", entry.Name, elapsed))
+		return false
+	end
+	if movementDistance > 0.2 then
+		local speed = getTpTravelSpeed(movementDistance)
+		local frameTime = math.clamp(tonumber(deltaTime) or 0, 1 / 240, 0.1)
+		local step = math.min(movementDistance, math.max(0.25, speed * frameTime))
+		local position = currentPosition + movementDelta.Unit * step
+		root.CFrame = CFrame.new(position) * root.CFrame.Rotation
+	end
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	local now = os.clock()
+	if now - tpState.TravelStatusAt >= 0.2 then
+		tpState.TravelStatusAt = now
+		local label = tpState.TravelPhase == "Descend" and "descending"
+			or tpState.TravelPhase == "Travel" and "travelling underground" or "rising"
+		setTpStatus(string.format("%s // %s // %.0f studs", entry.Name, label, (destination - root.Position).Magnitude), colors.Success)
+	end
+	return true
+end
+-- END ROUTE FLIGHT LOGIC
+
 local function teleportToTpEntry(entry)
 	if entry and entry.PlaceId then
 		if entry.IsCurrent then
@@ -18665,6 +18869,7 @@ local function teleportToTpEntry(entry)
 			tpState.StatusLabel.TextColor3 = colors.Muted
 			return false
 		end
+		if tpState.TravelActive then tpState.FinishTravel(false, nil, true) end
 		if npcTargetingEnabled then
 			setNpcTargetingEnabled(false)
 		else
@@ -18685,49 +18890,7 @@ local function teleportToTpEntry(entry)
 		end
 		return true
 	end
-	local character = localPlayer.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	local destination
-	if entry.Category == "NPCs" then
-		local pivot = getTpEntryWorldPosition(entry.Instance)
-		if pivot then
-			destination = Vector3.new(
-				pivot.X,
-				pivot.Y - npcSafety.ChestApproachOffset,
-				pivot.Z
-			)
-		end
-	else
-		destination = entry and getTpPosition(entry.Instance)
-		if destination then
-			destination = destination + Vector3.new(0, 4, 0)
-		end
-	end
-	if not character or not humanoid or humanoid.Health <= 0 or not root or not destination then
-		tpState.StatusLabel.Text = "Destination is no longer available; refresh the list."
-		tpState.StatusLabel.TextColor3 = colors.DangerHover
-		return false
-	end
-	if npcTargetingEnabled then
-		setNpcTargetingEnabled(false)
-	else
-		restoreNpcMovementState()
-	end
-	qolState.AutoFood.TravelActive = false
-	qolState.AutoFood.TravelPhase = "Idle"
-	if entry.Category == "NPCs" then
-		applyNpcNoclip(character, true)
-	end
-	local rotation = character:GetPivot().Rotation
-	character:PivotTo(CFrame.new(destination) * rotation)
-	root.AssemblyLinearVelocity = Vector3.zero
-	root.AssemblyAngularVelocity = Vector3.zero
-	humanoid.PlatformStand = false
-	humanoid.AutoRotate = true
-	tpState.StatusLabel.Text = "Teleported to " .. entry.Name .. "."
-	tpState.StatusLabel.TextColor3 = colors.Success
-	return true
+	return tpState.BeginTravel(entry)
 end
 
 function tpState.Refresh()
@@ -18762,10 +18925,12 @@ function tpState.Refresh()
 			end)
 		end
 	end
-	tpState.StatusLabel.Text = shown > 0
-		and string.format("%d %s destination%s available.", shown, tpState.Category, shown == 1 and "" or "s")
-		or ("No " .. string.lower(tpState.Category) .. " matched the current search.")
-	tpState.StatusLabel.TextColor3 = shown > 0 and colors.Muted or colors.DangerHover
+	if not tpState.TravelActive then
+		tpState.StatusLabel.Text = shown > 0
+			and string.format("%d %s destination%s available. Select one to fly there.", shown, tpState.Category, shown == 1 and "" or "s")
+			or ("No " .. string.lower(tpState.Category) .. " matched the current search.")
+		tpState.StatusLabel.TextColor3 = shown > 0 and colors.Muted or colors.DangerHover
+	end
 	if tpState.Category == "NPCs" then
 		npcSafety.UpdateWatchlistNpcAlerts()
 	end
@@ -18784,7 +18949,15 @@ for category, button in pairs(tpState.CategoryButtons) do
 	end)
 end
 connect(tpState.RefreshButton.Activated, tpState.Refresh)
+connect(tpState.CancelButton.Activated, function()
+	if tpState.TravelActive then
+		tpState.FinishTravel(false, "Travel stopped.")
+	else
+		setTpStatus("No travel route is active.", colors.Muted)
+	end
+end)
 connect(tpState.SearchBox:GetPropertyChangedSignal("Text"), tpState.Refresh)
+tpState.RenderTravelButton()
 
 function tpState.TeleportTo(category, destinationName)
 	if type(category) ~= "string" or type(destinationName) ~= "string" then
@@ -21137,6 +21310,9 @@ end)
 npcSafety.UpdateProfileVisual()
 
 connect(localPlayer.CharacterAdded, function()
+	if tpState.TravelActive and tpState.FinishTravel then
+		tpState.FinishTravel(false, "Travel stopped because the character respawned.")
+	end
 	restoreNpcMovementState()
 	qolState.StatAllocate.CancelAllocation()
 	qolState.StatAllocate.CancelMotivation()
@@ -21215,7 +21391,13 @@ connect(RunService.Heartbeat, function(deltaTime)
 	formTrackerState.Update(deltaTime)
 	autoTransformState.Update(deltaTime)
 	qolState.FormMastery.Update(deltaTime)
-	local autoFoodBusy = qolState.AutoFood.Update(deltaTime)
+	local autoFoodBusy = false
+	if not tpState.TravelActive then
+		autoFoodBusy = qolState.AutoFood.Update(deltaTime)
+	end
+	if tpState.UpdateTravel and tpState.UpdateTravel(deltaTime) then
+		return
+	end
 
 	if not npcTargetingEnabled then
 		-- Keep the standalone QoL noclip reliable even when Roblox or another
@@ -24310,7 +24492,7 @@ configStore.PageMeta = {
 	Combat={Title="COMBAT",Subtitle="Clash, Pong, Maze, and defensive timing calibration"},
 	Home={Title="FIELD DASHBOARD",Subtitle="Live server, planet, and connection telemetry"},
 	NPCs={Title="AUTOMATED FARMING",Subtitle="Target selection, combat safety, selling, and transformations"},
-	TP={Title="TRAVEL NETWORK",Subtitle="Fast routing to stops, landmarks, story NPCs, and players"},
+	TP={Title="TRAVEL NETWORK",Subtitle="Auto Farm-style flight routing to stops, landmarks, NPCs, and players"},
 	Doctor={Title="CHARACTER TELEMETRY",Subtitle="Authoritative combat statistics and condition report"},
 	Otherworld={Title="OTHERWORLD SERVICES",Subtitle="Spirit-world recovery and location services"},
 	Training={Title="AUTO TRAINING",Subtitle="Automate the normal M-menu stat training minigames"},
@@ -25010,6 +25192,9 @@ function controller.Unload()
 	qolState.FormMastery.Enabled = false
 	step("ki camera", restoreKiControlCamera)
 	step("auto food", function() qolState.AutoFood.SetEnabled(false) end)
+	step("route travel", function()
+		if tpState.FinishTravel then tpState.FinishTravel(false, nil, true) end
+	end)
 	step("camera clip", function() qolState.SetCameraClipEnabled(false) end)
 	step("noclip", function() qolState.SetNoclipEnabled(false) end)
 	step("diagnostic", function() npcSafety.StopDirectLightDiagnostic("Hub unloaded") end)

@@ -10,17 +10,17 @@ local function anomalyHasGohanFingerprint()
 	return r~=nil and r:FindFirstChild('ServerRemote')~=nil and r:FindFirstChild('ClientRemote')~=nil and r:FindFirstChild('StatRetrieveRemote')~=nil
 end
 local function anomalyHasBeyondNenFingerprint()
-	local env=(getgenv and getgenv()) or shared
-	local signature=env.__AnomalyBeyondNenRemotePaths
-	if type(signature)~='table' or #signature<2 then return false end
-	local root=game:GetService('ReplicatedStorage')
-	for _,path in ipairs(signature) do
-		if type(path)~='table' then return false end
-		local node=root
-		for _,name in ipairs(path) do node=node and node:FindFirstChild(name) end
-		if not node or (not node:IsA('RemoteEvent') and not node:IsA('RemoteFunction')) then return false end
-	end
-	return true
+	local rs=game:GetService('ReplicatedStorage')
+	local remotes=rs:FindFirstChild('Remotes')
+	local attack=remotes and remotes:FindFirstChild('Attack')
+	local block=remotes and remotes:FindFirstChild('Block')
+	local affinity=rs:FindFirstChild('roll_nen_affinity',true)
+	local cast=rs:FindFirstChild('cast_nen_technique',true)
+	local affinityService=affinity and affinity.Parent and affinity.Parent.Parent
+	local castService=cast and cast.Parent and cast.Parent.Parent
+	return attack~=nil and block~=nil and affinity~=nil and affinity:IsA('RemoteFunction')
+		and cast~=nil and cast:IsA('RemoteFunction') and affinityService~=nil and affinityService.Name=='NenService'
+		and castService~=nil and castService.Name=='SkillsService'
 end
 local anomalyProfile=(anomalyHasGohanFingerprint() or game.PlaceId==89366025586253) and 'Gohan' or (anomalyHasBeyondNenFingerprint() and 'BeyondNen' or 'Universal')
 local anomalyEnvironment=(getgenv and getgenv()) or shared
@@ -785,7 +785,12 @@ if type(controller) ~= "table" then
 end
 
 controller.Profile = "BeyondNen"
-controller.AdapterStatus = "Fingerprint matched; feature mapping pending"
+controller.AdapterStatus = "Remote fingerprint confirmed; feature mapping ready"
+controller.GameIdentity = {
+	UniverseId = 2174306620,
+	ObservedPlaceId = 78073853031462,
+	FingerprintVersion = 1,
+}
 
 print("[Anomaly] Beyond Nen adapter loaded")
 

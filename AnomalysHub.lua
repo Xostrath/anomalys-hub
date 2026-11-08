@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v9. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v10. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3201,10 +3201,13 @@ local weaponProfiles = {
 		-- those contacts within 9 studs as threats even after the wielder turns;
 		-- this is a conservative test rule, not a measured server hitbox radius.
 		["78084477149043"] = {Phases = {.30, .52, .87, 1.12, 1.50}, FollowupRadius = 9, Name = "dagger multi-hit"},
-		-- A different repeated strike: three sequences show damage around .52, .70,
-		-- .88, 1.06, 1.24, 1.44, 1.62 at speed .6. Seven observed contacts only;
-		-- automatic parry outcome and the exact move name remain unverified.
-		["81971337593137"] = {Phases = {.52, .70, .88, 1.06, 1.24, 1.42, 1.60}, Name = "dagger repeated strike (test)"},
+		-- Seven observed contacts; v9 confirms automatic parries on this move.
+		-- A health drop at distance 16.50 after a skip at projected 16.31 shows
+		-- the default melee range is insufficient. Broader bounds apply only here.
+		["81971337593137"] = {Phases = {.52, .70, .88, 1.06, 1.24, 1.42, 1.60}, Reach = 18, MaxDistance = 22, Name = "dagger repeated strike"},
+		-- Three damage samples at phases 1.354/1.367/1.421, speed 1.0, up to
+		-- 11.96 studs. Timing seed only: exact name and parryability unverified.
+		["17087924823"] = {Phase = 1.32, Reach = 13, MaxDistance = 16, Name = "dagger long-windup strike (test)"},
 	}},
 }
 local knownAnimations = {}
@@ -3217,7 +3220,7 @@ for _, key in ipairs({"sword", "dagger"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v9", "Fists / Pitchfork / BigPitchfork / Sword / Dagger. Dagger repeated attacks and nearby follow-ups updated.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v10", "Fists / Pitchfork / BigPitchfork / Sword / Dagger. Repeated-strike range fixed; long-windup strike added for testing.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3230,14 +3233,15 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v9 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v10 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 9. Pitchfork has a four-contact move; Dagger has five- and seven-contact moves. New timings remain under test. No actor-name filters."
-		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger IDs select their profile. Explicit conflicting Character.Weapon is never overridden. Sword reach 12 studs; other profiles retain 9."
+		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 10. Pitchfork has a four-contact move; Dagger has five- and seven-contact moves. New timings remain under test. No actor-name filters."
+		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger IDs select their profile. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Dagger repeated strike 18 and long-windup strike 13."
 		.. "\nDagger 78084477149043 follow-ups use current distance within 9 studs regardless of facing/projection; its first contact retains directional checks. This test rule is not a measured hitbox."
 		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
 		.. "\nCOMBAT_STATE records raw local attributes at inputs, damage and rejections; their clock bases may differ. NO_OBSERVED_REQUEST means no hook observation before the deadline/stop, not proof that nothing reached the server."
+		.. "\nDECISION requestDelay is local elapsed time from outgoing observation to response, not isolated network latency. Rejected requests are not replayed or retimestamped."
 		.. "\nUnknown weapons and animation variants are logged and skipped; a Fists label alone does not establish every fist animation's timing."
 		.. "\nConfirmed counts require ParryResult with local Parrier, matching attacker and a recent test input. Accepted is only an input acknowledgment."
 		.. "\n" .. table.concat(state.Lines, "\n") .. "\nSTATUS=" .. tostring(reason)
@@ -3483,14 +3487,15 @@ local function feedback(name, direction, args, started)
 		if (direction == "OUT FireServer" or direction == "OUT direct FireServer") and args[1] == "Press" and args[3] ~= nil then
 			local attempt = state.LastAttempt
 			if attempt and not attempt.RequestId and now - attempt.At <= .3 then
-				attempt.RequestId = args[3]; state.Attempts[args[3]] = attempt
+				attempt.RequestId, attempt.RequestAt = args[3], started; state.Attempts[args[3]] = attempt
 				note("REQUEST input=" .. attempt.Serial .. " id=" .. tostring(args[3]))
 			end
 		elseif direction == "IN event" and args[1] == "ParryDecision" then
 			local attempt = state.Attempts[args[2]]
 			if not attempt or attempt.Decision then return end
 			attempt.Decision = args[3]
-			note("DECISION id=" .. tostring(args[2]) .. " " .. tostring(args[3]) .. " reason=" .. tostring(args[4]))
+			note("DECISION id=" .. tostring(args[2]) .. " " .. tostring(args[3]) .. " reason=" .. tostring(args[4])
+				.. " requestDelay=" .. string.format("%.3f", now - (attempt.RequestAt or attempt.At)))
 			if args[3] == "Rejected" then
 				state.Rejected += 1
 				combatSnapshot("rejected input=" .. attempt.Serial .. " reason=" .. tostring(args[4]), player.Character)
@@ -3588,7 +3593,7 @@ local function step()
 			local projected = delta + (localRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity) * math.max(0, remaining)
 			local facingDot = distance < 1 and 1 or root.CFrame.LookVector:Dot(delta.Unit)
 			local radialFollowup = contact > 1 and profile.FollowupRadius
-			local geometryOk = distance <= (weapon.MaxDistance or 12) and projected.Magnitude <= (weapon.Reach or 9) and facingDot >= .15
+			local geometryOk = distance <= (profile.MaxDistance or weapon.MaxDistance or 12) and projected.Magnitude <= (profile.Reach or weapon.Reach or 9) and facingDot >= .15
 			if radialFollowup then geometryOk = distance <= radialFollowup end
 			if geometryOk and math.abs(delta.Y) <= 8 then
 				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1} end
@@ -3628,7 +3633,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger mappedWeaponAnimations=41 duration=90")
+	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger mappedWeaponAnimations=42 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

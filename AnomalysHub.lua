@@ -1969,6 +1969,7 @@ local definitions = {
 		RF = {"KeyPromptResult", "PlaceCarpet", "SetPicking", "StartMeditation", "StopMeditation", "UnplaceCarpet", "deleteSphere", "meditationSphreClick"},
 		RE = {"CreateBubble", "DestroyBubble", "EnterCarpet", "GameInput", "GamePrompt", "GameResult", "KeyPrompt", "MeditationStopped"},
 	},
+	NenMasteryService = {RF = {"SetMeditationTechnique"}},
 }
 local listeners, connections, closed = {}, {}, false
 -- Keep the established probe name so reloading upgrades its targets without
@@ -2084,7 +2085,11 @@ local function watch(service, callback)
 	end
 end
 function controller.WatchBeyondNenFishing(callback) return watch("FishingService", callback) end
-function controller.WatchBeyondNenMeditation(callback) return watch("MeditationService", callback) end
+function controller.WatchBeyondNenMeditation(callback)
+	local meditation = watch("MeditationService", callback)
+	local technique = watch("NenMasteryService", callback)
+	return function() meditation(); technique() end
+end
 controller.RegisterCleanup(function()
 	closed = true; table.clear(listeners); sync()
 end)
@@ -2435,7 +2440,7 @@ controller.SetBeyondNenAutoFishing = enable
 
 end)()
 ;(function()
--- Meditation setup: observe a complete manual session before adding automation.
+-- Scoped meditation capture, including external technique-picker and Reel UI.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -2475,8 +2480,8 @@ local function log(message)
 	table.insert(capture.Lines, line); capture.Bytes += #line + 1
 end
 local function save(reason)
-	capture.Report = "BEYOND NEN MEDITATION // PASSIVE v1\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
-		.. "\nObserves only the mapped MeditationService signals, Meditation GUI, equipment and local meditation stats."
+	capture.Report = "BEYOND NEN MEDITATION // PASSIVE v2\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
+		.. "\nObserves mapped meditation/technique-selection signals, meditation/picker/Reel UI, equipment and local meditation stats."
 		.. "\nNo inputs sent, remotes invoked/replayed or scripts decompiled. Chat/text-entry keystrokes are excluded."
 		.. "\nOutgoing calls appear after they return; requestStart preserves original time. Hook paths may duplicate calls."
 		.. "\nLimits: 120 seconds, 4000 lines/500KB, 300 GUI objects, tables 4 levels/32 fields/256 nodes."
@@ -2490,11 +2495,22 @@ local function snapshot()
 	local current = {}
 	local pg = player:FindFirstChildOfClass("PlayerGui")
 	local gui = pg and pg:FindFirstChild("Meditation")
-	if gui then
-		local objects = {gui}
-		for _, object in ipairs(gui:GetDescendants()) do
-			if #objects >= 300 then current["GUI LIMIT"] = "300 objects; remaining objects omitted"; break end
-			table.insert(objects, object)
+	local progress = controller.BeyondNenMeditationProgress
+	if progress and os.clock() >= (capture.NextRoots or 0) then
+		capture.NextRoots, capture.Roots = os.clock() + 0.5, progress.DiagnosticRoots(pg)
+	end
+	local roots = capture.Roots or (gui and {gui}) or {}
+	if #roots > 0 then
+		local objects, seen = {}, {}
+		for _, root in ipairs(roots) do
+			if not root.Parent then continue end
+			local descendants = {root}
+			for _, object in ipairs(root:GetDescendants()) do table.insert(descendants, object) end
+			for _, object in ipairs(descendants) do
+				if seen[object] then continue end
+				if #objects >= 300 then current["GUI LIMIT"] = "300 objects; remaining objects omitted"; break end
+				seen[object] = true; table.insert(objects, object)
+			end
 		end
 		for _, object in ipairs(objects) do
 			local detail = object.ClassName
@@ -2509,6 +2525,9 @@ local function snapshot()
 		end
 	else current["Meditation GUI"] = "not loaded" end
 	for _, key in ipairs({"MeditationTechnique", "NenMeditation"}) do current["Player@" .. key] = tostring(player:GetAttribute(key)) end
+	for key, value in pairs(player:GetAttributes()) do
+		if key:match("^NenXP_") or key:match("^NenTier_") then current["Player@" .. key] = tostring(value) end
+	end
 	local character = player.Character
 	if character then
 		for _, object in ipairs(character:GetChildren()) do
@@ -2542,6 +2561,7 @@ local function start()
 	if capture.Closed then return end
 	if capture.Active then stop("STOPPED"); return end
 	capture.Lines, capture.Bytes, capture.LastUI, capture.Limited = {}, 0, {}, false
+	capture.Roots, capture.NextRoots = nil, nil
 	capture.Started, capture.LastSaved, capture.Active = os.clock(), os.clock(), true
 	local started = capture.Started
 	capture.Unwatch = controller.WatchBeyondNenMeditation(function(name, direction, args, requestStart)
@@ -2552,7 +2572,7 @@ local function start()
 	log("Coverage: " .. (probe and #probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "incoming signals and UI only; outgoing hooks unavailable"))
 	local count = 0
 	for remote, definition in pairs(probe and probe.Targets or {}) do
-		if definition.Service == "MeditationService" then count += 1; log("REMOTE " .. definition.Name .. " " .. remote:GetFullName()) end
+		if definition.Service == "MeditationService" or definition.Service == "NenMasteryService" then count += 1; log("REMOTE " .. definition.Name .. " " .. remote:GetFullName()) end
 	end
 	if count == 0 then log("MeditationService unavailable; GUI and input recording only.") end
 	local function input(direction, value, processed)
@@ -2589,7 +2609,192 @@ controller.CaptureBeyondNenMeditation = start
 
 end)()
 ;(function()
--- Auto Meditation v1: recorded Circles mode, normal mat/key/mouse controls.
+-- Read the game's displayed technique limits; never assume a universal XP cap.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local progress = {}
+
+function progress.Plain(text)
+	return tostring(text or ""):gsub("<[^>]*>", ""):gsub("&nbsp;", " "):match("^%s*(.-)%s*$")
+end
+
+function progress.Parse(text, preciseXP)
+	text = progress.Plain(text)
+	local earned, limit = text:match("([%d,%.]+)%s*/%s*([%d,%.]+)%s*XP")
+	earned = earned and tonumber((earned:gsub(",", "")))
+	limit = limit and tonumber((limit:gsub(",", "")))
+	if not earned or not limit or limit <= 0 then return nil end
+	-- Displayed XP may be rounded. The replicated per-technique XP preserves
+	-- the fraction, avoiding a premature switch just before the real limit.
+	if type(preciseXP) == "number" and preciseXP == preciseXP and preciseXP >= 0 and preciseXP < math.huge then earned = preciseXP end
+	return {XP = earned, Limit = limit, Capped = earned >= limit,
+		Mode = text:match("XP%s*[^%w%s]+%s*(%a+)%s*$"), Training = text:match("^Training%s*|") ~= nil}
+end
+
+function progress.Choose(rows, current)
+	if #rows == 0 then return "Unreadable" end
+	local currentRow, nextRow, unknown = nil, nil, false
+	for _, row in ipairs(rows) do
+		if not row.Progress then unknown = true
+		else
+			if row.Key == current or row.Progress.Training then currentRow = row end
+			if not row.Progress.Capped then nextRow = nextRow or row end
+		end
+	end
+	if currentRow and not currentRow.Progress.Capped then return "Continue", currentRow end
+	if nextRow then return "Switch", nextRow end
+	if unknown then return "Unreadable" end
+	return "Complete"
+end
+
+function progress.Visible(object)
+	local node = object
+	while node do
+		if node:IsA("GuiObject") and not node.Visible then return false end
+		if node:IsA("LayerCollector") and not node.Enabled then return false end
+		node = node.Parent
+	end
+	return object ~= nil
+end
+
+local function textOf(object)
+	if object:IsA("TextLabel") or object:IsA("TextButton") then return progress.Plain(object.Text) end
+	return ""
+end
+
+local function captionButton(container, caption)
+	-- Some skins place a transparent button over sibling caption labels.
+	for _, object in ipairs(container:GetDescendants()) do
+		if object:IsA("GuiButton") and progress.Visible(object) then
+			if textOf(object) == caption then return object end
+			for _, child in ipairs(object:GetDescendants()) do
+				if textOf(child) == caption then return object end
+			end
+		end
+	end
+	for _, object in ipairs(container:GetDescendants()) do
+		if textOf(object) == caption and progress.Visible(object) and object.Parent then
+			local candidate
+			for _, sibling in ipairs(object.Parent:GetChildren()) do
+				if sibling:IsA("GuiButton") and progress.Visible(sibling) then
+					if candidate then candidate = nil; break end
+					candidate = sibling
+				end
+			end
+			if candidate then return candidate end
+		end
+	end
+end
+
+function progress.Menu(pg, player)
+	if not pg then return nil end
+	local menu, done, stop
+	for _, object in ipairs(pg:GetDescendants()) do
+		if textOf(object) == "Train a Technique" and progress.Visible(object) then
+			local container = object.Parent
+			while container and container ~= pg do
+				done, stop = captionButton(container, "Done"), captionButton(container, "Stop")
+				if done and stop then menu = container; break end
+				container = container.Parent
+			end
+			if menu then break end
+		end
+	end
+	if not menu then return nil end
+	local rows, seen = {}, {}
+	for _, titleObject in ipairs(menu:GetDescendants()) do
+		local title = textOf(titleObject):match("^(.-)%s+[IVX]+$")
+		if not title or title == "" or seen[title] or not progress.Visible(titleObject) then continue end
+		local container, button, detail = titleObject, nil, nil
+		while container and container ~= menu do
+			local objects, titles, candidate, candidateDetail = {container}, 0, nil, nil
+			for _, child in ipairs(container:GetDescendants()) do table.insert(objects, child) end
+			for _, child in ipairs(objects) do
+				local text = textOf(child)
+				if text:match("^(.-)%s+[IVX]+$") then titles += 1 end
+				if text:find("XP", 1, true) then candidateDetail = text end
+				if child:IsA("GuiButton") and child ~= done and child ~= stop and progress.Visible(child) then candidate = candidate or child end
+			end
+			if titles > 1 then break end
+			if candidate then button, detail = candidate, candidateDetail end
+			if button and detail then break end
+			container = container.Parent
+		end
+		seen[title] = true
+		local key = title:gsub("%s+", "_")
+		table.insert(rows, {Key = key, Name = title, Button = button, Position = titleObject.AbsolutePosition,
+			Progress = button and detail and progress.Parse(detail, player:GetAttribute("NenXP_" .. key)), Detail = detail})
+	end
+	table.sort(rows, function(a, b)
+		local pa, pb = a.Position, b.Position
+		if math.abs(pa.Y - pb.Y) > 5 then return pa.Y < pb.Y end
+		return pa.X < pb.X
+	end)
+	return {Root = menu, Done = done, Stop = stop, Rows = rows}
+end
+
+-- Reel shares the cursor/target rail pattern observed in the game's fishing UI.
+-- Discover the visible component instead of assuming its ScreenGui's name.
+function progress.ReelRail(pg)
+	local found
+	for _, object in ipairs(pg and pg:GetDescendants() or {}) do
+		if object.Name == "Rail" and object:IsA("GuiObject") and progress.Visible(object)
+			and object:FindFirstChild("Cursor") and object:FindFirstChild("Target") then
+			if found then return nil end -- Ambiguous UI; do not steer the wrong rail.
+			found = object
+		end
+	end
+	return found
+end
+
+function progress.ReelGeometry(rail)
+	if not rail or not rail.Parent or not progress.Visible(rail) then return nil end
+	local cursor, target = rail:FindFirstChild("Cursor"), rail:FindFirstChild("Target")
+	if not cursor or not target or not progress.Visible(cursor) or not progress.Visible(target) then return nil end
+	local width, origin = rail.AbsoluteSize.X, rail.AbsolutePosition.X
+	if width <= 0 then return nil end
+	local x = (cursor.AbsolutePosition.X + cursor.AbsoluteSize.X * 0.5 - origin) / width
+	local center = (target.AbsolutePosition.X + target.AbsoluteSize.X * 0.5 - origin) / width
+	local half = target.AbsoluteSize.X / width * 0.5
+	if not (x >= -0.05 and x <= 1.05 and center >= 0 and center <= 1 and half > 0 and half < 0.5) then return nil end
+	return x, center, half
+end
+
+function progress.DiagnosticRoots(pg)
+	local roots, seen = {}, {}
+	local function add(root) if root and not seen[root] then seen[root] = true; table.insert(roots, root) end end
+	local menu = progress.Menu(pg, game:GetService("Players").LocalPlayer)
+	if menu then add(menu.Root) end
+	-- Preserve the actual picker tree even if a new skin's button arrangement
+	-- cannot yet be read by Menu(). This avoids another blind manual capture.
+	for _, object in ipairs(pg and pg:GetDescendants() or {}) do
+		if textOf(object) == "Train a Technique" and progress.Visible(object) then
+			add(object:FindFirstAncestorWhichIsA("ScreenGui"))
+		end
+	end
+	for _, root in ipairs(pg and pg:GetChildren() or {}) do
+		local name = root.Name:lower()
+		if name:find("meditat", 1, true) or name:find("reel", 1, true) or name:find("fishing", 1, true)
+			or name:find("technique", 1, true) then add(root) end
+	end
+	local rail = progress.ReelRail(pg)
+	if rail then add(rail.Parent) end
+	return roots
+end
+
+function progress.OpenButton(meditation)
+	if not meditation then return nil end
+	for _, object in ipairs(meditation:GetDescendants()) do
+		if object.Name == "OpenPicker" and object:IsA("GuiButton") and progress.Visible(object) then return object end
+	end
+end
+
+controller.BeyondNenMeditationProgress = progress
+
+end)()
+;(function()
+-- Auto Meditation v2: live minigames and two-minute technique-limit checks.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -2601,6 +2806,7 @@ local GuiService = game:GetService("GuiService")
 local inputManager
 pcall(function() inputManager = game:GetService("VirtualInputManager") end)
 local ui = controller.UI
+local progress = controller.BeyondNenMeditationProgress
 local state = {Enabled = false, Closed = false, Focused = true, Phase = "Off", Hits = 0, Misses = 0, Lines = {}, Epoch = 0}
 local toggle, status
 local path = "AnomalyHub/universal/beyond_nen_automeditation_test.txt"
@@ -2612,11 +2818,34 @@ end
 local function save()
 	if not state.Started or type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	pcall(writefile, path, "BEYOND NEN AUTO MEDITATION v1 // CIRCLES\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n"))
+	pcall(writefile, path, "BEYOND NEN AUTO MEDITATION v2 // TRAINING ROTATION\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n"))
 end
 local function show(message)
 	local text = message .. "\nConfirmed hits: " .. state.Hits .. " | Misses: " .. state.Misses
 	if status.Text ~= text then status.Text = text end
+end
+local function snapshotUI(section, pg)
+	if not progress or type(writefile) ~= "function" then return end
+	local lines, seen, count = {section .. " " .. tostring(os.clock())}, {}, 0
+	for _, root in ipairs(progress.DiagnosticRoots(pg)) do
+		local objects = {root}
+		for _, child in ipairs(root:GetDescendants()) do table.insert(objects, child) end
+		for _, object in ipairs(objects) do
+			if seen[object] then continue end
+			seen[object] = true; count += 1
+			if count > 300 then table.insert(lines, "GUI LIMIT 300"); break end
+			local text = object:GetFullName() .. " " .. object.ClassName
+			if object:IsA("GuiObject") then text ..= " visible=" .. tostring(object.Visible) .. " pos=" .. tostring(object.AbsolutePosition) .. " size=" .. tostring(object.AbsoluteSize) end
+			if object:IsA("LayerCollector") then text ..= " enabled=" .. tostring(object.Enabled) end
+			if object:IsA("TextLabel") or object:IsA("TextButton") then text ..= " text=" .. string.format("%q", object.Text:sub(1, 250)) end
+			table.insert(lines, text)
+		end
+		if count > 300 then break end
+	end
+	state.UIReports[section] = table.concat(lines, "\n")
+	local reports = {"BEYOND NEN AUTO MEDITATION v2 // SCOPED UI"}
+	for _, text in pairs(state.UIReports) do table.insert(reports, text) end
+	pcall(writefile, "AnomalyHub/universal/beyond_nen_automeditation_ui.txt", table.concat(reports, "\n\n"))
 end
 local function release()
 	local held = state.Held
@@ -2631,7 +2860,7 @@ end
 local function stop(reason)
 	state.Enabled = false
 	for _ = 1, 3 do if release() then break end end
-	state.Pending, state.Phase = nil, "Off"
+	state.Pending, state.Phase, state.Check = nil, "Off", nil
 	if state.Unwatch then state.Unwatch(); state.Unwatch = nil end
 	toggle.Text, toggle.BackgroundColor3 = "Auto Meditation: OFF", ui.Colors.Surface
 	show(reason or "Off. Meditation controls returned to you.")
@@ -2668,9 +2897,114 @@ local function obstructed(pg, x, y, target)
 	end
 	return false
 end
+local function clickButton(button, pg)
+	if state.Held or not button or not progress.Visible(button) then return false end
+	local screen = button:FindFirstAncestorWhichIsA("ScreenGui")
+	local inset = screen and screen.IgnoreGuiInset and Vector2.new(0, 0) or GuiService:GetGuiInset()
+	local x = button.AbsolutePosition.X + button.AbsoluteSize.X * 0.5 + inset.X
+	local y = button.AbsolutePosition.Y + button.AbsoluteSize.Y * 0.5 + inset.Y
+	if button.AbsoluteSize.X <= 0 or button.AbsoluteSize.Y <= 0 or obstructed(pg, x, y, button) then
+		show("Move or hide the hub so the training menu can be clicked."); return false
+	end
+	if not pressMouse(x, y, 0.05) then stop("Training-menu mouse input unavailable."); return false end
+	return true
+end
+local function syncTechnique()
+	local technique = player:GetAttribute("MeditationTechnique")
+	if technique ~= state.Technique then
+		release()
+		state.Technique, state.Pending, state.Prompts, state.ResultRequests = technique, nil, {}, {}
+		note("TECHNIQUE " .. tostring(technique))
+	end
+end
+local function trainingCheck(meditation, pg, now)
+	if not progress then return false end
+	local check = state.Check
+	if not check then
+		if now < state.NextCheck or state.Held or (state.Pending and not state.Pending.Resolved and now < state.Pending.Deadline) then return false end
+		check = {Phase = "Opening", Started = now, PollAt = now, NextClick = now, Attempts = 0}
+		state.Check = check; state.Pending = nil
+		note("TRAINING CHECK due after 120 seconds")
+	end
+	if state.Held then return true end
+	if now - check.Started > 20 and not check.Failed and check.Phase ~= "Stopping" then
+		note("TRAINING CHECK could not finish phase=" .. check.Phase); save()
+		check.Failed, check.Phase, check.NextClick = true, "Closing", now
+		show("Training menu did not confirm the check. Closing it before continuing.")
+	end
+	if now < check.PollAt then return true end
+	check.PollAt = now + 0.2
+	local menu = progress.Menu(pg, player)
+	if not check.Captured and (menu or now - check.Started > 3) then check.Captured = true; pcall(snapshotUI, "Training", pg) end
+	if check.Phase == "Closing" and not menu then
+		state.Check, state.NextCheck = nil, now + 120
+		show("Training " .. tostring(state.Technique) .. ". Next limit check in 2 minutes.")
+		note("TRAINING CHECK complete technique=" .. tostring(state.Technique)); save(); return false
+	end
+	if check.Phase == "Stopping" and not menu then return true end
+	if not menu then
+		if check.Phase ~= "Opening" or now < check.NextClick then return true end
+		local open = progress.OpenButton(meditation)
+		if not open then show("Waiting for the green Training button."); return true end
+		if check.Attempts >= 3 then return true end
+		if clickButton(open, pg) then
+			check.Attempts += 1; check.NextClick = now + 3
+			note("OPEN TRAINING attempt=" .. check.Attempts)
+		end
+		return true
+	end
+	if now < check.NextClick then return true end
+	if check.Phase == "Opening" then
+		local action, row = progress.Choose(menu.Rows, state.Technique)
+		for _, item in ipairs(menu.Rows) do
+			local p = item.Progress
+			note("LIMIT " .. item.Key .. (p and string.format(" xp=%.3f limit=%.3f capped=%s mode=%s", p.XP, p.Limit, tostring(p.Capped), tostring(p.Mode)) or " unreadable"))
+		end
+		if action == "Complete" then
+			check.Phase, check.NextClick = "Stopping", now + 2
+			state.AllCapped = true
+			note("ALL AVAILABLE TECHNIQUES CAPPED")
+			if not clickButton(menu.Stop, pg) then check.Phase = "Opening"; state.AllCapped = false end
+		elseif action == "Switch" then
+			check.Phase, check.Target, check.NextClick = "Selecting", row.Key, now + 0.4
+			note("SELECT TECHNIQUE " .. row.Key)
+			if not clickButton(row.Button, pg) then check.Phase = "Opening" end
+		else
+			check.Phase, check.NextClick = "Closing", now + 1.5
+			if action == "Unreadable" then note("LIMITS unreadable; not claiming completion") end
+			if not clickButton(menu.Done, pg) then check.Phase = "Opening" end
+		end
+	elseif check.Phase == "Selecting" then
+		local selected = state.Technique == check.Target
+		for _, row in ipairs(menu.Rows) do
+			if row.Key == check.Target and row.Progress and row.Progress.Training then selected = true end
+		end
+		if selected then
+			check.Phase, check.NextClick = "Closing", now + 1.5
+			if not clickButton(menu.Done, pg) then check.Phase = "Selecting" end
+		else show("Waiting for the game to confirm training " .. tostring(check.Target) .. ".") end
+	elseif check.Phase == "Closing" then
+		check.NextClick = now + 2; clickButton(menu.Done, pg)
+	elseif check.Phase == "Stopping" then
+		check.NextClick = now + 2; clickButton(menu.Stop, pg)
+	end
+	return true
+end
+local function confirmed(pending, result)
+	if not pending or pending.Resolved or type(result) ~= "table" or type(result.hit) ~= "boolean" then return end
+	pending.Resolved = true
+	if result.hit then state.Hits += 1 else state.Misses += 1 end
+	note("CONFIRMED id=" .. tostring(pending.Id) .. " mode=" .. tostring(pending.Mode) .. " hit=" .. tostring(result.hit) .. " gained=" .. tostring(result.gained))
+	if state.Pending == pending then
+		if pending.Mode == "Reel" then release() end
+		state.Pending = nil
+	end
+	show(result.hit and "Hit confirmed." or "Miss confirmed."); save()
+end
 local function beginSession()
 	state.Epoch += 1; state.Pending = nil; state.Prompts, state.ResultRequests = {}, {}
 	state.Phase, state.NextAction, state.Attempts, state.EnterAttempts = "Training", os.clock() + 3, 0, 0
+	state.NextCheck = state.NextCheck or os.clock() + 120
 	note("SESSION START " .. state.Epoch)
 end
 local function observe(name, direction, args, requestStart)
@@ -2683,28 +3017,51 @@ local function observe(name, direction, args, requestStart)
 			show("Meditating. Waiting for a circle.")
 		else state.Phase, state.NextAction = "Idle", os.clock() + 3; note("START rejected") end
 	elseif name == "MeditationStopped" and direction == "IN event" then
-		stop("Meditation ended. Enable again when ready.")
+		stop(state.AllCapped and "All available techniques reached their limits. Meditation finished." or "Meditation ended. Enable again when ready.")
+	elseif name == "SetPicking" and direction:sub(1, 3) == "OUT" then
+		state.Picking = args[1] == true
+		if state.Picking then release(); state.Pending = nil end
+		note("PICKING " .. tostring(state.Picking))
 	elseif name == "GamePrompt" and direction == "IN event" then
 		local id, mode, data = args[1], args[2], args[3]
+		syncTechnique()
 		if id ~= nil and state.Prompts[id] then return end
-		if mode ~= "Circles" then
+		if mode ~= "Circles" and mode ~= "Reel" then
+			release()
 			state.Pending = nil; show("Unmapped meditation mode: " .. tostring(mode) .. ". Record this mode before automating it.")
 			note("UNSUPPORTED " .. tostring(mode)); return
 		end
 		if (type(id) ~= "number" and type(id) ~= "string") or (type(id) == "number" and id ~= id)
 			or type(data) ~= "table" or type(data.Window) ~= "number" or data.Window ~= data.Window
-			or data.Window < 0.2 or data.Window > 5 or type(data.X) ~= "number" or type(data.Y) ~= "number"
-			or not (data.X >= 0 and data.X <= 1 and data.Y >= 0 and data.Y <= 1) then return end
+			or data.Window < 0.2 or data.Window > 5 then return end
+		if mode == "Circles" then
+			if type(data.X) ~= "number" or type(data.Y) ~= "number"
+				or not (data.X >= 0 and data.X <= 1 and data.Y >= 0 and data.Y <= 1) then return end
+		elseif type(data.Goals) ~= "table" or #data.Goals == 0 or #data.Goals > 16 then return end
+		if mode == "Reel" then
+			for _, goal in ipairs(data.Goals) do if type(goal) ~= "number" or not (goal >= 0 and goal <= 1) then return end end
+		end
+		release()
 		state.Phase = "Training"
-		state.Pending = {Id = id, Born = os.clock(), Window = data.Window, X = data.X, Y = data.Y, Sent = false}
+		state.Pending = {Id = id, Mode = mode, Born = os.clock(), Window = data.Window, X = data.X, Y = data.Y, Sent = false,
+			Deadline = os.clock() + (mode == "Reel" and 45 or data.Window + 1)}
 		for oldId, prompt in pairs(state.Prompts) do
-			if os.clock() - prompt.Born > 30 then state.Prompts[oldId] = nil end
+			if os.clock() - prompt.Born > 60 then state.Prompts[oldId] = nil end
 		end
 		for started in pairs(state.ResultRequests) do
 			if os.clock() - started > 30 then state.ResultRequests[started] = nil end
 		end
 		state.Prompts[id] = state.Pending
-		note(string.format("PROMPT id=%s mode=Circles window=%.3f x=%.3f y=%.3f", tostring(id), data.Window, data.X, data.Y))
+		note(string.format("PROMPT id=%s mode=%s window=%.3f", tostring(id), mode, data.Window))
+	elseif name == "GameInput" and direction:sub(1, 3) == "OUT" then
+		local pending = state.Pending
+		if pending and pending.Mode == "Reel" and args[1] == pending.Id then
+			pending.ObservedInputs = (pending.ObservedInputs or 0) + 1
+			note("REEL INPUT id=" .. tostring(args[1]) .. " held=" .. tostring(args[2]))
+		end
+	elseif name == "GameResult" and direction == "IN event" then
+		local pending = args[1] ~= nil and state.Prompts[args[1]]
+		if pending and pending.Mode == "Reel" and requestStart >= pending.Born then confirmed(pending, args[2]) end
 	elseif name == "KeyPromptResult" and direction:sub(1, 3) == "OUT" then
 		local pending = args[1] ~= nil and state.Prompts[args[1]]
 		if pending and requestStart >= pending.Born then
@@ -2715,17 +3072,11 @@ local function observe(name, direction, args, requestStart)
 	elseif name == "KeyPromptResult" and direction:sub(1, 6) == "RETURN" then
 		local pending, result = state.ResultRequests[requestStart], args[1]
 		state.ResultRequests[requestStart] = nil
-		if pending and not pending.Resolved and type(result) == "table" and type(result.hit) == "boolean" then
-			pending.Resolved = true
-			if result.hit then state.Hits += 1 else state.Misses += 1 end
-			note("CONFIRMED id=" .. tostring(pending.Id) .. " hit=" .. tostring(result.hit) .. " gained=" .. tostring(result.gained))
-			if state.Pending == pending then state.Pending = nil end
-			show(result.hit and "Hit confirmed." or "Miss confirmed."); save()
-		end
+		confirmed(pending, result)
 	end
 end
 
-local card = ui.Card(ui.Pages.Auto, "AUTO MEDITATION // v1", "Uses your Meditation Mat and times Circles prompts. Keep circles clear of the hub or hide it with Right Alt.", 218)
+local card = ui.Card(ui.Pages.Auto, "AUTO MEDITATION // v2", "Checks technique limits every 2 minutes and switches when capped. Keep the game controls clear, or hide the hub with Right Alt.", 218)
 card.LayoutOrder = 20
 status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
@@ -2741,11 +3092,65 @@ local function enable(value)
 	state.Hits, state.Misses, state.Lines, state.Prompts, state.ResultRequests = 0, 0, {}, {}, {}
 	state.Pending, state.Character, state.GroundPoint = nil, player.Character, nil
 	state.EnabledAt, state.NextAction, state.Attempts, state.EnterAttempts = os.clock(), os.clock() + 0.8, 0, 0
+	state.Check, state.NextCheck, state.AllCapped = nil, os.clock() + 120, false
+	state.Picking, state.UIReports = false, {}
+	state.Technique = player:GetAttribute("MeditationTechnique")
 	state.Unwatch = controller.WatchBeyondNenMeditation(observe)
 	toggle.Text, toggle.BackgroundColor3 = "Auto Meditation: ON", ui.Colors.AccentSoft
 	show("Preparing your mat. Stay nearby while meditation starts."); note("ENABLED"); save()
 end
 toggle = ui.FitColumn(ui.Button(card, "Auto Meditation: OFF", 0, 0, 180, function() enable(not state.Enabled) end), 0, 72)
+
+local function reelStep(pending, pg, now)
+	local x, center, half = progress.ReelGeometry(pending.Rail)
+	if not x and now >= (pending.NextScan or 0) then
+		pending.NextScan = now + 0.5
+		pending.Rail = progress.ReelRail(pg)
+		x, center, half = progress.ReelGeometry(pending.Rail)
+	end
+	if not pending.Captured and (x or now - pending.Born > 1) then
+		pending.Captured = true; pcall(snapshotUI, "Reel", pg)
+	end
+	if not x then
+		if state.Held and state.Held.Reel then release() end
+		pending.LastTime, pending.LastX = nil, nil
+		show("Waiting for the visible Reel cursor and target. UI details are saved automatically.")
+		return
+	end
+	if not pending.LoggedRail then
+		pending.LoggedRail = true; note("REEL RAIL " .. pending.Rail:GetFullName())
+	end
+	local dt = pending.LastTime and now - pending.LastTime
+	local velocity = dt and dt > 0 and dt < 0.2 and math.clamp((x - pending.LastX) / dt, -2, 2) or 0
+	pending.LastX, pending.LastTime = x, now
+	local prediction, band = x + velocity * 0.075, math.clamp(half * 0.32, 0.004, 0.018)
+	local held = state.Held and state.Held.Reel == true or false
+	local down = held
+	if prediction > center + band then down = false elseif prediction < center - band then down = true end
+	if down ~= held and now - (pending.ChangedAt or 0) >= 0.045 then
+		local ok
+		if down then
+			local camera = Workspace.CurrentCamera
+			local size = camera and camera.ViewportSize
+			if not size then return end
+			local px, py
+			for _, point in ipairs({{size.X - 8, size.Y - 8}, {8, size.Y - 8}, {size.X - 8, size.Y * 0.5}, {8, size.Y * 0.5}}) do
+				if not obstructed(pg, point[1], point[2]) then px, py = point[1], point[2]; break end
+			end
+			if not px then show("Move or hide the hub to leave a clear mouse-input spot for Reel."); return end
+			ok = pressMouse(px, py, math.huge)
+			if ok and state.Held then state.Held.Reel = true end
+		else ok = release() end
+		if not ok then stop("Reel mouse input unavailable."); return end
+		pending.ChangedAt = now
+	end
+	if now - (pending.LastSample or 0) >= 1 then
+		pending.LastSample = now
+		note(string.format("REEL TRACK id=%s x=%.3f target=%.3f half=%.3f velocity=%.3f held=%s observedInputs=%d",
+			tostring(pending.Id), x, center, half, velocity, tostring(state.Held ~= nil), pending.ObservedInputs or 0))
+	end
+	show("Training " .. tostring(state.Technique) .. " · Reel")
+end
 
 local function step()
 	local now = os.clock()
@@ -2760,12 +3165,21 @@ local function step()
 	if character ~= state.Character or not root or not humanoid or humanoid.Health <= 0 then stop("Character changed or unavailable."); return end
 	if GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then release(); show("Close Roblox's chat/menu to continue."); return end
 	local meditation, active, pg = gui()
+	if state.AllCapped and not active and not state.Held then stop("All available techniques reached their limits. Meditation finished."); return end
+	if state.Picking and not state.Check then release(); show("Training menu open. Close it with Done to continue."); return end
+	if active or state.Check then
+		syncTechnique()
+		if trainingCheck(meditation, pg, now) then return end
+	end
 	if active then
 		if state.Phase ~= "Training" then state.Phase, state.Attempts = "Training", 0 end
 		local pending = state.Pending
 		if not pending then return end
 		local age = now - pending.Born
-		if age > pending.Window + 1 then state.Pending = nil; note("PROMPT ended without a returned result"); return end
+		if now > pending.Deadline then
+			release(); state.Pending = nil; note("PROMPT ended without a returned result mode=" .. tostring(pending.Mode)); return
+		end
+		if pending.Mode == "Reel" then reelStep(pending, pg, now); return end
 		if pending.Sent or pending.Responded or state.Held then return end
 		local circle, approach = meditation:FindFirstChild("AuraCircle"), meditation:FindFirstChild("AuraCircleApproach")
 		if not circle or not approach or not circle.Visible or not approach.Visible or circle.AbsoluteSize.X <= 0 then return end
@@ -2783,6 +3197,7 @@ local function step()
 		if not pressMouse(x, y, 0.035) then stop("Meditation mouse input unavailable.") end
 		return
 	end
+	if state.Held and state.Held.Reel then release() end
 	if state.Held or now < state.NextAction then return end
 	if state.Phase == "Training" then state.Pending = nil; state.Phase = "Idle" end
 	local parts = Workspace:FindFirstChild("MeditationParts")

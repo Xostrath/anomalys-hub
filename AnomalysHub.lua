@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v14. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v15. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3169,11 +3169,13 @@ local weaponProfiles = {
 	}},
 	foxbear = {Label = "Fox Bear", Reach = 13, MaxDistance = 16, Animations = {
 		-- Explicit Character.Weapon="Fox Bear" in v10, independent of actor name.
-		-- v12 confirms 13 automatic parries across strikes A-D. Strike E still
-		-- needs confirmation. Keep successful phases separate from skill timings.
+		-- v13 confirms all five strikes and two extended-skill contacts.
+		-- Keep successful phases separate from skill timings.
 		-- Strike A hit at 13.99 studs after projected distance 14.11 was skipped;
 		-- extend only this strike's reach, retaining facing/elevation checks.
-		["109115837378623"] = {Phase = .62, Reach = 15, Name = "Fox Bear strike A"},
+		-- Two v13 runs also hit after facing rejected this strike (-.194/-.028
+		-- at damage; -.344 at an earlier skip). Relax only this strike's facing.
+		["109115837378623"] = {Phase = .62, Reach = 15, MinFacing = -.4, Name = "Fox Bear strike A"},
 		["120428998246938"] = {Phase = .48, Name = "Fox Bear strike B (test)"},
 		["81775052619110"] = {Phase = .40, Name = "Fox Bear strike C (test)"},
 		["114094657247629"] = {Phase = .40, Name = "Fox Bear strike D (test)"},
@@ -3186,11 +3188,16 @@ local weaponProfiles = {
 		-- v12 records five contacts at 1.442/1.896/2.246/2.821/3.712, up to
 		-- 13.15 studs. v10 corroborates 1.871/3.708 and elapsed first/fourth
 		-- contacts, but exact move names and automatic outcomes remain unknown.
-		["109000405251112"] = {Phases = {1.42, 1.86, 2.22, 2.79, 3.68}, Reach = 15, MaxDistance = 18, Name = "Fox Bear extended skill (test)"},
+		-- v13 follow-up damage at16.88/18.73 studs corroborates the range miss;
+		-- the old projected15/current18 bounds excluded these contacts.
+		["109000405251112"] = {Phases = {1.42, 1.86, 2.22, 2.79, 3.68}, Reach = 20, MaxDistance = 23, Name = "Fox Bear extended skill (test)"},
 		-- Two v12 runs show 44.85 damage at phases 2.021/2.000/2.004 from
 		-- 8.46/34.73/43.05 studs. Separate range/timing seed; the exact skill,
 		-- targeting shape and whether it can be parried remain unverified.
 		["139886760981001"] = {Phase = 1.98, Reach = 45, MaxDistance = 48, Name = "Fox Bear ranged skill (test)"},
+		-- Three health drops at2.637/2.654/2.654, up to26.47 studs. Exact
+		-- skill and parryability unknown; facing checks may still miss its side hits.
+		["97452490480378"] = {Phase = 2.60, Reach = 28, MaxDistance = 32, Name = "Fox Bear additional skill (test)"},
 	}},
 	bat = {Label = "Jager's Bat (recorded)", Reach = 11, MaxDistance = 14, Animations = {
 		-- Two v12 runs show Tool.WeaponName="Jager's Bat" while the player's
@@ -3261,7 +3268,7 @@ for _, key in ipairs({"sword", "dagger", "bat"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v14", "Jager's Bat: five strikes and one multi-hit skill added for testing. Recognizes its recorded animations when the game reports Fists.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v15", "Bear reach/side-hit adjustments and another skill. Testing a brief wait during your own opening Fists punch.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3274,11 +3281,12 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v14 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v15 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and three skills with eight/five/one contact seeds. Pitchfork has a four-contact move; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
-		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger/bat IDs select their profile per swing. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Bat 11; Fox Bear 13 (strike A/extended skill 15, rapid skill 19, ranged skill 45); Dagger repeated strike 18 and long-windup strike 13."
+		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Pitchfork has a four-contact move; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
+		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger/bat IDs select their profile per swing. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Bat 11; Fox Bear 13 (strike A15, extended20, rapid19, ranged45, additional28); Dagger repeated strike18 and long-windup13. Fox Bear strike A uses facing minimum -.4; other directional attacks retain .15."
+		.. "\nLOCAL_RECOVERY: experimental defer for own active first-Fists animation72916536471630 below phase.32. v13 missing requests occur at.089-.280; an observed request occurs at.331. This is not a proven game lock boundary. No action is cancelled; waiting does not consume the incoming contact, and expired contacts are skipped normally."
 		.. "\nBat timings are initial seeds from v12 health-drop samples. Its multi-hit skill may contain additional contacts; no complete-move coverage or automatic success is assumed."
 		.. "\nFox Bear skill contacts retain normal input backoff, game cooldowns, facing and elevation checks. Known animation phases do not establish whether every skill contact is parryable."
 		.. "\nDagger 78084477149043 follow-ups use current distance within 9 studs regardless of facing/projection; its first contact retains directional checks. This test rule is not a measured hitbox."
@@ -3592,6 +3600,20 @@ local function feedback(name, direction, args, started)
 		else note("UNMATCHED_PARRY_RESULT id=" .. tostring(id)) end
 	end
 end
+local function openingPunchRecovery(model)
+	-- Test only the exact local animation with repeated early-phase missing
+	-- requests. Later punches, unknown skills and paused tracks are not gated.
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+	if not animator then return end
+	for index, track in ipairs(animator:GetPlayingAnimationTracks()) do
+		if index > 12 then break end
+		if track.IsPlaying and not track.Looped and track.Speed > 0 and track.TimePosition < .32 then
+			local id = track.Animation and tostring(track.Animation.AnimationId):match("%d+")
+			if id == "72916536471630" then return track end
+		end
+	end
+end
 local function step()
 	local now = os.clock()
 	if state.Held and (now >= state.Held.Until or not state.Enabled) and not release() then
@@ -3640,7 +3662,6 @@ local function step()
 		gate(now < state.Backoff and "input-backoff" or (model:GetAttribute("ParryOnCooldown") == true and "parry-cooldown" or "block-cooldown"))
 		show("Waiting for block cooldown"); return
 	end
-	gate("ready")
 	local best
 	for _, rig in pairs(state.Rigs) do
 		local root = alive(rig.Model)
@@ -3669,7 +3690,7 @@ local function step()
 			local projected = delta + (localRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity) * math.max(0, remaining)
 			local facingDot = distance < 1 and 1 or root.CFrame.LookVector:Dot(delta.Unit)
 			local radialFollowup = contact > 1 and profile.FollowupRadius
-			local geometryOk = distance <= (profile.MaxDistance or weapon.MaxDistance or 12) and projected.Magnitude <= (profile.Reach or weapon.Reach or 9) and facingDot >= .15
+			local geometryOk = distance <= (profile.MaxDistance or weapon.MaxDistance or 12) and projected.Magnitude <= (profile.Reach or weapon.Reach or 9) and facingDot >= (profile.MinFacing or .15)
 			if radialFollowup then geometryOk = distance <= radialFollowup end
 			if geometryOk and math.abs(delta.Y) <= 8 then
 				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1} end
@@ -3679,7 +3700,15 @@ local function step()
 			end
 		end
 	end
-	if not best then show("Watching mapped Fists / Pitchfork / BigPitchfork / Sword / Dagger / Bat / Fox Bear attacks"); return end
+	if not best then gate("ready"); show("Watching mapped Fists / Pitchfork / BigPitchfork / Sword / Dagger / Bat / Fox Bear attacks"); return end
+	local recovery = openingPunchRecovery(model)
+	if recovery then
+		if state.Gate ~= "local-first-punch-recovery" then
+			note(string.format("LOCAL_RECOVERY animation=72916536471630 phase=%.3f speed=%.3f estimatedWait=%.3f enemy=%s contact=%d", recovery.TimePosition, recovery.Speed, (.32 - recovery.TimePosition) / recovery.Speed, best.Swing.Asset, best.Contact))
+		end
+		gate("local-first-punch-recovery"); show("Waiting for your opening punch to recover (test)"); return
+	end
+	gate("ready")
 	best.Swing.Contact = best.Contact + 1
 	best.Swing.Used = best.Contact >= best.ContactCount
 	state.LastAttempt = {At = now, Key = key, Self = model, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
@@ -3709,7 +3738,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger,Bat,FoxBear mappedWeaponAnimations=56 duration=90")
+	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger,Bat,FoxBear mappedWeaponAnimations=57 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

@@ -748,9 +748,11 @@ local function updateEsp(target, localRoot)
 			create("UICorner", {CornerRadius = UDim.new(0, 3)}, fill)
 			return {Background = background, Fill = fill}
 		end
-		entry.Health = makeResourceBar("Health", -21, Color3.fromRGB(239, 55, 62))
-		entry.Energy = makeResourceBar("Energy", -12, Color3.fromRGB(48, 145, 255))
-		entry.Stamina = makeResourceBar("Stamina", -3, Color3.fromRGB(255, 205, 75))
+		-- Keep the resource bars outside the white body box: health nearest,
+		-- followed by energy and stamina with a two-pixel gap between bars.
+		entry.Health = makeResourceBar("Health", 9, Color3.fromRGB(239, 55, 62))
+		entry.Energy = makeResourceBar("Energy", 18, Color3.fromRGB(48, 145, 255))
+		entry.Stamina = makeResourceBar("Stamina", 27, Color3.fromRGB(255, 205, 75))
 		state.EspEntries[target] = entry
 	end
 	local extra = nil

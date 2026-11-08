@@ -411,7 +411,7 @@ local playerCountLabel = create("TextLabel", {
 	Position = UDim2.fromOffset(14, 318), Size = UDim2.new(1, -28, 0, 22), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "", TextColor3 = colors.Muted, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
 }, playerCard)
-local selectedCard = card(pages.Players, "SPECTATE v2", "Click a name above to follow them. Stop View returns to your character.", 172)
+local selectedCard = card(pages.Players, "SPECTATE v3", "Click a name to watch. Hold right mouse to orbit; scroll to zoom. Stop View returns.", 172)
 local selectedLabel = create("TextLabel", {
 	Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 42), BackgroundTransparency = 1,
 	Font = Enum.Font.GothamSemibold, Text = "No player selected", TextColor3 = colors.Text, TextSize = 11,
@@ -422,87 +422,21 @@ local function refreshSpectateStatus()
 	local selected = state.SelectedPlayer
 	local viewing = state.SpectateTarget
 	selectedLabel.Text = (selected and ("Selected: " .. selected.DisplayName) or "No player selected")
-		.. "\n" .. (viewing and ((state.SpectateWaiting and "Waiting for character: " or "Viewing: ") .. viewing.DisplayName)
+		.. "\n" .. (state.SpectateError or (viewing and ((state.SpectateWaiting and "Waiting for character: " or "Viewing: ") .. viewing.DisplayName)
 			or (state.SpectateReturning and "Waiting for your character" or "Viewing your character"))
-end
-
-local spectateStepName = "AnomalyUniversalSpectate"
-local spectateBound, spectateCamera, spectateHumanoid = false, nil, nil
-local updateSpectating
-
-local function bindSpectateCamera(enabled)
-	if enabled == spectateBound then return end
-	spectateBound = enabled
-	if enabled then
-		-- Set the subject before Roblox's camera update so normal orbit/zoom still work.
-		RunService:BindToRenderStep(spectateStepName, Enum.RenderPriority.Camera.Value - 1, function()
-			if not unloaded then updateSpectating() end
-		end)
-	else
-		RunService:UnbindFromRenderStep(spectateStepName)
-	end
-end
-
-local function followSpectateCharacter(target)
-	local character = target.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local root = character and (character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head"))
-	local camera = workspace.CurrentCamera
-	if not camera or not humanoid or humanoid.Health <= 0 or not root or not root:IsA("BasePart")
-		or not character:IsDescendantOf(workspace) then return false end
-	if camera.CameraType ~= Enum.CameraType.Custom then camera.CameraType = Enum.CameraType.Custom end
-	if camera.CameraSubject ~= humanoid then camera.CameraSubject = humanoid end
-	if camera ~= spectateCamera or humanoid ~= spectateHumanoid then
-		-- Move immediately on acquisition/respawn; subsequent frames leave orbit and zoom alone.
-		local focus = root.Position + Vector3.new(0, 2, 0)
-		camera.CFrame = CFrame.lookAt(focus + Vector3.new(0, 4, 12), focus)
-		camera.Focus = CFrame.new(focus)
-		spectateCamera, spectateHumanoid = camera, humanoid
-	end
-	return true
+		)
 end
 
 local function stopSpectating()
-	local active = state.SpectateTarget ~= nil or state.SpectateReturning == true
-	state.SpectateTarget, state.SpectateWaiting = nil, false
-	state.SpectateReturning = active and not followSpectateCharacter(player)
-	if unloaded and active and workspace.CurrentCamera then
-		-- Roblox will attach to the local Humanoid when a pending respawn finishes.
-		workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
-	end
-	bindSpectateCamera(state.SpectateReturning and not unloaded)
-	spectateCamera, spectateHumanoid = nil, nil
+	if state.Spectator then state.Spectator.Stop() end
 	refreshSpectateStatus()
-end
-
-updateSpectating = function()
-	local target = state.SpectateTarget
-	if not target then
-		if state.SpectateReturning and followSpectateCharacter(player) then
-			state.SpectateReturning = false
-			bindSpectateCamera(false)
-			spectateCamera, spectateHumanoid = nil, nil
-			refreshSpectateStatus()
-		end
-		return
-	end
-	if target.Parent ~= Players then stopSpectating(); return end
-	local waiting = not followSpectateCharacter(target)
-	if waiting then followSpectateCharacter(player) end
-	if state.SpectateWaiting ~= waiting then
-		state.SpectateWaiting = waiting
-		refreshSpectateStatus()
-	end
 end
 
 local function spectateSelected()
 	if unloaded then return end
 	local target = state.SelectedPlayer
 	if not target or target == player or target.Parent ~= Players then stopSpectating(); return end
-	state.SpectateTarget = target
-	state.SpectateReturning = false
-	bindSpectateCamera(true)
-	updateSpectating()
+	if state.Spectator then state.Spectator.Start(target, "hub") end
 	refreshSpectateStatus()
 end
 
@@ -739,6 +673,7 @@ controller.UI = {
 }
 controller.State = state
 controller.Connect = connect
+controller.RefreshSpectateStatus = refreshSpectateStatus
 
 -- Profiles can name a replicated character-health attribute. Otherwise use
 -- the live Humanoid. Neither path reads cached saves or inventory preview rigs.
@@ -1083,6 +1018,198 @@ selectTab("Home")
 print("[Anomaly] Universal profile loaded", game.GameId, game.PlaceId)
 
 end)()
+;(function()
+-- Spectate v3: own the rendered view instead of relying on a game's camera scripts.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" then return end
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Input = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+local player, state = Players.LocalPlayer, controller.State
+local stepName = "AnomalyUniversalSpectate"
+local closed, bound, dragging = false, false, false
+local saved, savedMouse, lastCamera, lastFrame, lastCharacter
+local yaw, pitch, distance = 0, math.rad(18), 14
+local lines, dirty, sampleAt, saveAt = {}, false, 0, 0
+local function note(text)
+	if #lines >= 120 then table.remove(lines, 1) end
+	table.insert(lines, string.format("%.3f %s", os.clock(), text))
+	dirty = true
+end
+local function save()
+	if not dirty or type(writefile) ~= "function" then return end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	local ok = pcall(writefile, "AnomalyHub/universal/spectate_test.txt",
+		"ANOMALY SPECTATE v3 // LOCAL CAMERA AND CLICK DIAGNOSTICS\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(lines, "\n"))
+	if ok then dirty = false end
+end
+local function refresh() controller.RefreshSpectateStatus() end
+local function body(target)
+	local character = target and target.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and (character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head"))
+	if not character or not character:IsDescendantOf(workspace) or not humanoid or humanoid.Health <= 0
+		or not root or not root:IsA("BasePart") then return end
+	return character, humanoid, root
+end
+local function releaseMouse()
+	dragging = false
+	if savedMouse ~= nil then Input.MouseBehavior = savedMouse; savedMouse = nil end
+end
+local function restore()
+	local camera = workspace.CurrentCamera
+	if not saved or not camera then return not saved end
+	local _, humanoid, root = body(player)
+	local subject = humanoid or (saved.Subject and saved.Subject.Parent and saved.Subject)
+	if subject then camera.CameraSubject = subject end
+	camera.CameraType = saved.Type
+	if root then
+		local focus = root.Position + Vector3.new(0, 2, 0)
+		local offset = saved.Frame.Position - saved.Focus.Position
+		if offset.Magnitude < 3 or offset.Magnitude > 60 then offset = Vector3.new(0, 4, 12) end
+		camera.CFrame, camera.Focus = CFrame.lookAt(focus + offset, focus), CFrame.new(focus)
+	else
+		camera.CFrame, camera.Focus = saved.Frame, saved.Focus
+	end
+	return humanoid ~= nil
+end
+local function unbind()
+	if bound then RunService:UnbindFromRenderStep(stepName); bound = false end
+end
+local spectator = {}
+function spectator.Stop(reason)
+	state.SpectateTarget, state.SpectateWaiting, state.SpectateError = nil, false, nil
+	releaseMouse()
+	state.SpectateReturning = saved ~= nil and not restore()
+	if not state.SpectateReturning or closed or controller.IsUnloaded() then
+		unbind(); saved = nil; state.SpectateReturning = false
+	end
+	lastCamera, lastFrame, lastCharacter = nil, nil, nil
+	note("STOP " .. tostring(reason or "user")); save(); refresh()
+end
+local collision = RaycastParams.new()
+collision.FilterType = Enum.RaycastFilterType.Exclude
+collision.IgnoreWater = true
+local function update()
+	if closed or controller.IsUnloaded() then return end
+	local target = state.SpectateTarget
+	if not target then
+		if state.SpectateReturning and restore() then
+			state.SpectateReturning = false; saved = nil; unbind(); refresh()
+		end
+		return
+	end
+	if target.Parent ~= Players then spectator.Stop("player left"); return end
+	local camera = workspace.CurrentCamera
+	local character, humanoid, root = body(target)
+	if not camera or not root then
+		if not state.SpectateWaiting then
+			state.SpectateWaiting = true; releaseMouse(); restore()
+			note("WAIT " .. target.Name .. " camera=" .. tostring(camera ~= nil) .. " body=" .. tostring(root ~= nil)); refresh()
+		end
+		lastCamera, lastFrame, lastCharacter = nil, nil, nil
+		return
+	end
+	if not saved then
+		saved = {Type = camera.CameraType, Subject = camera.CameraSubject, Frame = camera.CFrame, Focus = camera.Focus}
+	end
+	if state.SpectateWaiting then state.SpectateWaiting = false; refresh() end
+	local now = os.clock()
+	if now >= sampleAt then
+		sampleAt = now + 2
+		local overwritten = lastCamera == camera and lastFrame and (camera.CFrame.Position - lastFrame.Position).Magnitude > .1
+		note("FOLLOW " .. target.Name .. " cameraBefore=" .. tostring(camera.CameraType) .. " overwritten=" .. tostring(overwritten == true)
+			.. " root=" .. tostring(root.Position))
+	end
+	if character ~= lastCharacter or camera ~= lastCamera then note("ACQUIRE " .. target.Name .. " " .. character:GetFullName()) end
+	local focus = root.Position + Vector3.new(0, 2, 0)
+	local offset = Vector3.new(math.sin(yaw) * math.cos(pitch), math.sin(pitch), math.cos(yaw) * math.cos(pitch)) * distance
+	collision.FilterDescendantsInstances = player.Character and {character, player.Character} or {character}
+	local hit = workspace:Raycast(focus, offset, collision)
+	if hit then offset = offset.Unit * math.max(.5, hit.Distance - .5) end
+	-- Runs after the usual camera scripts, writing both position and focus every frame.
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.CameraSubject = humanoid
+	camera.CFrame, camera.Focus = CFrame.lookAt(focus + offset, focus), CFrame.new(focus)
+	lastCamera, lastFrame, lastCharacter = camera, camera.CFrame, character
+end
+local function safeUpdate()
+	local ok, err = pcall(update)
+	if not ok then
+		spectator.Stop("camera error")
+		state.SpectateError = "Camera error saved to spectate_test.txt"
+		note("ERROR " .. tostring(err)); save(); refresh()
+	end
+end
+function spectator.Start(target, source)
+	if closed or controller.IsUnloaded() then return false end
+	if not target or target == player then spectator.Stop(); return false end
+	if target.Parent ~= Players then note("REJECT departed player"); return false end
+	state.SelectedPlayer, state.SpectateTarget = target, target
+	state.SpectateReturning, state.SpectateError = false, nil
+	note("START " .. target.Name .. " source=" .. tostring(source or "hub")); sampleAt = 0
+	if not bound then
+		RunService:BindToRenderStep(stepName, Enum.RenderPriority.Last.Value + 1, safeUpdate)
+		bound = true
+	end
+	safeUpdate(); refresh(); save()
+	return state.SpectateTarget == target
+end
+function controller.ToggleSpectatePlayer(target, source)
+	if closed or controller.IsUnloaded() or not target then return false end
+	if target == player or target == state.SpectateTarget then spectator.Stop(source)
+	else spectator.Start(target, source) end
+	if state.RefreshPlayers then state.RefreshPlayers() end
+	return true
+end
+controller.SpectateTrace = note
+state.Spectator = spectator
+
+local function pointerOnUI(position)
+	local pg = player:FindFirstChildOfClass("PlayerGui")
+	if not pg then return false end
+	local inset = GuiService:GetGuiInset()
+	for _, object in ipairs(pg:GetGuiObjectsAtPosition(position.X - inset.X, position.Y - inset.Y)) do
+		if object == controller.UI.Window or object:IsDescendantOf(controller.UI.Window) then return true end
+		local node = object
+		while node and node ~= pg do
+			if node.Name == "Leaderboard" and node.Parent == pg then return true end
+			if node:IsA("GuiObject") and (node:IsA("GuiButton") or node:IsA("ScrollingFrame") or node.Active) then return true end
+			node = node.Parent
+		end
+	end
+	return false
+end
+controller.Connect(Input.InputBegan, function(input, processed)
+	if closed or processed or not state.SpectateTarget or state.SpectateWaiting or Input:GetFocusedTextBox() then return end
+	if input.UserInputType == Enum.UserInputType.MouseButton2 and not pointerOnUI(input.Position) then
+		savedMouse = Input.MouseBehavior; dragging = true; Input.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+	end
+end)
+controller.Connect(Input.InputChanged, function(input, processed)
+	if closed or not state.SpectateTarget or state.SpectateWaiting or Input:GetFocusedTextBox() then releaseMouse(); return end
+	if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then
+		yaw -= input.Delta.X * .006; pitch = math.clamp(pitch + input.Delta.Y * .006, math.rad(-70), math.rad(80))
+	elseif input.UserInputType == Enum.UserInputType.MouseWheel and not processed and not pointerOnUI(Input:GetMouseLocation()) then
+		distance = math.clamp(distance * math.exp(-input.Position.Z * .12), 3, 100)
+	end
+end)
+controller.Connect(Input.InputEnded, function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton2 then releaseMouse() end
+end)
+controller.Connect(Input.WindowFocusReleased, releaseMouse)
+controller.Connect(RunService.Heartbeat, function()
+	if dirty and os.clock() >= saveAt then saveAt = os.clock() + 2; save() end
+end)
+controller.RegisterCleanup(function()
+	closed = true; spectator.Stop("unload"); unbind()
+	if state.Spectator == spectator then state.Spectator = nil end
+end)
+note("READY v3"); save()
+
+end)()
 if anomalyProfile == 'BeyondNen' then
 (function()
 -- Beyond Nen profile adapter
@@ -1281,6 +1408,88 @@ if type(ui) == "table" and ui.Pages and ui.Pages.Settings and type(ui.Card) == "
 end
 
 print("[Anomaly] Beyond Nen adapter loaded")
+
+end)()
+;(function()
+-- Native leaderboard rows observed in beyond_nen_esp_state.txt:
+-- PlayerGui.Leaderboard.PlayerList.PlayerScroller.Tab.<rank>.<account name>.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local Players = game:GetService("Players")
+local Input = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+local player, pending, closed = Players.LocalPlayer, {}, false
+local function note(message) if controller.SpectateTrace then controller.SpectateTrace(message) end end
+local function visible(object, pg)
+	local node = object
+	while node and node ~= pg do
+		if node:IsA("GuiObject") and not node.Visible then return false end
+		if node:IsA("LayerCollector") and not node.Enabled then return false end
+		node = node.Parent
+	end
+	return node == pg
+end
+local function resolveRow(object, pg)
+	local node = object
+	for _ = 1, 12 do
+		if not node or node == pg then return end
+		local rank = node.Parent
+		local tab = rank and rank.Parent
+		local scroller = tab and tab.Parent
+		local list = scroller and scroller.Parent
+		local board = list and list.Parent
+		if tab and tab.Name == "Tab" and scroller and scroller.Name == "PlayerScroller"
+			and list and list.Name == "PlayerList" and board and board.Name == "Leaderboard" and board.Parent == pg then
+			local target = Players:FindFirstChild(node.Name)
+			if target and target:IsA("Player") and node:IsA("GuiObject") and visible(node, pg) then return target, node end
+			return
+		end
+		node = node.Parent
+	end
+end
+local function hit(position)
+	local pg = player:FindFirstChildOfClass("PlayerGui")
+	if not pg then return end
+	local board = pg:FindFirstChild("Leaderboard")
+	if not board then return end
+	local inset = GuiService:GetGuiInset()
+	for _, object in ipairs(pg:GetGuiObjectsAtPosition(position.X - inset.X, position.Y - inset.Y)) do
+		if not visible(object, pg) then continue end
+		if object == board or object:IsDescendantOf(board) then
+			local target, row = resolveRow(object, pg)
+			if target then return target, row end
+			if object:IsA("GuiButton") or (object:IsA("GuiObject") and object.Active) then return end
+		elseif object:IsA("GuiObject") and (object == controller.UI.Window or object:IsDescendantOf(controller.UI.Window)
+			or object:IsA("GuiButton") or object.Active or object.BackgroundTransparency < .99) then
+			return -- A dialog or the hub is above the row. Never click through it.
+		end
+	end
+end
+local function mouseButton(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2
+end
+controller.Connect(Input.InputBegan, function(input)
+	if closed or not mouseButton(input) or Input:GetFocusedTextBox() then return end
+	local target, row = hit(input.Position)
+	if target then
+		pending[input.UserInputType] = {Target = target, Row = row, Position = input.Position, At = os.clock()}
+		note("LEADERBOARD DOWN " .. target.Name .. " " .. tostring(input.UserInputType) .. " row=" .. row:GetFullName())
+	end
+end)
+controller.Connect(Input.InputEnded, function(input)
+	if closed or not mouseButton(input) then return end
+	local down = pending[input.UserInputType]; pending[input.UserInputType] = nil
+	if not down or os.clock() - down.At > .75 or (input.Position - down.Position).Magnitude > 8 or Input:GetFocusedTextBox() then return end
+	local target, row = hit(input.Position)
+	if target == down.Target and row == down.Row and target.Parent == Players then
+		note("LEADERBOARD CLICK " .. target.Name)
+		controller.ToggleSpectatePlayer(target, "Beyond Nen leaderboard")
+	end
+end)
+controller.Connect(Input.WindowFocusReleased, function() table.clear(pending) end)
+controller.RegisterCleanup(function() closed = true; table.clear(pending) end)
+note("LEADERBOARD READY v3 (left or right click)")
 
 end)()
 ;(function()

@@ -2225,7 +2225,7 @@ controller.CaptureBeyondNenFishing = start
 
 end)()
 ;(function()
--- Beyond Nen auto fishing v1. Uses normal mouse input so the game's client
+-- Beyond Nen auto fishing v2. Uses normal mouse input so the game's client
 -- retains its own session, cursor physics, progress and hold timestamps.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -2254,7 +2254,7 @@ end
 local function save()
 	if type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	pcall(writefile, reportPath, "BEYOND NEN AUTO FISHING v1\nplace=" .. tostring(game.PlaceId)
+	pcall(writefile, reportPath, "BEYOND NEN AUTO FISHING v2\nplace=" .. tostring(game.PlaceId)
 		.. "\n" .. table.concat(auto.Lines, "\n"))
 end
 local function show(message)
@@ -2268,6 +2268,16 @@ local function rod()
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if tool and tool:IsA("Tool") and humanoid and humanoid.Health > 0 and root then return tool, character, root end
+end
+local function aim(x, y)
+	local ok = pcall(function()
+		if backend == "virtual" then inputManager:SendMouseMoveEvent(x, y, game) else move(x, y) end
+	end)
+	if not ok and backend == "virtual" and type(press) == "function" and type(release) == "function" and type(move) == "function" then
+		backend = "executor"
+		ok = pcall(move, x, y)
+	end
+	return ok
 end
 local function send(down, x, y)
 	if auto.Held == down then return true end
@@ -2302,17 +2312,19 @@ local function stop(reason)
 	for _ = 1, 3 do if send(false) then break end end
 	if auto.Unwatch then auto.Unwatch(); auto.Unwatch = nil end
 	auto.Phase, auto.Session, auto.Point, auto.Character, auto.Tool = "Off", nil, nil, nil, nil
-	auto.ReleaseAt = nil
+	auto.ReleaseAt, auto.Origin = nil, nil
 	resetMotion()
 	toggle.Text, toggle.BackgroundColor3 = "Auto Fishing: OFF", ui.Colors.Surface
-	show(reason or "Off. Equip Fishing, enable this, then cast once manually.")
+	show(reason or "Off. Equip Fishing, enable this, and point at the water.")
 	if auto.Started then note("STOP " .. (reason or "toggle")); save() end
 end
-local function awaitManual(reason)
+local function queueCast(reason, delay, clearPoint)
 	send(false)
-	auto.Phase, auto.Session, auto.Point = "Armed", nil, nil
+	auto.Phase, auto.Session = "Idle", nil
+	auto.NextCast = os.clock() + (delay or 1.5)
+	if clearPoint then auto.Point, auto.Origin = nil, nil end
 	resetMotion()
-	show(reason); note("WAIT FOR MANUAL CAST " .. reason)
+	show(reason); note("CAST QUEUED " .. reason)
 end
 local function observe(name, direction, args)
 	if not auto.Enabled or auto.Closed then return end
@@ -2329,23 +2341,23 @@ local function observe(name, direction, args)
 				auto.Session, auto.Phase, auto.Deadline = args[2], "Waiting", os.clock() + 60
 				note("CAST ACCEPTED session=" .. tostring(args[2])); show("Line cast. Waiting for a bite.")
 			end
-		elseif auto.Phase == "CastPending" then awaitManual("Cast was not accepted. Aim at water and cast again.") end
-	elseif name == "Bite" and direction == "IN event" and args[1] == auto.Session then
+		elseif auto.Phase == "CastPending" then queueCast("Cast not accepted. Point at water; retrying shortly.", 2, true) end
+	elseif name == "Bite" and direction == "IN event" and args[1] ~= nil and (auto.Session == nil or args[1] == auto.Session) then
+		auto.Session = args[1]
 		auto.Phase, auto.Deadline, auto.SeenGui = "Fishing", os.clock() + 25, false
 		resetMotion(); note("BITE session=" .. tostring(args[1])); show("Bite detected. Following the target.")
-	elseif name == "Result" and direction == "IN event" and args[1] == auto.Session then
-		if auto.Phase == "Cooldown" then return end -- duplicate result must not count twice
+	elseif name == "Result" and direction == "IN event" and args[1] ~= nil
+		and (args[1] == auto.Session or (auto.Session == nil and auto.Phase == "Fishing")) then
 		send(false)
 		local result = type(args[2]) == "table" and args[2] or {}
 		if result.Outcome == "Caught" then auto.Catches += math.max(1, tonumber(result.Count) or 1) end
-		auto.Phase, auto.NextCast = "Cooldown", os.clock() + 1.5
-		resetMotion()
 		local outcome = tostring(result.Outcome or "Finished") .. (result.Fish and (": " .. tostring(result.Fish)) or "")
-		note("RESULT " .. outcome); show(outcome .. ". Preparing the next cast."); save()
+		note("RESULT " .. outcome)
+		queueCast(outcome .. ". Preparing the next cast.", 1.5); save()
 	end
 end
 
-local card = ui.Card(ui.Pages.Auto, "AUTO FISHING // v1", "Equip Fishing and cast once manually. Auto Fishing follows the target and repeats that water spot.", 218)
+local card = ui.Card(ui.Pages.Auto, "AUTO FISHING // v2", "Equip Fishing, hide the hub and point at water. Casting, catching and missed-cast retries are automatic.", 218)
 card.LayoutOrder = 10
 status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
@@ -2356,15 +2368,17 @@ local function enable(value)
 	if auto.Closed then return end
 	if not value then stop(); return end
 	if auto.Enabled then return end
-	auto.Enabled, auto.Phase, auto.Catches, auto.Lines, auto.Started = true, "Armed", 0, {}, true
+	auto.Enabled, auto.Phase, auto.Catches, auto.Lines, auto.Started = true, "Idle", 0, {}, true
+	auto.Point, auto.Origin, auto.Session, auto.ReleaseAt = nil, nil, nil, nil
+	auto.NextCast = os.clock() + 0.8
 	auto.Unwatch = controller.WatchBeyondNenFishing(observe)
 	toggle.Text, toggle.BackgroundColor3 = "Auto Fishing: ON", ui.Colors.AccentSoft
-	show("Hide the hub with Right Alt, then cast once manually at your fishing spot.")
-	note("ENABLED; awaiting manual cast"); save()
+	show("Hide the hub with Right Alt and point at water. Auto Fishing will cast for you.")
+	note("ENABLED; automatic casting ready"); save()
 end
 toggle = ui.FitColumn(ui.Button(card, "Auto Fishing: OFF", 0, 0, 180, function() enable(not auto.Enabled) end), 0, 72)
 ui.FitColumn(ui.Button(card, "New Fishing Spot", 0, 0, 180, function()
-	if auto.Enabled then awaitManual("Hide the hub, then cast manually at the new spot.") end
+	if auto.Enabled then queueCast("Hide the hub and point at the new water spot.", 0.8, true) end
 end), 1, 72)
 
 local function geometry()
@@ -2393,24 +2407,36 @@ local function step()
 	if now - (auto.LastSaved or 0) > 5 then auto.LastSaved = now; save() end
 	local tool, character, root = rod()
 	if not tool then stop("Stopped: equip your Fishing tool before enabling again."); return end
-	if auto.Character and (character ~= auto.Character or tool ~= auto.Tool) then stop("Character or rod changed. Enable again and cast once."); return end
+	if auto.Character and (character ~= auto.Character or tool ~= auto.Tool) then stop("Character or rod changed. Enable again to fish."); return end
 	if auto.Origin and (root.Position - auto.Origin).Magnitude > 12 then stop("You moved away from the fishing spot. Enable again at the new spot."); return end
 	if not auto.Focused or controller.State.Visible or GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then
+		if auto.Phase == "Idle" or auto.Phase == "Aiming" then auto.Phase, auto.NextCast = "Idle", now + 0.8 end
 		send(false); resetMotion(); show("Input paused. Close the hub/chat/menu to continue fishing."); return
 	end
-	if auto.Phase == "Armed" then show("Cast once manually. Auto Fishing will handle the bite and repeat the cast."); return end
 	if auto.ReleaseAt and now >= auto.ReleaseAt then
 		if not send(false) then stop("Mouse release failed. Auto Fishing stopped."); return end
 		auto.ReleaseAt = nil
 	end
 	if auto.Phase == "CastPending" or auto.Phase == "Waiting" then
-		if now >= auto.Deadline then awaitManual("No fishing response. Cast manually once to resume.") end
+		if now >= auto.Deadline then queueCast("No fishing response. Retrying the cast automatically.", 1.5) end
 		return
 	end
-	if auto.Phase == "Cooldown" then
-		if now < auto.NextCast then return end
+	if auto.Phase == "Idle" or auto.Phase == "Aiming" then
+		if auto.Phase == "Idle" and now < auto.NextCast then return end
+		-- A visible catch is authoritative even if enabling mid-catch missed Bite.
+		if geometry() ~= nil then
+			auto.Phase, auto.Deadline, auto.SeenGui = "Fishing", now + 25, false
+			resetMotion(); note("JOIN visible fishing minigame"); return
+		end
 		local camera = Workspace.CurrentCamera
-		if not camera or not auto.Point then awaitManual("Cast once manually to set the water spot."); return end
+		if not camera then return end
+		if not auto.Point then
+			local ok, point = pcall(function() return player:GetMouse().Hit.Position end)
+			if not ok or typeof(point) ~= "Vector3" or (point - root.Position).Magnitude > 500 then
+				auto.NextCast = now + 1; show("Point your cursor at nearby water to start casting."); return
+			end
+			auto.Point = point
+		end
 		local point, onScreen = camera:WorldToViewportPoint(auto.Point)
 		if not onScreen or point.Z <= 0 then show("Turn the camera toward the saved fishing spot to recast."); return end
 		local pg = player:FindFirstChildOfClass("PlayerGui")
@@ -2418,7 +2444,16 @@ local function step()
 			if object.Active or object:IsA("GuiButton") or object:IsA("TextBox") then show("Move the camera so the fishing spot is clear of buttons and menus."); return end
 		end
 		if tool.Enabled == false then show("Waiting for the rod to be ready."); return end
-		auto.Phase, auto.Deadline, auto.ReleaseAt = "CastPending", now + 8, now + 0.08
+		-- Let Mouse.Hit update before activating the rod; a move and click in the
+		-- same frame can otherwise cast at the previous cursor position in Volt.
+		if auto.Phase ~= "Aiming" or math.abs(point.X - auto.AimX) > 2 or math.abs(point.Y - auto.AimY) > 2 then
+			if not aim(point.X, point.Y) then stop("Mouse input unavailable in this executor."); return end
+			auto.Phase, auto.AimAt, auto.AimX, auto.AimY = "Aiming", now + 0.12, point.X, point.Y
+			show("Casting into the water..."); return
+		end
+		if now < auto.AimAt then return end
+		auto.Phase, auto.Deadline, auto.ReleaseAt = "CastPending", now + 3, now + 0.08
+		note("CAST ATTEMPT " .. tostring(auto.Point))
 		if not send(true, point.X, point.Y) then stop("Mouse input unavailable in this executor.") end
 		return
 	end
@@ -2427,12 +2462,12 @@ local function step()
 	if not x then
 		send(false); resetMotion()
 		if now >= auto.Deadline or (auto.SeenGui and now - (auto.LastGui or now) > 3) then
-			awaitManual("Fishing panel closed without a result. Cast manually to resume.")
+			queueCast("Fishing panel closed. Preparing a fresh cast.", 1.5)
 		end
 		return
 	end
 	auto.SeenGui, auto.LastGui = true, now
-	if now >= auto.Deadline then awaitManual("Catch timed out. Cast manually once to resume."); return end
+	if now >= auto.Deadline then queueCast("Catch timed out. Preparing a fresh cast.", 1.5); return end
 	local dt = auto.LastTime and now - auto.LastTime
 	local velocity = dt and dt > 0 and dt < 0.2 and math.clamp((x - auto.LastX) / dt, -2, 2) or 0
 	auto.LastX, auto.LastTime, auto.Velocity = x, now, velocity

@@ -99,6 +99,7 @@ local state = {
 	EspSettings = {Name = true, Level = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
 	NpcEspEnabled = false,
 	NpcEspDistance = 2500,
+	BeyondNenParryTargets = "NPCs",
 	NpcEspSettings = {Name = true, Distance = true, Box = true,
 		Quest = true, Enemy = true, Boss = true, Other = true},
 	Noclip = false,
@@ -139,6 +140,9 @@ local function loadConfig()
 	state.InfiniteJump = decoded.InfiniteJump == true
 	state.NpcEspEnabled = decoded.NpcEspEnabled == true
 	state.NpcEspDistance = math.clamp(tonumber(decoded.NpcEspDistance) or 2500, 100, 10000)
+	if decoded.BeyondNenParryTargets == "NPCs" or decoded.BeyondNenParryTargets == "Players" or decoded.BeyondNenParryTargets == "Both" then
+		state.BeyondNenParryTargets = decoded.BeyondNenParryTargets
+	end
 	if type(decoded.NpcEspSettings) == "table" then
 		for key in pairs(state.NpcEspSettings) do
 			if type(decoded.NpcEspSettings[key]) == "boolean" then state.NpcEspSettings[key] = decoded.NpcEspSettings[key] end
@@ -159,6 +163,7 @@ local function saveConfig()
 		EspSettings = table.clone(state.EspSettings),
 		NpcEspEnabled = state.NpcEspEnabled,
 		NpcEspDistance = state.NpcEspDistance,
+		BeyondNenParryTargets = state.BeyondNenParryTargets,
 		NpcEspSettings = table.clone(state.NpcEspSettings),
 		InfiniteJump = state.InfiniteJump,
 		SpeedEnabled = state.SpeedEnabled,
@@ -3110,7 +3115,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v22. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v23. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3319,10 +3324,13 @@ for _, key in ipairs({"sword", "dagger", "bat"}) do
 		recordedVariants[id] = recordedVariants[id] == nil and key or false
 	end
 end
-local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v22", "Waits for early punch recovery before attempting a pending block. Skills and game restrictions still need testing.", 224)
+local targetModes = {"NPCs", "Players", "Both"}
+local savedTargets = controller.State and controller.State.BeyondNenParryTargets
+local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {},
+	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "NPCs"}
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v23", "Choose NPCs, Players, or Both. NPCs ignores player swings; click Targets to change. Changing targets stops the current test.", 268)
 local status = ui.Create("TextLabel", {
-	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
 	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
 }, card)
@@ -3333,8 +3341,9 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v22 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v23 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
+		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
 		.. "\nFists: 13 animations. Pitchfork: 6. BigPitchfork: 8. Rifle: 6 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
 		.. "\nFists v20: alternate first strike reach12/max15, close radius10; second reach11/max14, close radius2; third reach11/max14. Close radius uses current distance without facing/velocity prediction, while retaining exact animation timing and elevation8. Trial bounds from observed damage, not measured hitboxes. Phase seeds and other Fists variants unchanged."
@@ -3354,7 +3363,7 @@ local function save(reason)
 		.. "\nDECISION requestDelay is local elapsed time from outgoing observation to response, not isolated network latency. Rejected requests are not replayed or retimestamped."
 		.. "\nREQUEST includes the game's outgoing block timestamp, observed GetServerTimeNow and their difference when available. This is clock evidence for InvalidTimestamp responses, not a server validity check; request arguments remain unchanged."
 		.. "\nKEY_SEND records this test's calls. BLOCK_EVENT consumes at most one same-direction/key send within1s; unmatched means no pending send, not manual input. Timing correlation is not proof of origin. processed=true is the engine flag, not a confirmed rejection. SELF_ACTIONS records bounded local animation IDs/phases; no action is cancelled or replayed."
-		.. "\nDAMAGE_NEARBY includes the bounded watched rigs within 60 studs and up to 12 playing tracks each, of any priority/loop state, with totalTracks to expose the sampling limit. Proximity is not proof of damage attribution. Unmapped/looping tracks remain diagnostic only."
+		.. "\nDAMAGE_NEARBY includes the bounded watched rigs allowed by TARGETS within 60 studs and up to 12 playing tracks each, of any priority/loop state, with totalTracks to expose the sampling limit. Excluded player/NPC rigs are not watched. Proximity is not proof of damage attribution. Unmapped/looping tracks remain diagnostic only."
 		.. "\nUnknown weapons and animation variants are logged and skipped; a Fists label alone does not establish every fist animation's timing."
 		.. "\nConfirmed counts require ParryResult with local Parrier, matching attacker and a recent test input. Accepted is only an input acknowledgment."
 		.. "\n" .. table.concat(state.Lines, "\n") .. "\nSTATUS=" .. tostring(reason)
@@ -3592,8 +3601,15 @@ local function watchTrack(rig, track)
 		note("UNMAPPED actor=" .. rig.Model.Name .. " weapon=" .. key .. " animation=" .. id .. " (not attempted)")
 	end
 end
+local function targetAllowed(owner)
+	return state.TargetMode == "Both" or (state.TargetMode == "Players" and owner ~= nil)
+		or (state.TargetMode == "NPCs" and owner == nil)
+end
 local function syncRigs(localRoot)
 	local pool, seen, owners, wanted = {}, {}, {}, {}
+	for model in pairs(state.PlayerModels) do
+		if not model:IsDescendantOf(workspace) then state.PlayerModels[model] = nil end
+	end
 	for _, target in ipairs(Players:GetPlayers()) do
 		if target.Character then owners[target.Character] = target; state.PlayerModels[target.Character] = target end
 	end
@@ -3602,6 +3618,9 @@ local function syncRigs(localRoot)
 		if not model:IsA("Model") or model == player.Character then return end
 		local owner = state.PlayerModels[model]
 		if owner and owner.Character ~= model then return end
+		-- Filter before the nearest-eight cap so helping players cannot crowd
+		-- out the NPC being fought. Names and weapon labels do not imply ownership.
+		if not targetAllowed(owner) then return end
 		local root = alive(model)
 		if root then
 			local distance = (root.Position - localRoot.Position).Magnitude
@@ -3788,6 +3807,7 @@ local function step()
 	end
 	local best
 	for _, rig in pairs(state.Rigs) do
+		if not targetAllowed(rig.Owner) then continue end
 		local root = alive(rig.Model)
 		if not root then continue end
 		describeWeapon(rig)
@@ -3860,7 +3880,9 @@ local function start()
 	if not manager then status.Text = "Block input unavailable in this executor."; return end
 	if controller.IsBeyondNenParryRecording and controller.IsBeyondNenParryRecording() then status.Text = "Stop + Save the manual recording before running this test."; return end
 	state.Started, state.Enabled = os.clock(), true
-	state.Lines, state.Unknown, state.Attempts, state.Results, state.PlayerModels, state.PendingInputs = {}, {}, {}, {}, {}, {}
+	-- Keep ownership for old player bodies still in Workspace across test
+	-- restarts; otherwise a respawn could make one look like an NPC.
+	state.Lines, state.Unknown, state.Attempts, state.Results, state.PendingInputs = {}, {}, {}, {}, {}
 	state.NextSync, state.NextPing, state.NextSave, state.Backoff = 0, 0, 0, 0
 	state.Gate, state.LastStep, state.RigSerial = nil, nil, 0
 	state.KeySends, state.SendSequence = {}, 0
@@ -3871,7 +3893,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,Sword,Dagger,Bat,FoxBear mappedWeaponAnimations=68 duration=90")
+	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,Sword,Dagger,Bat,FoxBear mappedWeaponAnimations=68 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")
@@ -3881,6 +3903,20 @@ ui.FitColumn(ui.Button(card, "Copy Test", 0, 0, 180, function()
 	if state.Enabled then save("RUNNING") end
 	if state.Report and type(setclipboard) == "function" then pcall(setclipboard, state.Report) end
 end), 1, 72)
+local targetButton = ui.Button(card, "Targets: " .. state.TargetMode, 14, 116, 180, function(object)
+	if state.Closed or controller.IsUnloaded() then return end
+	if state.Enabled or state.Held then stop("Targets changed") end
+	if state.Held then return end
+	state.TargetMode = targetModes[(table.find(targetModes, state.TargetMode) or 1) % #targetModes + 1]
+	object.Text = "Targets: " .. state.TargetMode
+	local saved = true
+	if controller.State then
+		controller.State.BeyondNenParryTargets = state.TargetMode
+		if controller.SaveConfig then saved = controller.SaveConfig() end
+	end
+	show("Ready. Targets: " .. state.TargetMode .. (saved and ". Start a new test." or ". Could not save this preference."))
+end, ui.Colors.AccentSoft)
+targetButton.Size = UDim2.new(1, -28, 0, 34)
 controller.Connect(RunService.Heartbeat, function()
 	if state.Closed then return end
 	local ok, err = pcall(step)

@@ -673,10 +673,11 @@ end
 local function getEspVisualMetrics(character, root)
 	local camera = workspace.CurrentCamera
 	local centerOffset = Vector3.zero
-	if not camera then return 76, 132, centerOffset end
+	local defaultInfoOffset = Vector3.new(0, 5.2, 0)
+	if not camera then return 76, 132, centerOffset, defaultInfoOffset end
 	local rootPoint = camera:WorldToViewportPoint(root.Position)
-	if rootPoint.Z <= 0 then return 28, 24, centerOffset end
-	local halfWidth, halfHeight, bodyPartCount = 0, 0, 0
+	if rootPoint.Z <= 0 then return 28, 24, centerOffset, defaultInfoOffset end
+	local halfWidth, halfHeight, bodyPartCount, highestPoint = 0, 0, 0, 2.8
 	for _, part in ipairs(character:GetChildren()) do
 		if part:IsA("BasePart") and part ~= root and part.Transparency < 0.98 then
 			bodyPartCount += 1
@@ -686,6 +687,7 @@ local function getEspVisualMetrics(character, root)
 					for _, z in ipairs({-1, 1}) do
 						local worldPoint = part.CFrame:PointToWorldSpace(Vector3.new(half.X * x, half.Y * y, half.Z * z))
 						local viewportPoint = camera:WorldToViewportPoint(worldPoint)
+						highestPoint = math.max(highestPoint, worldPoint.Y - root.Position.Y)
 						if viewportPoint.Z > 0 then
 							halfWidth = math.max(halfWidth, math.abs(viewportPoint.X - rootPoint.X))
 							halfHeight = math.max(halfHeight, math.abs(viewportPoint.Y - rootPoint.Y))
@@ -695,8 +697,9 @@ local function getEspVisualMetrics(character, root)
 			end
 		end
 	end
-	if bodyPartCount == 0 then return 76, 132, centerOffset end
-	return math.clamp(halfWidth * 2 + 4, 28, 114), math.clamp(halfHeight * 2 + 4, 24, 152), centerOffset
+	if bodyPartCount == 0 then return 76, 132, centerOffset, defaultInfoOffset end
+	return math.clamp(halfWidth * 2 + 4, 28, 114), math.clamp(halfHeight * 2 + 4, 24, 152), centerOffset,
+		Vector3.new(0, highestPoint + 2.1, 0)
 end
 
 local function updateEsp(target, localRoot)
@@ -711,6 +714,16 @@ local function updateEsp(target, localRoot)
 	if not entry or entry.Character ~= character then
 		removeEsp(target)
 		entry = {Character = character}
+		entry.Gui = create("BillboardGui", {
+			Name = "AnomalyUniversalESP", Size = UDim2.fromOffset(240, 62), StudsOffsetWorldSpace = Vector3.new(0, 5.2, 0),
+			AlwaysOnTop = true, LightInfluence = 0, MaxDistance = state.EspDistance, Adornee = root,
+		}, gui)
+		entry.InfoLabel = create("TextLabel", {
+			Name = "Identity", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
+			TextColor3 = colors.Text, TextStrokeColor3 = Color3.new(), TextStrokeTransparency = 0.12,
+			TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Bottom, ZIndex = 5,
+		}, entry.Gui)
 		entry.BoxGui = create("BillboardGui", {
 			Name = "AnomalyUniversalESPBox", Size = UDim2.fromOffset(436, 132), StudsOffsetWorldSpace = Vector3.zero,
 			AlwaysOnTop = true, LightInfluence = 0, MaxDistance = state.EspDistance, Adornee = root, ClipsDescendants = false,
@@ -720,13 +733,6 @@ local function updateEsp(target, localRoot)
 			BackgroundTransparency = 1, BorderSizePixel = 0,
 		}, entry.BoxGui)
 		entry.BoxStroke = create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.4, Transparency = 0}, entry.BoxFrame)
-		entry.InfoLabel = create("TextLabel", {
-			Name = "Identity", AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 0.5, -76),
-			Size = UDim2.fromOffset(240, 62), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
-			TextColor3 = colors.Text, TextStrokeColor3 = Color3.new(), TextStrokeTransparency = 0.12,
-			TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
-			TextYAlignment = Enum.TextYAlignment.Bottom, ZIndex = 5,
-		}, entry.BoxGui)
 		local function makeResourceBar(name, rightOffset, fillColor)
 			local background = create("Frame", {
 				Name = name, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, rightOffset, 0, 3),
@@ -762,12 +768,13 @@ local function updateEsp(target, localRoot)
 		end
 		bar.Fill.Size = UDim2.fromScale(1, math.clamp(current / maximum, 0, 1))
 	end
-	local boxWidth, boxHeight, centerOffset = getEspVisualMetrics(character, root)
+	local boxWidth, boxHeight, centerOffset, infoOffset = getEspVisualMetrics(character, root)
+	entry.Gui.MaxDistance = state.EspDistance
+	entry.Gui.StudsOffsetWorldSpace = infoOffset
 	entry.BoxGui.MaxDistance = state.EspDistance
 	entry.BoxGui.Size = UDim2.fromOffset(boxWidth + 360, boxHeight)
 	entry.BoxGui.StudsOffsetWorldSpace = centerOffset
 	entry.BoxFrame.Size = UDim2.fromOffset(boxWidth, boxHeight)
-	entry.InfoLabel.Position = UDim2.new(0.5, 0, 0.5, -(boxHeight / 2) - 10)
 	local settings = state.EspSettings
 	local lines = {}
 	if settings.Name then table.insert(lines, target.DisplayName) end
@@ -775,9 +782,9 @@ local function updateEsp(target, localRoot)
 	if settings.Lineage then table.insert(lines, "LINEAGE // " .. lineage) end
 	if settings.Distance then table.insert(lines, string.format("%d STUDS", math.floor(distance + 0.5))) end
 	entry.InfoLabel.Text = table.concat(lines, "\n")
-	entry.InfoLabel.Visible = #lines > 0
+	entry.Gui.Enabled = #lines > 0
 	entry.BoxStroke.Enabled = settings.Box == true
-	entry.BoxGui.Enabled = #lines > 0 or settings.Box or settings.Health or settings.Energy or settings.Stamina
+	entry.BoxGui.Enabled = settings.Box or settings.Health or settings.Energy or settings.Stamina
 	updateResourceBar(entry.Health, humanoid.Health, humanoid.MaxHealth, settings.Health)
 	updateResourceBar(entry.Energy, extra and extra.Energy, extra and extra.MaxEnergy, settings.Energy)
 	updateResourceBar(entry.Stamina, extra and extra.Stamina, extra and extra.MaxStamina, settings.Stamina)
@@ -949,7 +956,7 @@ local function readAlias(sources, aliases)
 	return nil
 end
 
-local clanAliases = {"Lineage", "LineageName", "Bloodline", "Clan", "ClanName", "Family", "FamilyName"}
+local clanAliases = {"Lineage", "LineageName", "LineageId", "Bloodline", "Clan", "ClanName", "ClanId", "Family", "FamilyName", "LastName", "Surname", "Heritage", "Origin"}
 local energyAliases = {"Energy", "CurrentEnergy", "Nen", "CurrentNen", "Aura", "CurrentAura"}
 local maxEnergyAliases = {"MaxEnergy", "EnergyMax", "MaximumEnergy", "MaxNen", "NenMax", "MaxAura", "AuraMax"}
 local staminaAliases = {"Stamina", "CurrentStamina", "Endurance", "CurrentEndurance"}
@@ -1004,6 +1011,17 @@ local function readLineageFromText(target, character)
 	return scan(character, false) or scan(playerGui, true)
 end
 
+local function readKnownLineageValue(sources)
+	for _, source in pairs(sources) do
+		local value = readSource(source)
+		if type(value) == "string" then
+			local known = knownLineages[normalize(value)]
+			if known then return known end
+		end
+	end
+	return nil
+end
+
 function controller.ResolvePlayerEspData(target, character, humanoid)
 	local now = os.clock()
 	local entry = cache[target]
@@ -1012,7 +1030,7 @@ function controller.ResolvePlayerEspData(target, character, humanoid)
 		cache[target] = entry
 	end
 	local sources = entry.Sources
-	local lineage = readAlias(sources, clanAliases)
+	local lineage = readAlias(sources, clanAliases) or readKnownLineageValue(sources)
 	if lineage == nil and (entry.LineageCheckedAt == nil or now - entry.LineageCheckedAt >= 1) then
 		entry.LineageCheckedAt = now
 		entry.LineageText = readLineageFromText(target, character)
@@ -1059,7 +1077,7 @@ end
 
 local function captureEspState()
 	local lines = {
-		"BEYOND NEN ESP STATE // PASSIVE v1",
+		"BEYOND NEN ESP STATE // PASSIVE v2",
 		"place=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId),
 		"No remotes were fired or invoked.",
 	}
@@ -1078,7 +1096,8 @@ local function captureEspState()
 			local ok, attributes = pcall(object.GetAttributes, object)
 			if ok then
 				for name, value in pairs(attributes) do
-					if relevant(name) or relevant(object.Name) then
+					local dumpAll = object == root or object.Name == "CharacterData" or object.Name == "PlayerData"
+					if dumpAll or relevant(name) or relevant(object.Name) then
 						table.insert(lines, string.format("ATTR\t%s\t%s=%s", object:GetFullName(), tostring(name), tostring(value)))
 					end
 				end

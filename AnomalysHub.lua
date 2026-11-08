@@ -681,14 +681,16 @@ controller.UI = {
 controller.State = state
 controller.Connect = connect
 
--- Player ESP health uses the live humanoid's own maximum,
--- without rounding, tweening, or borrowing health from a cached stats folder.
+-- Profiles can name a replicated character-health attribute. Otherwise use
+-- the live Humanoid. Neither path reads cached saves or inventory preview rigs.
 function controller.BindEspHealth(bar, humanoid, isEnabled)
 	local active = true
 	local model = humanoid.Parent
+	local healthAttribute = controller.EspHealthAttribute
 	local function refresh()
 		if not active then return end
 		local current, maximum = humanoid.Health, humanoid.MaxHealth
+		if healthAttribute then current = model and model:GetAttribute(healthAttribute) end
 		local valid = type(current) == "number" and current == current and math.abs(current) < math.huge
 			and type(maximum) == "number" and maximum == maximum and maximum > 0 and maximum < math.huge
 			and model ~= nil and humanoid.Parent == model and model:IsDescendantOf(workspace)
@@ -698,6 +700,7 @@ function controller.BindEspHealth(bar, humanoid, isEnabled)
 	end
 	local healthConnection = humanoid:GetPropertyChangedSignal("Health"):Connect(refresh)
 	local maximumConnection = humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(refresh)
+	local attributeConnection = healthAttribute and model and model:GetAttributeChangedSignal(healthAttribute):Connect(refresh)
 	refresh()
 	return {
 		Refresh = refresh,
@@ -706,6 +709,7 @@ function controller.BindEspHealth(bar, humanoid, isEnabled)
 			active = false
 			healthConnection:Disconnect()
 			maximumConnection:Disconnect()
+			if attributeConnection then attributeConnection:Disconnect() end
 		end,
 	}
 end
@@ -1034,6 +1038,9 @@ if type(controller) ~= "table" then
 end
 
 controller.Profile = "BeyondNen"
+-- Captured live characters expose damage in this attribute while their
+-- Humanoid.Health can remain equal to MaxHealth (37.2025 vs 532/532).
+controller.EspHealthAttribute = "Health"
 controller.AdapterStatus = "Remote fingerprint confirmed; feature mapping ready"
 controller.GameIdentity = {
 	UniverseId = 2174306620,
@@ -1137,7 +1144,7 @@ end
 
 local function captureEspState()
 	local lines = {
-		"BEYOND NEN ESP STATE // PASSIVE v4 HEALTH",
+		"BEYOND NEN ESP STATE // PASSIVE v5 CHARACTER HEALTH",
 		"place=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId),
 		"No remotes were fired or invoked.",
 	}
@@ -1175,6 +1182,12 @@ local function captureEspState()
 		end
 	end
 	for _, target in ipairs(Players:GetPlayers()) do
+		local character = target.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			table.insert(lines, string.format("ESP_HEALTH\t%s\tsource=Character@Health current=%s maximum=%s humanoidHealth=%s",
+				target.Name, tostring(character:GetAttribute("Health")), tostring(humanoid.MaxHealth), tostring(humanoid.Health)))
+		end
 		inspectRoot(target, "PLAYER " .. target.Name)
 		inspectRoot(target.Character, "CHARACTER " .. target.Name)
 	end

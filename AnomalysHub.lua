@@ -596,6 +596,7 @@ local function unload()
 	stopSpectating()
 	for part, canCollide in pairs(state.Collision) do if part and part.Parent then pcall(function() part.CanCollide = canCollide end) end end
 	for _, entry in pairs(state.EspEntries) do
+		if entry.HealthBinding then entry.HealthBinding.Disconnect() end
 		if entry.Gui then entry.Gui:Destroy() end
 		if entry.BoxGui then entry.BoxGui:Destroy() end
 	end
@@ -626,6 +627,36 @@ controller.UI = {
 }
 controller.State = state
 controller.Connect = connect
+
+-- One health path for player and NPC ESP. Use the live humanoid's own maximum,
+-- without rounding, tweening, or borrowing health from a cached stats folder.
+function controller.BindEspHealth(bar, humanoid, isEnabled)
+	local active = true
+	local model = humanoid.Parent
+	local function refresh()
+		if not active then return end
+		local current, maximum = humanoid.Health, humanoid.MaxHealth
+		local valid = type(current) == "number" and current == current and math.abs(current) < math.huge
+			and type(maximum) == "number" and maximum == maximum and maximum > 0 and maximum < math.huge
+			and model ~= nil and humanoid.Parent == model and model:IsDescendantOf(workspace)
+		-- Missing/invalid maximum health is unknown, not a real empty/full bar.
+		bar.Background.Visible = valid and isEnabled() == true
+		bar.Fill.Size = UDim2.fromScale(1, valid and math.clamp(current / maximum, 0, 1) or 0)
+	end
+	local healthConnection = humanoid:GetPropertyChangedSignal("Health"):Connect(refresh)
+	local maximumConnection = humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(refresh)
+	refresh()
+	return {
+		Refresh = refresh,
+		Disconnect = function()
+			if not active then return end
+			active = false
+			healthConnection:Disconnect()
+			maximumConnection:Disconnect()
+		end,
+	}
+end
+
 function controller.Reload()
 	local source = nil
 	if env.GohanHubEnvironment ~= "local" then
@@ -693,6 +724,7 @@ end)
 local function removeEsp(target)
 	local entry = state.EspEntries[target]
 	if not entry then return end
+	if entry.HealthBinding then entry.HealthBinding.Disconnect() end
 	if entry.Gui then entry.Gui:Destroy() end
 	if entry.BoxGui then entry.BoxGui:Destroy() end
 	state.EspEntries[target] = nil
@@ -718,15 +750,17 @@ local function updateEsp(target, localRoot)
 	local character = target.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local root = character and (character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head"))
-	if not state.EspEnabled or not humanoid or not root or humanoid.Health <= 0 or not localRoot then removeEsp(target); return end
+	if not state.EspEnabled or not humanoid or not root or not root:IsA("BasePart") or humanoid.Health <= 0
+		or not localRoot or not character:IsDescendantOf(workspace) then removeEsp(target); return end
 	local distance = (root.Position - localRoot.Position).Magnitude
 	if distance > state.EspDistance then removeEsp(target); return end
 	local entry = state.EspEntries[target]
-	if not entry or entry.Character ~= character then
+	if not entry or entry.Character ~= character or entry.Humanoid ~= humanoid or entry.Root ~= root then
 		removeEsp(target)
 		local boxWidthStuds, boxHeightStuds, boxOffset, infoOffset = getEspWorldMetrics(character, root)
 		entry = {
-			Character = character, BoxWidthStuds = boxWidthStuds, BoxHeightStuds = boxHeightStuds,
+			Character = character, Humanoid = humanoid, Root = root,
+			BoxWidthStuds = boxWidthStuds, BoxHeightStuds = boxHeightStuds,
 			BoxOffset = boxOffset, InfoOffset = infoOffset,
 		}
 		entry.Gui = create("BillboardGui", {
@@ -770,6 +804,9 @@ local function updateEsp(target, localRoot)
 		entry.Health = makeResourceBar("Health", 9, Color3.fromRGB(239, 55, 62))
 		entry.Energy = makeResourceBar("Energy", 18, Color3.fromRGB(48, 145, 255))
 		entry.Stamina = makeResourceBar("Stamina", 27, Color3.fromRGB(255, 205, 75))
+		entry.HealthBinding = controller.BindEspHealth(entry.Health, humanoid, function()
+			return state.EspEnabled and state.EspSettings.Health and target.Character == character
+		end)
 		state.EspEntries[target] = entry
 	end
 	local extra = nil
@@ -804,7 +841,7 @@ local function updateEsp(target, localRoot)
 	entry.Gui.Enabled = #lines > 0
 	entry.BoxStroke.Enabled = settings.Box == true
 	entry.BoxGui.Enabled = settings.Box or settings.Health or settings.Energy or settings.Stamina
-	updateResourceBar(entry.Health, humanoid.Health, humanoid.MaxHealth, settings.Health)
+	entry.HealthBinding.Refresh()
 	updateResourceBar(entry.Energy, extra and extra.Energy, extra and extra.MaxEnergy, settings.Energy)
 	updateResourceBar(entry.Stamina, extra and extra.Stamina, extra and extra.MaxStamina, settings.Stamina)
 end
@@ -1039,11 +1076,11 @@ end
 
 local function captureEspState()
 	local lines = {
-		"BEYOND NEN ESP STATE // PASSIVE v3 LEVEL",
+		"BEYOND NEN ESP STATE // PASSIVE v4 HEALTH",
 		"place=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId),
 		"No remotes were fired or invoked.",
 	}
-	local keywords = {"level", "energy", "stamina", "endurance", "aura", "nen"}
+	local keywords = {"level", "health", "energy", "stamina", "endurance", "aura", "nen"}
 	local function relevant(text)
 		text = string.lower(tostring(text))
 		for _, keyword in ipairs(keywords) do if string.find(text, keyword, 1, true) then return true end end
@@ -1055,6 +1092,9 @@ local function captureEspState()
 		local objects = {root}
 		for _, object in ipairs(root:GetDescendants()) do table.insert(objects, object) end
 		for _, object in ipairs(objects) do
+			if object:IsA("Humanoid") then
+				table.insert(lines, string.format("HEALTH\t%s\tcurrent=%s\tmaximum=%s", object:GetFullName(), tostring(object.Health), tostring(object.MaxHealth)))
+			end
 			local ok, attributes = pcall(object.GetAttributes, object)
 			if ok then
 				for name, value in pairs(attributes) do
@@ -1486,6 +1526,7 @@ local watching, stopped = false, false
 local function removeEntry(humanoid)
 	local entry = entries[humanoid]
 	if not entry then return end
+	entry.HealthBinding.Disconnect()
 	entry.Gui:Destroy()
 	entry.BoxGui:Destroy()
 	entries[humanoid] = nil
@@ -1604,6 +1645,9 @@ local function updateNpc(humanoid, localRoot, characters)
 	if not entry or entry.Model ~= model or entry.Root ~= root then
 		removeEntry(humanoid)
 		entry = makeEntry(model, root)
+		entry.HealthBinding = controller.BindEspHealth({Background = entry.Health, Fill = entry.Fill}, humanoid, function()
+			return state.NpcEspEnabled and state.NpcEspSettings.Health
+		end)
 		entries[humanoid] = entry
 	end
 	local settings, lines = state.NpcEspSettings, {}
@@ -1615,8 +1659,7 @@ local function updateNpc(humanoid, localRoot, characters)
 	entry.BoxGui.MaxDistance = state.NpcEspDistance
 	entry.BoxGui.Enabled = settings.Box or settings.Health
 	entry.Stroke.Enabled = settings.Box == true
-	entry.Health.Visible = settings.Health == true
-	entry.Fill.Size = UDim2.fromScale(1, humanoid.MaxHealth > 0 and math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1) or 0)
+	entry.HealthBinding.Refresh()
 end
 
 local npcCard = ui.Card(ui.Pages.Players, "BEYOND NEN NPC ESP", "Names above NPCs, health beside their boxes. Range is in studs; only loaded NPCs are visible.", 244)

@@ -3957,7 +3957,7 @@ controller.RegisterCleanup(function() if state.Enabled or state.Held then stop("
 
 end)()
 ;(function()
--- Beyond Nen auto fishing v4. Uses normal mouse input so the game's client
+-- Beyond Nen auto fishing v5. Uses normal mouse input so the game's client
 -- retains its own session, cursor physics, progress and hold timestamps.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3986,7 +3986,7 @@ end
 local function save()
 	if type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	pcall(writefile, reportPath, "BEYOND NEN AUTO FISHING v4\nplace=" .. tostring(game.PlaceId)
+	pcall(writefile, reportPath, "BEYOND NEN AUTO FISHING v5\nplace=" .. tostring(game.PlaceId)
 		.. "\n" .. table.concat(auto.Lines, "\n"))
 end
 local function show(message)
@@ -4003,7 +4003,9 @@ local function rod()
 end
 local function blocked(x, y)
 	local pg = player:FindFirstChildOfClass("PlayerGui")
-	for _, object in ipairs(pg and pg:GetGuiObjectsAtPosition(x, y) or {}) do
+	local inset = GuiService:GetGuiInset()
+	-- Virtual input uses screen coordinates; GUI hit-testing excludes the inset.
+	for _, object in ipairs(pg and pg:GetGuiObjectsAtPosition(x - inset.X, y - inset.Y) or {}) do
 		if object.Active or object:IsA("GuiButton") or object:IsA("TextBox") then return true end
 	end
 	return false
@@ -4012,8 +4014,11 @@ local function reelPoint()
 	local camera = Workspace.CurrentCamera
 	if not camera then return end
 	local size = camera.ViewportSize
-	for _, point in ipairs({{size.X - 8, size.Y - 8}, {8, size.Y - 8}, {size.X - 8, size.Y * 0.5}, {8, size.Y * 0.5}}) do
-		if not blocked(point[1], point[2]) then return point[1], point[2] end
+	local points = {{size.X - 8, size.Y - 8}, {8, size.Y - 8}, {size.X - 8, size.Y * 0.5}, {8, size.Y * 0.5}}
+	for offset = 0, #points - 1 do
+		local index = ((auto.ReelSpot or 1) - 1 + offset) % #points + 1
+		local point = points[index]
+		if not blocked(point[1], point[2]) then return point[1], point[2], index end
 	end
 end
 local function aim(x, y)
@@ -4051,11 +4056,18 @@ local function send(down, x, y)
 		auto.Held, auto.InputX, auto.InputY, auto.ChangedAt = down, x, y, os.clock()
 		if not auto.Focused and auto.BackgroundStats then auto.BackgroundStats.Inputs += 1 end
 		note(down and "MOUSE DOWN" or "MOUSE UP")
+		-- Input can synchronously trigger cleanup before the call returns.
+		if down and (not auto.Enabled or auto.Closed) then send(false) end
 	end
 	return ok
 end
 local function resetMotion()
 	auto.LastX, auto.LastTime, auto.Velocity = nil, nil, 0
+	auto.ReelAttempt, auto.ReelAim = nil, nil
+end
+local function resetReel()
+	resetMotion()
+	auto.ReelRetries, auto.ReelSpot, auto.ReelRetryAt, auto.ReelExhausted = 0, 1, nil, false
 end
 local function stop(reason)
 	auto.Enabled = false
@@ -4064,7 +4076,7 @@ local function stop(reason)
 	if auto.Unwatch then auto.Unwatch(); auto.Unwatch = nil end
 	auto.Phase, auto.Session, auto.Point, auto.Character, auto.Tool = "Off", nil, nil, nil, nil
 	auto.ReleaseAt, auto.Origin = nil, nil
-	resetMotion()
+	resetReel()
 	toggle.Text, toggle.BackgroundColor3 = "Auto Fishing: OFF", ui.Colors.Surface
 	show(reason or "Off. Equip Fishing, enable this, and point at the water.")
 	if auto.Started then note("STOP " .. (reason or "toggle")); save() end
@@ -4074,14 +4086,18 @@ local function queueCast(reason, delay, clearPoint)
 	auto.Phase, auto.Session = "Idle", nil
 	auto.NextCast = os.clock() + (delay or 1.5)
 	if clearPoint then auto.Point, auto.Origin = nil, nil end
-	resetMotion()
+	resetReel()
 	show(reason); note("CAST QUEUED " .. reason)
 end
-local function observe(name, direction, args)
+local function observe(name, direction, args, requestStart)
 	if not auto.Enabled or auto.Closed then return end
-	if not auto.Focused and auto.BackgroundStats and name == "Hold" and direction:sub(1, 3) == "OUT" then
-		auto.BackgroundStats.Holds += 1
-		note("OBSERVED Hold " .. tostring(args[2]))
+	if name == "Hold" and direction:sub(1, 3) == "OUT" and args[1] == auto.Session then
+		if not auto.Focused and auto.BackgroundStats then auto.BackgroundStats.Holds += 1 end
+		local attempt = auto.ReelAttempt
+		if attempt and args[2] == true and type(requestStart) == "number" and requestStart >= attempt.Started then
+			attempt.Acknowledged = true
+		end
+		note("OBSERVED Hold " .. tostring(args[2]) .. " session=" .. tostring(args[1]))
 	end
 	if name == "Cast" and direction:sub(1, 3) == "OUT" then
 		local tool, character, root = rod()
@@ -4099,9 +4115,11 @@ local function observe(name, direction, args)
 			end
 		elseif auto.Phase == "CastPending" then queueCast("Cast not accepted. Point at water; retrying shortly.", 2, true) end
 	elseif name == "Bite" and direction == "IN event" and args[1] ~= nil and (auto.Session == nil or args[1] == auto.Session) then
+		if auto.Session == args[1] and auto.Phase == "Fishing" then return end
+		send(false)
 		auto.Session = args[1]
 		auto.Phase, auto.Deadline, auto.SeenGui = "Fishing", os.clock() + 25, false
-		resetMotion(); note("BITE session=" .. tostring(args[1])); show("Bite detected. Following the target.")
+		resetReel(); note("BITE session=" .. tostring(args[1])); show("Bite detected. Following the target.")
 	elseif name == "Result" and direction == "IN event" and args[1] ~= nil
 		and (args[1] == auto.Session or (auto.Session == nil and auto.Phase == "Fishing")) then
 		send(false)
@@ -4117,7 +4135,7 @@ local function observe(name, direction, args)
 	end
 end
 
-local card = ui.Card(ui.Pages.Auto, "AUTO FISHING // v4", "Point at water with Fishing equipped. Continues with the hub open or while tabbed out; keep the casting spot clear.", 218)
+local card = ui.Card(ui.Pages.Auto, "AUTO FISHING // v5", "Point at water with Fishing equipped. Supports an open hub and background input, with recovery if the reel does not respond.", 218)
 card.LayoutOrder = 10
 status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
@@ -4131,6 +4149,7 @@ local function enable(value)
 	if controller.SetBeyondNenAutoMeditation then controller.SetBeyondNenAutoMeditation(false) end
 	auto.Enabled, auto.Phase, auto.Catches, auto.Lines, auto.Started = true, "Idle", 0, {}, true
 	auto.Point, auto.Origin, auto.Session, auto.ReleaseAt = nil, nil, nil, nil
+	resetReel()
 	auto.NextCast = os.clock() + 0.8
 	auto.Unwatch = controller.WatchBeyondNenFishing(observe)
 	toggle.Text, toggle.BackgroundColor3 = "Auto Fishing: ON", ui.Colors.AccentSoft
@@ -4187,7 +4206,7 @@ local function step()
 		-- A visible catch is authoritative even if enabling mid-catch missed Bite.
 		if geometry() ~= nil then
 			auto.Phase, auto.Deadline, auto.SeenGui = "Fishing", now + 25, false
-			resetMotion(); note("JOIN visible fishing minigame"); return
+			resetReel(); note("JOIN visible fishing minigame"); return
 		end
 		local camera = Workspace.CurrentCamera
 		if not camera then return end
@@ -4232,6 +4251,27 @@ local function step()
 	end
 	auto.SeenGui, auto.LastGui = true, now
 	if now >= auto.Deadline then queueCast("Catch timed out. Preparing a fresh cast.", 1.5); return end
+	if auto.ReelExhausted then
+		show("Reel did not accept input after 3 retries. Waiting for this catch to finish."); return
+	end
+	local attempt = auto.ReelAttempt
+	if auto.Held and attempt then
+		if x > attempt.X + 0.002 then attempt.Moved = true end
+		-- A successful input API call is not proof the game accepted it. The
+		-- failing captures stayed at x=0.031 with no Hold request until Missed.
+		if not attempt.Moved and not attempt.Acknowledged and now - attempt.Started >= 0.35 then
+			if not send(false) then stop("Mouse release failed during reel recovery."); return end
+			note(string.format("REEL NO RESPONSE session=%s age=%.3f engine=%s processed=%s x=%.3f",
+				tostring(auto.Session), now - attempt.Started, tostring(attempt.EngineSeen == true), tostring(attempt.Processed), x))
+			resetMotion()
+			if auto.ReelRetries >= 3 then auto.ReelExhausted = true; save(); return end
+			auto.ReelRetries += 1; auto.ReelSpot = (auto.ReelSpot or 1) % 4 + 1
+			auto.ReelRetryAt = now + 0.06
+			note("REEL RETRY " .. auto.ReelRetries .. " using another clear input spot")
+			return
+		end
+	end
+	if auto.ReelRetryAt and now < auto.ReelRetryAt then return end
 	local dt = auto.LastTime and now - auto.LastTime
 	local velocity = dt and dt > 0 and dt < 0.2 and math.clamp((x - auto.LastX) / dt, -2, 2) or 0
 	auto.LastX, auto.LastTime, auto.Velocity = x, now, velocity
@@ -4244,8 +4284,21 @@ local function step()
 	elseif prediction < center - band then down = true end
 	if down ~= auto.Held and now - (auto.ChangedAt or 0) >= 0.045 then
 		local xInput, yInput = auto.InputX, auto.InputY
-		if down then xInput, yInput = reelPoint() end
+		local spot
+		if down then xInput, yInput, spot = reelPoint() end
 		if down and not xInput then show("Move the hub away from a screen edge so fishing has a clear input spot."); return end
+		if down then
+			local aimed = auto.ReelAim
+			if not aimed or aimed.X ~= xInput or aimed.Y ~= yInput then
+				if not aim(xInput, yInput) then stop("Reel mouse positioning unavailable."); return end
+				auto.ReelAim = {X = xInput, Y = yInput, ReadyAt = now + 0.04}
+				return
+			end
+			if now < aimed.ReadyAt then return end
+			auto.ReelSpot = spot
+			auto.ReelAttempt = {Started = now, X = x, Acknowledged = false}
+			note(string.format("REEL PRESS session=%s x=%.1f y=%.1f retry=%d", tostring(auto.Session), xInput, yInput, auto.ReelRetries))
+		else auto.ReelAttempt = nil end
 		if not send(down, xInput, yInput) then stop("Mouse input failed. Auto Fishing stopped."); return end
 	end
 	if now - (auto.LastSample or 0) >= 1 then
@@ -4279,10 +4332,18 @@ end)
 controller.Connect(RunService.Heartbeat, function()
 	if not auto.Focused then update("heartbeat") end
 end)
+controller.Connect(UserInputService.InputBegan, function(value, processed)
+	if not auto.Enabled or auto.Closed or value.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+	local attempt = auto.ReelAttempt
+	if attempt and not attempt.EngineSeen and os.clock() - attempt.Started <= 0.25 then
+		attempt.EngineSeen, attempt.Processed = true, processed == true
+		note("REEL ENGINE DOWN processed=" .. tostring(processed))
+	end
+end)
 controller.Connect(UserInputService.WindowFocusReleased, function()
 	send(false)
 	auto.Focused = false
-	resetMotion()
+	resetReel()
 	-- Background fishing never uses OS-level mouse helpers in another application.
 	if not auto.Held then backend = "virtual" end
 	local now = os.clock()
@@ -4293,7 +4354,7 @@ controller.Connect(UserInputService.WindowFocused, function()
 	auto.Focused = true
 	send(false)
 	if auto.Enabled then note("FOCUS RETURNED phase=" .. auto.Phase); save() end
-	resetMotion()
+	resetReel()
 end)
 controller.Connect(player.OnTeleport, function() if auto.Enabled then stop("Stopped for travel.") end end)
 controller.RegisterCleanup(function() stop("Unloaded."); auto.Closed = true end)

@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v11. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v12. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3167,6 +3167,18 @@ local weaponProfiles = {
 		-- Do not transfer this contact schedule to the other weapon profile.
 		["70453902034107"] = {Phases = {.25, .43, .62, 1.00}, Name = "pitchfork multi-hit"},
 	}},
+	foxbear = {Label = "Fox Bear", Reach = 13, MaxDistance = 16, Animations = {
+		-- Explicit Character.Weapon="Fox Bear" in v10, independent of actor name.
+		-- Five distinct strikes have nearby health-drop phase samples at speed 1,
+		-- up to 11.73 studs. These are test seeds, not confirmed automatic parries.
+		-- Long sequences 85729441475501 / 109000405251112 remain diagnostic:
+		-- their first contacts and distance dependence were not fully captured.
+		["109115837378623"] = {Phase = .62, Name = "Fox Bear strike A (test)"},
+		["120428998246938"] = {Phase = .48, Name = "Fox Bear strike B (test)"},
+		["81775052619110"] = {Phase = .40, Name = "Fox Bear strike C (test)"},
+		["114094657247629"] = {Phase = .40, Name = "Fox Bear strike D (test)"},
+		["119367900570682"] = {Phase = .62, Name = "Fox Bear strike E (test)"},
+	}},
 	sword = {Label = "Sword (recorded)", Reach = 12, MaxDistance = 15, Animations = {
 		-- User identified "achive sword"; later equipment data says Archive Sword.
 		-- Player.CombatStyle remained Fists. These distinct animation IDs and
@@ -3221,7 +3233,7 @@ for _, key in ipairs({"sword", "dagger"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v11", "Fists / Pitchfork / BigPitchfork / Sword / Dagger. Repeated-strike final hit added; missed block inputs recorded.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v12", "Fists / Pitchfork / BigPitchfork / Sword / Dagger / Fox Bear. Five Fox Bear strikes added; longer skills still need capture.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3234,17 +3246,17 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v11 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v12 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 10. Pitchfork has a four-contact move; Dagger has five- and eight-contact moves. New timings remain under test. No actor-name filters."
-		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger IDs select their profile. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Dagger repeated strike 18 and long-windup strike 13."
+		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 10. Fox Bear: 5 strikes; longer skills remain unmapped. Pitchfork has a four-contact move; Dagger has five- and eight-contact moves. New timings remain under test. No actor-name filters."
+		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger IDs select their profile. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Fox Bear 13; Dagger repeated strike 18 and long-windup strike 13."
 		.. "\nDagger 78084477149043 follow-ups use current distance within 9 studs regardless of facing/projection; its first contact retains directional checks. This test rule is not a measured hitbox."
 		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
 		.. "\nCOMBAT_STATE records raw local attributes at inputs, damage and rejections; their clock bases may differ. NO_OBSERVED_REQUEST means no hook observation before the deadline/stop, not proof that nothing reached the server."
 		.. "\nDECISION requestDelay is local elapsed time from outgoing observation to response, not isolated network latency. Rejected requests are not replayed or retimestamped."
 		.. "\nBLOCK_EVENT observes only the configured block key outside text focus; input numbers correlate with a nearby automatic press, not proof of input origin. processed=true is the engine flag, not a confirmed rejection. SELF_ACTIONS records bounded local animation IDs/phases; no action is cancelled or replayed."
-		.. "\nDAMAGE_NEARBY includes up to 12 playing tracks of any priority/loop state, with totalTracks to expose the sampling limit. Unmapped/looping tracks remain diagnostic only."
+		.. "\nDAMAGE_NEARBY includes the bounded watched rigs within 60 studs and up to 12 playing tracks each, of any priority/loop state, with totalTracks to expose the sampling limit. Proximity is not proof of damage attribution. Unmapped/looping tracks remain diagnostic only."
 		.. "\nUnknown weapons and animation variants are logged and skipped; a Fists label alone does not establish every fist animation's timing."
 		.. "\nConfirmed counts require ParryResult with local Parrier, matching attacker and a recent test input. Accepted is only an input acknowledgment."
 		.. "\n" .. table.concat(state.Lines, "\n") .. "\nSTATUS=" .. tostring(reason)
@@ -3422,7 +3434,7 @@ local function damageSnapshot(localRoot)
 	for _, rig in pairs(state.Rigs) do
 		local root = alive(rig.Model)
 		local distance = root and (root.Position - localRoot.Position).Magnitude
-		if not distance or distance > 18 then continue end
+		if not distance or distance > 60 then continue end
 		local key = weaponOf(rig)
 		local tracks = {}
 		local playing = rig.Animator:GetPlayingAnimationTracks()
@@ -3636,7 +3648,7 @@ local function step()
 			end
 		end
 	end
-	if not best then show("Watching mapped Fists / Pitchfork / BigPitchfork / Sword / Dagger attacks"); return end
+	if not best then show("Watching mapped Fists / Pitchfork / BigPitchfork / Sword / Dagger / Fox Bear attacks"); return end
 	best.Swing.Contact = best.Contact + 1
 	best.Swing.Used = best.Contact >= best.ContactCount
 	state.LastAttempt = {At = now, Key = key, Self = model, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
@@ -3666,7 +3678,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger mappedWeaponAnimations=42 duration=90")
+	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger,FoxBear mappedWeaponAnimations=47 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

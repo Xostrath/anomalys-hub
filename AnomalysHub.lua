@@ -660,6 +660,35 @@ local function removeEsp(target)
 	state.EspEntries[target] = nil
 end
 
+local function getEspVisualMetrics(character, root)
+	local camera = workspace.CurrentCamera
+	local centerOffset = Vector3.zero
+	if not camera then return 76, 132, centerOffset end
+	local rootPoint = camera:WorldToViewportPoint(root.Position)
+	if rootPoint.Z <= 0 then return 28, 24, centerOffset end
+	local halfWidth, halfHeight, bodyPartCount = 0, 0, 0
+	for _, part in ipairs(character:GetChildren()) do
+		if part:IsA("BasePart") and part ~= root and part.Transparency < 0.98 then
+			bodyPartCount += 1
+			local half = part.Size * 0.5
+			for _, x in ipairs({-1, 1}) do
+				for _, y in ipairs({-1, 1}) do
+					for _, z in ipairs({-1, 1}) do
+						local worldPoint = part.CFrame:PointToWorldSpace(Vector3.new(half.X * x, half.Y * y, half.Z * z))
+						local viewportPoint = camera:WorldToViewportPoint(worldPoint)
+						if viewportPoint.Z > 0 then
+							halfWidth = math.max(halfWidth, math.abs(viewportPoint.X - rootPoint.X))
+							halfHeight = math.max(halfHeight, math.abs(viewportPoint.Y - rootPoint.Y))
+						end
+					end
+				end
+			end
+		end
+	end
+	if bodyPartCount == 0 then return 76, 132, centerOffset end
+	return math.clamp(halfWidth * 2 + 4, 28, 114), math.clamp(halfHeight * 2 + 4, 24, 152), centerOffset
+end
+
 local function updateEsp(target, localRoot)
 	if target == player then return end
 	local character = target.Character
@@ -672,17 +701,8 @@ local function updateEsp(target, localRoot)
 	if not entry or entry.Character ~= character then
 		removeEsp(target)
 		entry = {Character = character}
-		entry.Gui = create("BillboardGui", {
-			Name = "AnomalyUniversalESP", Size = UDim2.fromOffset(240, 68), StudsOffsetWorldSpace = Vector3.new(0, 4.2, 0),
-			AlwaysOnTop = true, LightInfluence = 0, MaxDistance = state.EspDistance, Adornee = root,
-		}, gui)
-		entry.Label = create("TextLabel", {
-			Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
-			TextColor3 = colors.Text, TextStrokeColor3 = Color3.new(), TextStrokeTransparency = 0.2,
-			TextSize = 11, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Bottom,
-		}, entry.Gui)
 		entry.BoxGui = create("BillboardGui", {
-			Name = "AnomalyUniversalESPBox", Size = UDim2.fromOffset(396, 132), StudsOffsetWorldSpace = Vector3.new(0, 1.4, 0),
+			Name = "AnomalyUniversalESPBox", Size = UDim2.fromOffset(436, 132), StudsOffsetWorldSpace = Vector3.zero,
 			AlwaysOnTop = true, LightInfluence = 0, MaxDistance = state.EspDistance, Adornee = root, ClipsDescendants = false,
 		}, gui)
 		entry.BoxFrame = create("Frame", {
@@ -690,6 +710,13 @@ local function updateEsp(target, localRoot)
 			BackgroundTransparency = 1, BorderSizePixel = 0,
 		}, entry.BoxGui)
 		entry.BoxStroke = create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.4, Transparency = 0}, entry.BoxFrame)
+		entry.InfoLabel = create("TextLabel", {
+			Name = "Identity", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0.5, 62, 0.5, 0),
+			Size = UDim2.fromOffset(174, 66), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
+			TextColor3 = colors.Text, TextStrokeColor3 = Color3.new(), TextStrokeTransparency = 0.12,
+			TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Center, ZIndex = 5,
+		}, entry.BoxGui)
 		local function makeResourceBar(name, rightOffset, fillColor)
 			local background = create("Frame", {
 				Name = name, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, rightOffset, 0, 3),
@@ -725,18 +752,22 @@ local function updateEsp(target, localRoot)
 		end
 		bar.Fill.Size = UDim2.fromScale(1, math.clamp(current / maximum, 0, 1))
 	end
-	entry.Gui.MaxDistance = state.EspDistance
+	local boxWidth, boxHeight, centerOffset = getEspVisualMetrics(character, root)
 	entry.BoxGui.MaxDistance = state.EspDistance
+	entry.BoxGui.Size = UDim2.fromOffset(boxWidth + 360, boxHeight)
+	entry.BoxGui.StudsOffsetWorldSpace = centerOffset
+	entry.BoxFrame.Size = UDim2.fromOffset(boxWidth, boxHeight)
+	entry.InfoLabel.Position = UDim2.new(0.5, boxWidth / 2 + 30, 0.5, 0)
 	local settings = state.EspSettings
 	local lines = {}
 	if settings.Name then table.insert(lines, target.DisplayName) end
 	local lineage = extra and tostring(extra.Lineage or extra.Clan or "Unknown") or "Unknown"
 	if settings.Lineage then table.insert(lines, "LINEAGE // " .. lineage) end
 	if settings.Distance then table.insert(lines, string.format("%d STUDS", math.floor(distance + 0.5))) end
-	entry.Label.Text = table.concat(lines, "\n")
-	entry.Gui.Enabled = #lines > 0
+	entry.InfoLabel.Text = table.concat(lines, "\n")
+	entry.InfoLabel.Visible = #lines > 0
 	entry.BoxStroke.Enabled = settings.Box == true
-	entry.BoxGui.Enabled = settings.Box or settings.Health or settings.Energy or settings.Stamina
+	entry.BoxGui.Enabled = #lines > 0 or settings.Box or settings.Health or settings.Energy or settings.Stamina
 	updateResourceBar(entry.Health, humanoid.Health, humanoid.MaxHealth, settings.Health)
 	updateResourceBar(entry.Energy, extra and extra.Energy, extra and extra.MaxEnergy, settings.Energy)
 	updateResourceBar(entry.Stamina, extra and extra.Stamina, extra and extra.MaxStamina, settings.Stamina)

@@ -1958,7 +1958,7 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Beyond Nen fishing setup: passive recording only until a full catch is observed.
+-- Beyond Nen fishing recorder and shared, passive fishing observations.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -1971,6 +1971,7 @@ local playerGui = player:FindFirstChildOfClass("PlayerGui")
 local ui = controller.UI
 local path = "AnomalyHub/universal/beyond_nen_fishing_capture.txt"
 local capture = {Active = false, Closed = false, Serial = 0, Lines = {}, Bytes = 0, Connections = {}, LastUI = {}}
+local listeners, remoteConnections, watching = {}, {}, false
 
 -- Persistent forwarding hooks are installed once. While stopped/unloaded their
 -- target map is empty and no UI, character or capture callback is retained.
@@ -2020,9 +2021,13 @@ local function save(reason)
 end
 
 local function observe(remote, direction, args, serial, started)
-	if not capture.Active or capture.Closed or serial ~= capture.Serial then return end
+	if capture.Closed or serial ~= probe.Serial then return end
 	local name = probe.Targets[remote]
-	if name then log(name .. " " .. direction .. " requestStart=" .. string.format("%.3f", started - capture.Started) .. " args=" .. sample(args)) end
+	if not name then return end
+	for callback in pairs(listeners) do pcall(callback, name, direction, args, started) end
+	if capture.Active and started >= capture.Started then
+		log(name .. " " .. direction .. " requestStart=" .. string.format("%.3f", started - capture.Started) .. " args=" .. sample(args))
+	end
 end
 
 local function discover()
@@ -2084,6 +2089,38 @@ local function installHooks(cast, hold)
 	direct(hold, "FireServer", "FireInstalled")
 end
 
+local function syncObservers()
+	local needed = not capture.Closed and (capture.Active or next(listeners) ~= nil)
+	if needed and not watching then
+		local targets, cast, hold = discover()
+		probe.Targets = targets
+		installHooks(cast, hold)
+		probe.Serial = (probe.Serial or 0) + 1
+		probe.Callback = observe
+		watching = true
+		for remote in pairs(targets) do
+			if remote:IsA("RemoteEvent") then
+				local serial = probe.Serial
+				table.insert(remoteConnections, remote.OnClientEvent:Connect(function(...)
+					pcall(observe, remote, "IN event", table.pack(...), serial, os.clock())
+				end))
+			end
+		end
+	elseif not needed and watching then
+		watching = false
+		if probe.Callback == observe then probe.Callback = nil; probe.Targets = {} end
+		for _, connection in ipairs(remoteConnections) do connection:Disconnect() end
+		table.clear(remoteConnections)
+	end
+end
+
+function controller.WatchBeyondNenFishing(callback)
+	if capture.Closed or type(callback) ~= "function" then return function() end end
+	listeners[callback] = true
+	syncObservers()
+	return function() listeners[callback] = nil; syncObservers() end
+end
+
 local function sampleUI()
 	local current = {}
 	local fishing = playerGui and playerGui:FindFirstChild("Fishing")
@@ -2117,7 +2154,8 @@ local function sampleUI()
 	capture.LastUI = current
 end
 
-local card = ui.Card(ui.Pages.Auto, "AUTO FISHING SETUP", "Record one complete catch so auto fishing can use this game's cast, bite and catch controls.", 218)
+local card = ui.Card(ui.Pages.Auto, "FISHING RECORDER", "Optional: record a manual catch or an auto-fishing run for troubleshooting.", 218)
+card.LayoutOrder = 20
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 124), Size = UDim2.new(1, -28, 0, 76), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Equip a rod, start recording, then fish normally through one catch.",
@@ -2128,7 +2166,7 @@ local function stop(reason)
 	if not capture.Active then return end
 	pcall(sampleUI)
 	capture.Active = false
-	if probe.Callback == observe then probe.Callback = nil; probe.Targets = {} end
+	syncObservers()
 	for _, connection in ipairs(capture.Connections) do connection:Disconnect() end
 	table.clear(capture.Connections)
 	local ok = save(reason)
@@ -2142,22 +2180,11 @@ local function start()
 	capture.Serial += 1
 	capture.Started, capture.LastSaved = os.clock(), os.clock()
 	capture.Lines, capture.Bytes, capture.Limited, capture.LastUI = {}, 0, false, {}
-	local targets, cast, hold = discover()
-	probe.Targets = targets
-	installHooks(cast, hold)
+	capture.Active = true
+	syncObservers()
 	log("Coverage: " .. (#probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "incoming events and UI only; outgoing hooks unavailable"))
 	log("Some outgoing calls may be observed by both hook types; IN events are logged once.")
-	for remote, name in pairs(targets) do log("REMOTE " .. name .. " " .. remote:GetFullName()) end
-	capture.Active = true
-	probe.Serial, probe.Callback = capture.Serial, observe
-	for remote, name in pairs(targets) do
-		if remote:IsA("RemoteEvent") then
-			local serial = capture.Serial
-			table.insert(capture.Connections, remote.OnClientEvent:Connect(function(...)
-				if capture.Active and capture.Serial == serial then pcall(observe, remote, "IN event", table.pack(...), serial, os.clock()) end
-			end))
-		end
-	end
+	for remote, name in pairs(probe.Targets) do log("REMOTE " .. name .. " " .. remote:GetFullName()) end
 	local function input(direction, value, processed)
 		if value.UserInputType == Enum.UserInputType.MouseMovement then return end
 		log(direction .. " " .. tostring(value.UserInputType) .. " " .. tostring(value.KeyCode) .. " processed=" .. tostring(processed))
@@ -2167,7 +2194,7 @@ local function start()
 	pcall(sampleUI); save("RECORDING")
 	recordButton.Text = "Stop + Save"
 	status.Text = "Recording for up to 90 seconds. Cast, play the fishing minigame, then press Stop + Save after the result."
-	if not cast then log("FishingService was not found; GUI/input recording only. Start a fresh recording after the rod is equipped.") end
+	if next(probe.Targets) == nil then log("FishingService was not found; GUI/input recording only. Start a fresh recording after the rod is equipped.") end
 end
 
 recordButton = ui.FitColumn(ui.Button(card, "Record Fishing", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
@@ -2191,9 +2218,254 @@ end)
 controller.RegisterCleanup(function()
 	stop("UNLOAD")
 	capture.Closed = true
-	if probe.Callback == observe then probe.Callback = nil; probe.Targets = {} end
+	table.clear(listeners)
+	syncObservers()
 end)
 controller.CaptureBeyondNenFishing = start
+
+end)()
+;(function()
+-- Beyond Nen auto fishing v1. Uses normal mouse input so the game's client
+-- retains its own session, cursor physics, progress and hold timestamps.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen"
+	or type(controller.WatchBeyondNenFishing) ~= "function" then return end
+local player = game:GetService("Players").LocalPlayer
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+local Workspace = game:GetService("Workspace")
+local ui = controller.UI
+local auto = {Enabled = false, Closed = false, Held = false, Phase = "Off", Catches = 0, Focused = true, Lines = {}}
+local inputManager
+pcall(function() inputManager = game:GetService("VirtualInputManager") end)
+local backend = "virtual"
+local press = env.mouse1press or mouse1press
+local release = env.mouse1release or mouse1release
+local move = env.mousemoveabs or mousemoveabs
+local reportPath = "AnomalyHub/universal/beyond_nen_autofish_test.txt"
+local toggle, status
+
+local function note(message)
+	if #auto.Lines >= 800 then table.remove(auto.Lines, 1) end
+	table.insert(auto.Lines, string.format("%.3f %s", os.clock(), message))
+end
+local function save()
+	if type(writefile) ~= "function" then return end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	pcall(writefile, reportPath, "BEYOND NEN AUTO FISHING v1\nplace=" .. tostring(game.PlaceId)
+		.. "\n" .. table.concat(auto.Lines, "\n"))
+end
+local function show(message)
+	auto.Message = message
+	local text = message .. "\nCaught this run: " .. tostring(auto.Catches)
+	if status.Text ~= text then status.Text = text end
+end
+local function rod()
+	local character = player.Character
+	local tool = character and character:FindFirstChild("Fishing")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if tool and tool:IsA("Tool") and humanoid and humanoid.Health > 0 and root then return tool, character, root end
+end
+local function send(down, x, y)
+	if auto.Held == down then return true end
+	x, y = x or auto.InputX, y or auto.InputY
+	if not x or not y then return not down end
+	local ok = pcall(function()
+		if backend == "virtual" then
+			if down then inputManager:SendMouseMoveEvent(x, y, game) end
+			inputManager:SendMouseButtonEvent(x, y, 0, down, game, 0)
+		else
+			if down then move(x, y); press() else release() end
+		end
+	end)
+	-- Choose one backend for each press/release pair. Never change on key-up.
+	if not ok and down and backend == "virtual" and type(press) == "function"
+		and type(release) == "function" and type(move) == "function" then
+		backend = "executor"
+		ok = pcall(function() move(x, y); press() end)
+	end
+	if ok then
+		auto.Held, auto.InputX, auto.InputY, auto.ChangedAt = down, x, y, os.clock()
+		note(down and "MOUSE DOWN" or "MOUSE UP")
+	end
+	return ok
+end
+local function resetMotion()
+	auto.LastX, auto.LastTime, auto.Velocity = nil, nil, 0
+end
+local function stop(reason)
+	auto.Enabled = false
+	-- Cleanup may immediately disconnect RenderStepped; retry transient failures here.
+	for _ = 1, 3 do if send(false) then break end end
+	if auto.Unwatch then auto.Unwatch(); auto.Unwatch = nil end
+	auto.Phase, auto.Session, auto.Point, auto.Character, auto.Tool = "Off", nil, nil, nil, nil
+	auto.ReleaseAt = nil
+	resetMotion()
+	toggle.Text, toggle.BackgroundColor3 = "Auto Fishing: OFF", ui.Colors.Surface
+	show(reason or "Off. Equip Fishing, enable this, then cast once manually.")
+	if auto.Started then note("STOP " .. (reason or "toggle")); save() end
+end
+local function awaitManual(reason)
+	send(false)
+	auto.Phase, auto.Session, auto.Point = "Armed", nil, nil
+	resetMotion()
+	show(reason); note("WAIT FOR MANUAL CAST " .. reason)
+end
+local function observe(name, direction, args)
+	if not auto.Enabled or auto.Closed then return end
+	if name == "Cast" and direction:sub(1, 3) == "OUT" then
+		local tool, character, root = rod()
+		if tool and typeof(args[1]) == "Vector3" then
+			auto.Point, auto.Character, auto.Tool, auto.Origin = args[1], character, tool, root.Position
+			auto.Phase, auto.Deadline = "CastPending", os.clock() + 8
+			note("CAST " .. tostring(args[1]))
+		end
+	elseif name == "Cast" and direction:sub(1, 6) == "RETURN" then
+		if args[1] == true and args[2] ~= nil and auto.Point then
+			if auto.Session ~= args[2] then
+				auto.Session, auto.Phase, auto.Deadline = args[2], "Waiting", os.clock() + 60
+				note("CAST ACCEPTED session=" .. tostring(args[2])); show("Line cast. Waiting for a bite.")
+			end
+		elseif auto.Phase == "CastPending" then awaitManual("Cast was not accepted. Aim at water and cast again.") end
+	elseif name == "Bite" and direction == "IN event" and args[1] == auto.Session then
+		auto.Phase, auto.Deadline, auto.SeenGui = "Fishing", os.clock() + 25, false
+		resetMotion(); note("BITE session=" .. tostring(args[1])); show("Bite detected. Following the target.")
+	elseif name == "Result" and direction == "IN event" and args[1] == auto.Session then
+		if auto.Phase == "Cooldown" then return end -- duplicate result must not count twice
+		send(false)
+		local result = type(args[2]) == "table" and args[2] or {}
+		if result.Outcome == "Caught" then auto.Catches += math.max(1, tonumber(result.Count) or 1) end
+		auto.Phase, auto.NextCast = "Cooldown", os.clock() + 1.5
+		resetMotion()
+		local outcome = tostring(result.Outcome or "Finished") .. (result.Fish and (": " .. tostring(result.Fish)) or "")
+		note("RESULT " .. outcome); show(outcome .. ". Preparing the next cast."); save()
+	end
+end
+
+local card = ui.Card(ui.Pages.Auto, "AUTO FISHING // v1", "Equip Fishing and cast once manually. Auto Fishing follows the target and repeats that water spot.", 218)
+card.LayoutOrder = 10
+status = ui.Create("TextLabel", {
+	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Off. The hub must be hidden while fishing (Right Shift).",
+	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, card)
+local function enable(value)
+	if auto.Closed then return end
+	if not value then stop(); return end
+	if auto.Enabled then return end
+	auto.Enabled, auto.Phase, auto.Catches, auto.Lines, auto.Started = true, "Armed", 0, {}, true
+	auto.Unwatch = controller.WatchBeyondNenFishing(observe)
+	toggle.Text, toggle.BackgroundColor3 = "Auto Fishing: ON", ui.Colors.AccentSoft
+	show("Hide the hub with Right Shift, then cast once manually at your fishing spot.")
+	note("ENABLED; awaiting manual cast"); save()
+end
+toggle = ui.FitColumn(ui.Button(card, "Auto Fishing: OFF", 0, 0, 180, function() enable(not auto.Enabled) end), 0, 72)
+ui.FitColumn(ui.Button(card, "New Fishing Spot", 0, 0, 180, function()
+	if auto.Enabled then awaitManual("Hide the hub, then cast manually at the new spot.") end
+end), 1, 72)
+
+local function geometry()
+	local playerGui = player:FindFirstChildOfClass("PlayerGui")
+	local gui = playerGui and playerGui:FindFirstChild("Fishing")
+	if not gui or not gui.Enabled then return end
+	local root = gui:FindFirstChild("Root")
+	local panel = root and root:FindFirstChild("Panel")
+	local rail = panel and panel:FindFirstChild("Rail")
+	local cursor, target = rail and rail:FindFirstChild("Cursor"), rail and rail:FindFirstChild("Target")
+	if not root or not root.Visible or not panel or not panel.Visible or not cursor or not target
+		or not rail.Visible or not cursor.Visible or not target.Visible or rail.AbsoluteSize.X <= 0 then return end
+	local width, origin = rail.AbsoluteSize.X, rail.AbsolutePosition.X
+	local x = (cursor.AbsolutePosition.X + cursor.AbsoluteSize.X * 0.5 - origin) / width
+	local center = (target.AbsolutePosition.X + target.AbsoluteSize.X * 0.5 - origin) / width
+	local half = target.AbsoluteSize.X / width * 0.5
+	if x ~= x or center ~= center or half <= 0 or half > 0.5 then return end
+	local progress = panel:FindFirstChild("ProgressText")
+	return x, center, half, progress and progress.Text or ""
+end
+
+local function step()
+	if auto.Held and (not auto.Enabled or auto.Closed) then send(false) end
+	if not auto.Enabled or auto.Closed then return end
+	local now = os.clock()
+	if now - (auto.LastSaved or 0) > 5 then auto.LastSaved = now; save() end
+	local tool, character, root = rod()
+	if not tool then stop("Stopped: equip your Fishing tool before enabling again."); return end
+	if auto.Character and (character ~= auto.Character or tool ~= auto.Tool) then stop("Character or rod changed. Enable again and cast once."); return end
+	if auto.Origin and (root.Position - auto.Origin).Magnitude > 12 then stop("You moved away from the fishing spot. Enable again at the new spot."); return end
+	if not auto.Focused or controller.State.Visible or GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then
+		send(false); resetMotion(); show("Input paused. Close the hub/chat/menu to continue fishing."); return
+	end
+	if auto.Phase == "Armed" then show("Cast once manually. Auto Fishing will handle the bite and repeat the cast."); return end
+	if auto.ReleaseAt and now >= auto.ReleaseAt then
+		if not send(false) then stop("Mouse release failed. Auto Fishing stopped."); return end
+		auto.ReleaseAt = nil
+	end
+	if auto.Phase == "CastPending" or auto.Phase == "Waiting" then
+		if now >= auto.Deadline then awaitManual("No fishing response. Cast manually once to resume.") end
+		return
+	end
+	if auto.Phase == "Cooldown" then
+		if now < auto.NextCast then return end
+		local camera = Workspace.CurrentCamera
+		if not camera or not auto.Point then awaitManual("Cast once manually to set the water spot."); return end
+		local point, onScreen = camera:WorldToViewportPoint(auto.Point)
+		if not onScreen or point.Z <= 0 then show("Turn the camera toward the saved fishing spot to recast."); return end
+		local pg = player:FindFirstChildOfClass("PlayerGui")
+		for _, object in ipairs(pg and pg:GetGuiObjectsAtPosition(point.X, point.Y) or {}) do
+			if object.Active or object:IsA("GuiButton") or object:IsA("TextBox") then show("Move the camera so the fishing spot is clear of buttons and menus."); return end
+		end
+		if tool.Enabled == false then show("Waiting for the rod to be ready."); return end
+		auto.Phase, auto.Deadline, auto.ReleaseAt = "CastPending", now + 8, now + 0.08
+		if not send(true, point.X, point.Y) then stop("Mouse input unavailable in this executor.") end
+		return
+	end
+	if auto.Phase ~= "Fishing" then return end
+	local x, center, half, progress = geometry()
+	if not x then
+		send(false); resetMotion()
+		if now >= auto.Deadline or (auto.SeenGui and now - (auto.LastGui or now) > 3) then
+			awaitManual("Fishing panel closed without a result. Cast manually to resume.")
+		end
+		return
+	end
+	auto.SeenGui, auto.LastGui = true, now
+	if now >= auto.Deadline then awaitManual("Catch timed out. Cast manually once to resume."); return end
+	local dt = auto.LastTime and now - auto.LastTime
+	local velocity = dt and dt > 0 and dt < 0.2 and math.clamp((x - auto.LastX) / dt, -2, 2) or 0
+	auto.LastX, auto.LastTime, auto.Velocity = x, now, velocity
+	-- The recording shows acceleration while held and a quick brake on release.
+	-- Look ahead a few frames, then use a deadband inside the current target.
+	local prediction = x + velocity * 0.075
+	local band = math.clamp(half * 0.32, 0.004, 0.018)
+	local down = auto.Held
+	if prediction > center + band then down = false
+	elseif prediction < center - band then down = true end
+	if down ~= auto.Held and now - (auto.ChangedAt or 0) >= 0.045 then
+		local camera = Workspace.CurrentCamera
+		if camera then
+			local viewport = camera.ViewportSize
+			if not send(down, viewport.X - 8, viewport.Y - 8) then stop("Mouse input failed. Auto Fishing stopped."); return end
+		end
+	end
+	if now - (auto.LastSample or 0) >= 1 then
+		auto.LastSample = now
+		note(string.format("TRACK x=%.3f target=%.3f half=%.3f velocity=%.3f held=%s %s", x, center, half, velocity, tostring(auto.Held), progress))
+	end
+	show("Reeling: " .. progress)
+end
+
+controller.Connect(RunService.RenderStepped, function()
+	local ok, err = pcall(step)
+	if not ok and auto.Enabled then stop("Auto Fishing stopped after an error."); note(tostring(err)); save() end
+end)
+controller.Connect(UserInputService.WindowFocusReleased, function() auto.Focused = false; send(false) end)
+controller.Connect(UserInputService.WindowFocused, function() auto.Focused = true end)
+controller.Connect(player.OnTeleport, function() if auto.Enabled then stop("Stopped for travel.") end end)
+controller.RegisterCleanup(function() stop("Unloaded."); auto.Closed = true end)
+controller.SetBeyondNenAutoFishing = enable
 
 end)()
 end

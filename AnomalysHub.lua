@@ -251,6 +251,7 @@ local pageMeta = {
 	Players = {"PLAYERS", "Find a player and control your spectator camera"},
 	ESP = {"ESP", "Player and NPC overlays together, with independent controls"},
 	Auto = {"AUTO", "Automatic activities and setup controls"},
+	Combat = {"COMBAT", "Combat recording and defense tools"},
 	Movement = {"MOVEMENT", "Character movement and collision utilities"},
 	Servers = {"SERVER NAVIGATION", "Rejoin or move to another public server"},
 	Settings = {"SETTINGS", "Persistence, keybind, reload, and cleanup"},
@@ -267,7 +268,7 @@ local function makePage(name)
 	return page
 end
 for _, name in ipairs({"Home", "Players", "ESP", "Movement", "Servers", "Settings"}) do makePage(name) end
-if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
+if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto"); makePage("Combat") end
 
 local function selectTab(name)
 	if not pages[name] then return end
@@ -287,6 +288,7 @@ end
 
 local tabNames = {{"Home", "[D]  Dashboard"}, {"Players", "[P]  Players"}, {"ESP", "[E]  ESP"}, {"Movement", "[M]  Movement"}, {"Servers", "[S]  Servers"}, {"Settings", "[=]  Settings"}}
 if pages.Auto then table.insert(tabNames, 4, {"Auto", "[A]  Auto"}) end
+if pages.Combat then table.insert(tabNames, 4, {"Combat", "[C]  Combat"}) end
 for order, definition in ipairs(tabNames) do
 	local name, text = definition[1], definition[2]
 	local button = create("TextButton", {
@@ -2501,7 +2503,7 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Shared passive observations for the mapped fishing and meditation services.
+-- Shared passive observations for the mapped fishing, meditation and combat remotes.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -2513,6 +2515,17 @@ local definitions = {
 		RE = {"CreateBubble", "DestroyBubble", "EnterCarpet", "GameInput", "GamePrompt", "GameResult", "KeyPrompt", "MeditationStopped"},
 	},
 	NenMasteryService = {RF = {"SetMeditationTechnique"}},
+	MovementService = {RF = {"Dash", "TpDash"}},
+}
+-- Exact client-visible paths from the Beyond Nen fingerprint. Both Block
+-- remotes keep distinct names; UnreliableRemoteEvents use their own method hook.
+local combatPaths = {
+	{"Remotes", "Attack"}, {"Remotes", "Block"}, {"Remotes", "CombatCooldowns"},
+	{"SecondaryRemotes", "Combat", "AnimLatencyRelay"}, {"SecondaryRemotes", "Combat", "Block"},
+	{"SecondaryRemotes", "Combat", "ChangeAttribute"}, {"SecondaryRemotes", "Combat", "Crit"},
+	{"SecondaryRemotes", "Combat", "InputUpdate"}, {"SecondaryRemotes", "Combat", "PendingReaction"},
+	{"SecondaryRemotes", "Combat", "State"}, {"SecondaryRemotes", "Combat", "Hit"},
+	{"SecondaryShared", "AnimationPlayer", "Communicate"}, {"Shared", "AnimationPlayer", "Communicate"},
 }
 local listeners, connections, closed = {}, {}, false
 -- Keep the established probe name so reloading upgrades its targets without
@@ -2532,7 +2545,7 @@ local function observe(remote, direction, args, serial, started)
 	end
 end
 
-local function installHooks(invokeRemote, fireRemote)
+local function installHooks(invokeRemote, fireRemote, unreliableRemote)
 	local hook, method = env.hookmetamethod or hookmetamethod, env.getnamecallmethod or getnamecallmethod
 	local wrap = env.newcclosure or newcclosure or function(callback) return callback end
 	if not probe.NamecallInstalled and type(hook) == "function" and type(method) == "function" then
@@ -2567,14 +2580,15 @@ local function installHooks(invokeRemote, fireRemote)
 				return table.unpack(returned, 1, returned.n)
 			end))
 		end)
-		if ok then probe[flag] = true; table.insert(probe.Coverage, "direct " .. property) end
+		if ok then probe[flag] = true; table.insert(probe.Coverage, "direct " .. property .. (flag == "UnreliableFireInstalled" and " (unreliable)" or "")) end
 	end
 	direct(invokeRemote, "InvokeServer", "InvokeInstalled")
 	direct(fireRemote, "FireServer", "FireInstalled")
+	direct(unreliableRemote, "FireServer", "UnreliableFireInstalled")
 end
 
 local function sync()
-	local targets, invokeRemote, fireRemote = {}, nil, nil
+	local targets, invokeRemote, fireRemote, unreliableRemote = {}, nil, nil, nil
 	if not closed and next(listeners) then
 		for _, object in ipairs(ReplicatedStorage:GetDescendants()) do
 			local definition = listeners[object.Name] and definitions[object.Name]
@@ -2591,11 +2605,22 @@ local function sync()
 				end
 			end
 		end
+		if listeners.Combat then
+			for _, path in ipairs(combatPaths) do
+				local remote = ReplicatedStorage
+				for _, part in ipairs(path) do remote = remote and remote:FindFirstChild(part) end
+				if remote and (remote:IsA("RemoteEvent") or remote:IsA("UnreliableRemoteEvent")) then
+					targets[remote] = {Service = "Combat", Name = table.concat(path, ".")}
+					if remote:IsA("UnreliableRemoteEvent") then unreliableRemote = unreliableRemote or remote
+					else fireRemote = fireRemote or remote end
+				end
+			end
+		end
 	end
 	if next(targets) then
 		if probe.Callback ~= observe then probe.Serial = (probe.Serial or 0) + 1 end
 		probe.Targets, probe.Callback = targets, observe
-		installHooks(invokeRemote, fireRemote)
+		installHooks(invokeRemote, fireRemote, unreliableRemote)
 	else
 		probe.Targets = {}
 		if probe.Callback == observe then probe.Callback = nil end
@@ -2604,7 +2629,7 @@ local function sync()
 		if not targets[remote] then connection:Disconnect(); connections[remote] = nil end
 	end
 	for remote in pairs(targets) do
-		if remote:IsA("RemoteEvent") and not connections[remote] then
+		if (remote:IsA("RemoteEvent") or remote:IsA("UnreliableRemoteEvent")) and not connections[remote] then
 			local serial = probe.Serial
 			connections[remote] = remote.OnClientEvent:Connect(function(...)
 				pcall(observe, remote, "IN event", table.pack(...), serial, os.clock())
@@ -2633,9 +2658,295 @@ function controller.WatchBeyondNenMeditation(callback)
 	local technique = watch("NenMasteryService", callback)
 	return function() meditation(); technique() end
 end
+function controller.WatchBeyondNenCombat(callback)
+	local combat = watch("Combat", callback)
+	local movement = watch("MovementService", callback)
+	return function() combat(); movement() end
+end
 controller.RegisterCleanup(function()
 	closed = true; table.clear(listeners); sync()
 end)
+
+end)()
+;(function()
+-- Passive preparation for Beyond Nen auto parry. No automatic combat input.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Input = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
+local player, ui = Players.LocalPlayer, controller.UI
+local path = "AnomalyHub/universal/beyond_nen_parry_capture.txt"
+local capture = {Active = false, Closed = false, Epoch = 0, Lines = {}, Bytes = 0, Rigs = {}, Connections = {}}
+local recordButton
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY RECORDER v1", "Record manual blocks and parries against one nearby opponent. Captures timing for the future auto-parry feature.", 224)
+local status = ui.Create("TextLabel", {
+	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Ready. Record ordinary hits, held blocks, timed parries, and dash attacks. Use your normal block key.",
+	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, card)
+local function log(message)
+	if not capture.Active then return end
+	local text = tostring(message)
+	if #text > 4096 then text = text:sub(1, 4068) .. " <line limit>" end
+	local line = string.format("%.4f %s", os.clock() - capture.Started, text)
+	if #capture.Lines >= 15000 or capture.Bytes + #line + 1 > 4000000 then capture.Limited = true; return end
+	table.insert(capture.Lines, line); capture.Bytes += #line + 1
+end
+local function vector(value)
+	return string.format("(%.2f,%.2f,%.2f)", value.X, value.Y, value.Z)
+end
+local function sample(value, depth, seen, budget)
+	depth, seen, budget = depth or 0, seen or {}, budget or {Left = 128}
+	budget.Left -= 1; if budget.Left < 0 then return "<node limit>" end
+	local kind = typeof(value)
+	if kind == "Instance" then return value.ClassName .. ":" .. value:GetFullName() end
+	if kind == "Vector3" then return vector(value) end
+	if kind == "string" then return string.format("%q", value:sub(1, 240) .. (#value > 240 and "<string limit>" or "")) end
+	if kind ~= "table" then return tostring(value) end
+	if seen[value] then return "<cycle>" end
+	if depth >= 3 then return "<depth limit>" end
+	seen[value] = true
+	local parts, count = {}, 0
+	for key, item in pairs(value) do
+		count += 1; if count > 32 or budget.Left <= 0 then table.insert(parts, "<field limit>"); break end
+		table.insert(parts, sample(key, depth + 1, seen, budget) .. "=" .. sample(item, depth + 1, seen, budget))
+	end
+	seen[value] = nil
+	return "{" .. table.concat(parts, ",") .. "}"
+end
+local function save(reason)
+	capture.Report = "BEYOND NEN PARRY CAPTURE v1 // PASSIVE\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
+		.. "\nNo block/attack inputs, remote requests/replays, script decompilation, or chat/typed-text recording."
+		.. "\nLocal character and up to 8 nearest loaded humanoids within 120 studs. Motion/track phase sampled at up to 20Hz; animation/input/attribute events have receipt timestamps."
+		.. "\nATTR and remote outcomes are raw observations, not a verdict that a parry succeeded. ANIM_EXISTING was already playing when first seen."
+		.. "\nRemote calls are forwarded first; requestStart preserves the observed call time. Direct and namecall hooks may duplicate an event."
+		.. "\nClock fields preserve raw server/game values; they may use different time bases."
+		.. "\nLimits: 120 seconds, 15000 lines/4MB, 12 active tracks per actor, remote payloads 3 levels/32 fields/128 nodes."
+		.. "\n" .. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason
+		.. (capture.Limited and "\nCAPTURE LIMIT REACHED" or "")
+	if type(writefile) ~= "function" then return false end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	return pcall(writefile, path, capture.Report)
+end
+local function relevant(key)
+	key = string.lower(key)
+	for _, part in ipairs({"block", "parr", "posture", "stun", "hit", "attack", "swing", "combo", "m1", "m2", "dash", "rushdown", "crit", "feint", "rag", "flinch", "iframes", "invul", "weapon", "style"}) do
+		if key:find(part, 1, true) then return true end
+	end
+	return key == "health" or key == "busy" or key == "interupt" or key == "level" or key == "agility" or key == "speed"
+end
+local function rootOf(model)
+	local root = model and (model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head"))
+	return root and root:IsA("BasePart") and root or nil
+end
+local function releaseRig(entry)
+	entry.Active = false
+	for _, connection in ipairs(entry.Connections) do connection:Disconnect() end
+	for _, track in pairs(entry.Tracks) do if track.Connection then track.Connection:Disconnect() end end
+	table.clear(entry.Connections); table.clear(entry.Tracks)
+end
+local function watchTrack(entry, track, source)
+	if entry.Tracks[track] then return end
+	local count = 0; for _ in pairs(entry.Tracks) do count += 1 end
+	if count >= 12 then if not entry.TrackLimit then log("TRACK LIMIT actor=" .. entry.Id); entry.TrackLimit = true end; return end
+	capture.TrackId += 1
+	local info = {Id = capture.TrackId}
+	entry.Tracks[track] = info
+	local animation = track.Animation
+	log(source .. " actor=" .. entry.Id .. " track=" .. info.Id .. " animation=" .. tostring(animation and animation.AnimationId)
+		.. " name=" .. tostring(track.Name) .. " pos=" .. tostring(track.TimePosition) .. " speed=" .. tostring(track.Speed)
+		.. " length=" .. tostring(track.Length) .. " priority=" .. tostring(track.Priority) .. " loop=" .. tostring(track.Looped))
+	info.Connection = track.Stopped:Connect(function()
+		if not capture.Active or not entry.Active or entry.Tracks[track] ~= info then return end
+		log("ANIM_STOP actor=" .. entry.Id .. " track=" .. info.Id .. " pos=" .. tostring(track.TimePosition))
+		info.Connection:Disconnect(); entry.Tracks[track] = nil
+	end)
+end
+local function bindRig(model, owner)
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+	local entry = capture.Rigs[model]
+	if entry and entry.Humanoid ~= humanoid then releaseRig(entry); capture.Rigs[model] = nil; entry = nil end
+	if not entry then
+		capture.RigId += 1
+		entry = {Id = capture.RigId, Active = true, Model = model, Owner = owner, Humanoid = humanoid, Connections = {}, Tracks = {}}
+		capture.Rigs[model] = entry
+		log("ACTOR id=" .. entry.Id .. " owner=" .. (owner and owner.Name or "NPC") .. " self=" .. tostring(owner == player) .. " model=" .. model:GetFullName())
+		local function attributes(object, label)
+			for key, value in pairs(object:GetAttributes()) do if relevant(key) then log("INITIAL_ATTR actor=" .. entry.Id .. " " .. label .. "." .. key .. "=" .. sample(value)) end end
+			table.insert(entry.Connections, object.AttributeChanged:Connect(function(key)
+				if capture.Active and entry.Active and relevant(key) then log("ATTR actor=" .. entry.Id .. " " .. label .. "." .. key .. "=" .. sample(object:GetAttribute(key))) end
+			end))
+		end
+		attributes(model, "Character"); if owner then attributes(owner, "Player") end
+		log("HUMANOID actor=" .. entry.Id .. " health=" .. tostring(humanoid.Health) .. " max=" .. tostring(humanoid.MaxHealth))
+		table.insert(entry.Connections, humanoid.HealthChanged:Connect(function(value)
+			if capture.Active and entry.Active then log("HUMANOID_HEALTH actor=" .. entry.Id .. " value=" .. tostring(value)) end
+		end))
+		for _, child in ipairs(model:GetChildren()) do if child:IsA("Tool") then log("EQUIPPED actor=" .. entry.Id .. " tool=" .. child.Name) end end
+	end
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if animator and entry.Animator ~= animator then
+		if entry.AnimationConnection then entry.AnimationConnection:Disconnect() end
+		entry.Animator = animator
+		entry.AnimationConnection = animator.AnimationPlayed:Connect(function(track)
+			if capture.Active and entry.Active then watchTrack(entry, track, "ANIM_START") end
+		end)
+		table.insert(entry.Connections, entry.AnimationConnection)
+		local ok, playing = pcall(animator.GetPlayingAnimationTracks, animator)
+		if ok then for _, track in ipairs(playing) do watchTrack(entry, track, "ANIM_EXISTING") end end
+	end
+	return entry
+end
+local function syncRigs()
+	local localModel = player.Character
+	local localRoot = rootOf(localModel)
+	local pool, owners, seen, wanted = {}, {}, {}, {}
+	for _, target in ipairs(Players:GetPlayers()) do
+		if target.Character then owners[target.Character] = target; capture.PlayerModels[target.Character] = target end
+	end
+	local function candidate(model)
+		if seen[model] then return end; seen[model] = true
+		if not model:IsA("Model") or not model:IsDescendantOf(workspace) then return end
+		local previousOwner = capture.PlayerModels[model]
+		if previousOwner and previousOwner.Character ~= model then return end
+		if model == localModel then wanted[model] = true; bindRig(model, player); return end
+		local root, humanoid = rootOf(model), model:FindFirstChildOfClass("Humanoid")
+		if not localRoot or not root or not humanoid or humanoid.Health <= 0 then return end
+		local distance = (root.Position - localRoot.Position).Magnitude
+		if distance <= 120 then table.insert(pool, {Model = model, Distance = distance}) end
+	end
+	for model in pairs(owners) do candidate(model) end
+	local folder = workspace:FindFirstChild("Humanoids")
+	if folder then
+		for index, model in ipairs(folder:GetChildren()) do
+			if index > 500 then if not capture.PoolLimit then log("ACTOR SCAN LIMIT 500"); capture.PoolLimit = true end; break end
+			candidate(model)
+		end
+	end
+	table.sort(pool, function(a, b) return a.Distance < b.Distance end)
+	for index = 1, math.min(#pool, 8) do
+		local model = pool[index].Model; wanted[model] = true; bindRig(model, owners[model])
+	end
+	for model, entry in pairs(capture.Rigs) do
+		if not wanted[model] then log("ACTOR_LEAVE id=" .. entry.Id .. " reason=out-of-scope-or-unloaded"); releaseRig(entry); capture.Rigs[model] = nil end
+	end
+end
+local function motion()
+	local parts = {}
+	for _, entry in pairs(capture.Rigs) do
+		local root = rootOf(entry.Model)
+		if root then
+			local item = "actor=" .. entry.Id .. " p=" .. vector(root.Position) .. " v=" .. vector(root.AssemblyLinearVelocity) .. " look=" .. vector(root.CFrame.LookVector)
+			local tracks = {}
+			for track, info in pairs(entry.Tracks) do
+				if track.IsPlaying then table.insert(tracks, string.format("%d:%.3f@%.3f", info.Id, track.TimePosition, track.Speed))
+				else
+					log("ANIM_ENDED_SAMPLED actor=" .. entry.Id .. " track=" .. info.Id)
+					if info.Connection then info.Connection:Disconnect() end; entry.Tracks[track] = nil
+				end
+			end
+			if #tracks > 0 then item ..= " tracks(id:phase@speed)=" .. table.concat(tracks, ",") end
+			table.insert(parts, item)
+		end
+	end
+	log("MOTION " .. table.concat(parts, " | "))
+end
+local function clockSample()
+	local ok, server = pcall(workspace.GetServerTimeNow, workspace)
+	local network = Stats:FindFirstChild("Network")
+	local items = network and network:FindFirstChild("ServerStatsItem")
+	local ping = items and items:FindFirstChild("Data Ping")
+	local pingOk, value = false, nil
+	if ping then pingOk, value = pcall(ping.GetValue, ping) end
+	log("CLOCK local=" .. tostring(os.clock()) .. " unix=" .. tostring(os.time()) .. " server=" .. (ok and tostring(server) or "unavailable")
+		.. " pingMs=" .. (pingOk and tostring(value) or "unavailable"))
+end
+local function inputMap()
+	local bindings = {Block = "F", Dash = "Q", Critical = "R", Feint = "MouseButton2", Rushdown = "MouseButton2", Attack = "MouseButton1"}
+	local raw = player:GetAttribute("KeybindsJson")
+	local ok, configured = pcall(HttpService.JSONDecode, HttpService, raw or "")
+	local result = {}
+	for action, fallback in pairs(bindings) do
+		local key = ok and type(configured) == "table" and type(configured[action]) == "string" and configured[action] or fallback
+		result[key] = result[key] and (result[key] .. "/" .. action) or action
+		log("BIND " .. action .. "=" .. key .. " source=" .. (ok and type(configured) == "table" and configured[action] and "configured" or "fallback"))
+	end
+	return result
+end
+local function stop(reason)
+	if not capture.Active then return end
+	log("STOP " .. tostring(reason)); capture.Active = false
+	if capture.Unwatch then capture.Unwatch(); capture.Unwatch = nil end
+	for _, connection in ipairs(capture.Connections) do connection:Disconnect() end; table.clear(capture.Connections)
+	for _, entry in pairs(capture.Rigs) do releaseRig(entry) end; table.clear(capture.Rigs)
+	local saved = save(reason)
+	recordButton.Text, recordButton.BackgroundColor3 = "Record Parry", ui.Colors.AccentSoft
+	status.Text = saved and ("Recording saved" .. (capture.Limited and " (limit reached)" or "") .. ". Ready to review.") or "Could not save the file. Use Copy Recording."
+end
+local function start()
+	if capture.Closed or controller.IsUnloaded() then return end
+	if capture.Active then stop("STOPPED"); return end
+	if type(writefile) ~= "function" then status.Text = "Recording needs executor file access."; return end
+	capture.Epoch += 1
+	capture.Active, capture.Started, capture.NextSync, capture.NextMotion, capture.NextClock, capture.NextSave = true, os.clock(), 0, 0, 0, 0
+	capture.Lines, capture.Bytes, capture.RigId, capture.TrackId, capture.Limited, capture.PoolLimit = {}, 0, 0, 0, false, false
+	capture.PlayerModels = {}
+	local epoch = capture.Epoch
+	capture.InputMap = inputMap()
+	local function input(direction, value, processed)
+		if not capture.Active or capture.Epoch ~= epoch or Input:GetFocusedTextBox() then return end
+		local key = value.UserInputType == Enum.UserInputType.Keyboard and value.KeyCode.Name or value.UserInputType.Name
+		local action = capture.InputMap[key]
+		if action then log("INPUT " .. direction .. " key=" .. key .. " action=" .. action .. " processed=" .. tostring(processed)) end
+	end
+	table.insert(capture.Connections, Input.InputBegan:Connect(function(value, processed) input("DOWN", value, processed) end))
+	table.insert(capture.Connections, Input.InputEnded:Connect(function(value, processed) input("UP", value, processed) end))
+	table.insert(capture.Connections, player:GetAttributeChangedSignal("KeybindsJson"):Connect(function() capture.InputMap = inputMap() end))
+	if controller.WatchBeyondNenCombat then
+		capture.Unwatch = controller.WatchBeyondNenCombat(function(name, direction, args, started)
+			if not capture.Active or capture.Epoch ~= epoch or started < capture.Started then return end
+			log("REMOTE " .. name .. " " .. direction .. " requestStart=" .. string.format("%.4f", started - capture.Started) .. " args=" .. sample(args))
+		end)
+	end
+	local probe = env.__AnomalyBeyondFishingProbe
+	log("COVERAGE " .. (probe and #probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "outgoing hooks unavailable; local input/animation/attributes and available incoming signals only"))
+	local count = 0
+	for remote, definition in pairs(probe and probe.Targets or {}) do
+		if definition.Service == "Combat" or definition.Service == "MovementService" then count += 1; log("WATCH " .. remote:GetFullName()) end
+	end
+	log("WATCH_COUNT " .. count)
+	local ok, err = pcall(function() syncRigs(); clockSample(); motion() end)
+	if not ok then log("ERROR " .. tostring(err)); stop("START_ERROR"); return end
+	if not save("RECORDING") then stop("SAVE_FAILED"); return end
+	recordButton.Text, recordButton.BackgroundColor3 = "Stop + Save", ui.Colors.Danger
+	status.Text = "Recording up to 2 minutes. Take a few hits, hold block, try timed parries, and include dash attacks. Then Stop + Save."
+end
+recordButton = ui.FitColumn(ui.Button(card, "Record Parry", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
+ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()
+	if capture.Active then save("RECORDING") end
+	if capture.Report and type(setclipboard) == "function" then
+		local ok = pcall(setclipboard, capture.Report); status.Text = ok and "Recording copied." or "Clipboard unavailable."
+	end
+end), 1, 72)
+controller.Connect(RunService.Heartbeat, function()
+	if not capture.Active then return end
+	local now = os.clock()
+	if capture.Limited or now - capture.Started >= 120 then stop(capture.Limited and "LIMIT_REACHED" or "COMPLETE"); return end
+	local ok, err = pcall(function()
+		if now >= capture.NextSync then capture.NextSync = now + .25; syncRigs() end
+		if now >= capture.NextMotion then capture.NextMotion = now + .05; motion() end
+		if now >= capture.NextClock then capture.NextClock = now + 2; clockSample() end
+	end)
+	if not ok then log("ERROR " .. tostring(err)); stop("CAPTURE_ERROR"); return end
+	if now >= capture.NextSave then capture.NextSave = now + 3; save("RECORDING") end
+end)
+controller.Connect(player.OnTeleport, function() stop("TELEPORT") end)
+controller.RegisterCleanup(function() stop("UNLOAD"); capture.Closed = true end)
 
 end)()
 ;(function()

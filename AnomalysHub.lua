@@ -565,12 +565,17 @@ local antiAfkToggle = button(behaviorCard, state.AntiAfk and "Anti-AFK: ON" or "
 	saveConfig()
 end, state.AntiAfk and colors.AccentSoft or colors.Surface)
 
-local controller = {Profile = tostring(env.__AnomalyDetectedProfile or "Universal"), Version = "1.0"}
+local controller = {Profile = tostring(env.__AnomalyDetectedProfile or "Universal"), Version = "1.0", CleanupCallbacks = {}}
 
 local function unload()
 	if unloaded then return end
 	saveConfig()
 	unloaded = true
+	for _, cleanup in ipairs(controller.CleanupCallbacks) do
+		local ok, err = pcall(cleanup)
+		if not ok then warn("[Anomaly] Adapter cleanup: " .. tostring(err)) end
+	end
+	table.clear(controller.CleanupCallbacks)
 	stopSpectating()
 	for part, canCollide in pairs(state.Collision) do if part and part.Parent then pcall(function() part.CanCollide = canCollide end) end end
 	for _, entry in pairs(state.EspEntries) do
@@ -592,6 +597,12 @@ function controller.ToggleVisible() return controller.SetVisible(not state.Visib
 function controller.GetProfile() return controller.Profile, game.GameId, game.PlaceId end
 function controller.CaptureRemoteFingerprint() return captureRemoteFingerprint() end
 function controller.SaveConfig() return saveConfig() end
+function controller.IsUnloaded() return unloaded end
+function controller.RegisterCleanup(callback)
+	if unloaded or type(callback) ~= "function" then return false end
+	table.insert(controller.CleanupCallbacks, callback)
+	return true
+end
 controller.UI = {
 	Gui = gui, Window = window, Pages = pages, TabButtons = tabButtons,
 	Colors = colors, Create = create, Card = card, Button = button, ValueBox = valueBox,
@@ -1135,6 +1146,365 @@ if type(ui) == "table" and ui.Pages and ui.Pages.Players and type(ui.Card) == "f
 end
 
 print("[Anomaly] Beyond Nen adapter loaded")
+
+end)()
+;(function()
+-- Beyond Nen session dashboard. Reads local replicated data; no remote requests.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local ui = controller.UI
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer
+local file = "AnomalyHub/universal/session_" .. tostring(game.GameId) .. "_" .. tostring(player.UserId) .. ".json"
+local reportFile = "AnomalyHub/universal/beyond_nen_session_state.txt"
+local alive, connections = true, {}
+
+local function bind(key, signal, callback)
+	if connections[key] then connections[key]:Disconnect(); connections[key] = nil end
+	if signal then
+		connections[key] = signal:Connect(function(...)
+			if alive then callback(...) end
+		end)
+	end
+end
+
+-- BEGIN BEYOND SESSION MODEL
+local function numeric(value)
+	local result = tonumber(value)
+	if not result or result ~= result or result == math.huge or result == -math.huge or result < 0 then return nil end
+	return result
+end
+
+local function newSession(now)
+	return {StartedAt = now, Counters = {Kills = 0, Chests = 0, Hops = 0, Deaths = 0, Money = 0}, Samples = {}}
+end
+
+local function restoreSession(data, now, userId, universeId, jobId)
+	local session = newSession(now)
+	if type(data) ~= "table" or data.Version ~= 1 or data.UserId ~= userId or data.UniverseId ~= universeId
+		or not numeric(data.SavedAt) or data.SavedAt > now or now - data.SavedAt > 900
+		or not numeric(data.StartedAt) or data.StartedAt > now then return session end
+	session.StartedAt = data.StartedAt
+	session.StartLevel, session.CurrentLevel = numeric(data.StartLevel), numeric(data.CurrentLevel)
+	session.LevelBaselineLocked = session.StartLevel ~= nil
+	session.Slot = type(data.Slot) == "string" and data.Slot or nil
+	for key in pairs(session.Counters) do
+		session.Counters[key] = type(data.Counters) == "table" and numeric(data.Counters[key]) or 0
+		session.Counters[key] = session.Counters[key] or 0
+	end
+	if type(data.JobId) == "string" and data.JobId ~= "" and jobId ~= "" and data.JobId ~= jobId then
+		session.Counters.Hops += 1
+	end
+	return session
+end
+
+local function observe(session, key, value, sourceId, ready)
+	value = numeric(value)
+	if not value then session.Samples[key] = nil; return end
+	local previous = session.Samples[key]
+	session.Samples[key] = {Value = value, Source = sourceId, Ready = ready}
+	if key == "Level" then
+		session.CurrentLevel = value
+		if not session.StartLevel or not session.LevelBaselineLocked then session.StartLevel = value end
+		if ready then session.LevelBaselineLocked = true end
+		return
+	end
+	if ready and previous and previous.Ready and previous.Source == sourceId and value > previous.Value then
+		session.Counters[key] += value - previous.Value
+	end
+end
+
+local function resetSession(session, now)
+	session.StartedAt = now
+	for key in pairs(session.Counters) do session.Counters[key] = 0 end
+	session.StartLevel = session.CurrentLevel
+	session.LevelBaselineLocked = session.CurrentLevel ~= nil
+end
+-- END BEYOND SESSION MODEL
+
+local session = newSession(os.time())
+local loadedOk, loaded = pcall(function()
+	if type(readfile) == "function" and type(isfile) == "function" and isfile(file) then
+		return HttpService:JSONDecode(readfile(file))
+	end
+end)
+if loadedOk then session = restoreSession(loaded, os.time(), player.UserId, game.GameId, game.JobId) end
+
+local function writeLocal(path, body)
+	if type(writefile) ~= "function" then return false end
+	if type(makefolder) == "function" then
+		pcall(makefolder, "AnomalyHub")
+		pcall(makefolder, "AnomalyHub/universal")
+	end
+	return pcall(writefile, path, body)
+end
+
+local saveOk = true
+local function save()
+	local ok, body = pcall(HttpService.JSONEncode, HttpService, {
+		Version = 1, UserId = player.UserId, UniverseId = game.GameId, JobId = game.JobId,
+		StartedAt = session.StartedAt, SavedAt = os.time(), Slot = session.Slot,
+		StartLevel = session.StartLevel, CurrentLevel = session.CurrentLevel, Counters = session.Counters,
+	})
+	saveOk = ok and writeLocal(file, body) == true
+	return saveOk
+end
+
+local definitions = {
+	Level = {"Level", "CurrentLevel", "PlayerLevel"},
+	Money = {"Jenni", "Jenny", "Money", "Cash", "Yen"},
+	Kills = {"NPCKills", "NPCsKilled", "MobsKilled", "EnemiesKilled", "MobKills", "TotalNPCKills"},
+	Chests = {"ChestsLooted", "ChestsOpened", "TotalChestsOpened", "TotalChestsLooted"},
+}
+local slotNames = {"CurrentSlot", "ActiveSlot", "SelectedSlot", "SaveSlot", "Slot"}
+local function normalize(value) return tostring(value):lower():gsub("[^%w]", "") end
+local function directValue(root, names)
+	if not root then return nil end
+	for _, name in ipairs(names) do
+		local value = root:GetAttribute(name)
+		local child = root:FindFirstChild(name)
+		if value == nil and child and child:IsA("ValueBase") then value = child.Value end
+		if type(value) == "string" or type(value) == "number" then return tostring(value) end
+	end
+end
+
+-- The capture showed Data.SavesSlot.<slot>.CharacterData. Never combine
+-- inventories, other players, GUI prices, or inactive save slots into stats.
+local function getRoots()
+	local roots = {player}
+	local data = player:FindFirstChild("Data")
+	local saves = data and data:FindFirstChild("SavesSlot")
+	local sharedData = data and data:FindFirstChild("SharedData")
+	local slotId = directValue(player, slotNames) or directValue(data, slotNames) or directValue(sharedData, slotNames)
+	local slot = saves and slotId and saves:FindFirstChild(slotId)
+	if saves and not slotId then
+		local candidates = {}
+		for _, child in ipairs(saves:GetChildren()) do
+			if child:FindFirstChild("CharacterData") then table.insert(candidates, child) end
+		end
+		if #candidates == 1 then slot = candidates[1]; slotId = slot.Name end
+	end
+	if slot then
+		local characterData = slot:FindFirstChild("CharacterData")
+		local playerData = slot:FindFirstChild("PlayerData")
+		if characterData then table.insert(roots, characterData) end
+		if playerData then table.insert(roots, playerData) end
+	end
+	for _, name in ipairs({"leaderstats", "PlayerStats", "Stats", "Statistics"}) do
+		local root = player:FindFirstChild(name)
+		if root then table.insert(roots, root) end
+	end
+	if sharedData then table.insert(roots, sharedData) end
+	local initialCount = #roots
+	for i = 1, initialCount do
+		for _, name in ipairs({"Stats", "Statistics", "Currencies", "Currency"}) do
+			local child = roots[i]:FindFirstChild(name)
+			if child then table.insert(roots, child) end
+		end
+	end
+	return roots, slotId
+end
+
+local function findSource(roots, names)
+	for _, name in ipairs(names) do
+		local key = normalize(name)
+		for _, root in ipairs(roots) do
+			for attribute, value in pairs(root:GetAttributes()) do
+				if normalize(attribute) == key and numeric(value) then
+					return {Object = root, Attribute = attribute, Id = root:GetFullName() .. "@" .. attribute}
+				end
+			end
+			for _, child in ipairs(root:GetChildren()) do
+				if normalize(child.Name) == key then
+					if child:IsA("ValueBase") and numeric(child.Value) then
+						return {Object = child, Id = child:GetFullName() .. ".Value"}
+					elseif numeric(child:GetAttribute("Value")) then
+						return {Object = child, Attribute = "Value", Id = child:GetFullName() .. "@Value"}
+					end
+				end
+			end
+		end
+	end
+end
+
+local sources, pending, labels = {}, {}, {}
+local card = ui.Card(ui.Pages.Home, "SESSION STATS", "Carries across server hops; resets after 15 minutes away.", 450)
+card.LayoutOrder = -1
+local grid = ui.Create("Frame", {
+	Position = UDim2.fromOffset(14, 68), Size = UDim2.new(1, -28, 0, 280), BackgroundTransparency = 1,
+}, card)
+ui.Create("UIGridLayout", {
+	CellPadding = UDim2.fromOffset(8, 8), CellSize = UDim2.new(0.5, -4, 0, 64),
+	FillDirectionMaxCells = 2, SortOrder = Enum.SortOrder.LayoutOrder,
+}, grid)
+for order, definition in ipairs({
+	{"Time", "SESSION TIME"}, {"Level", "LEVEL / GAINED"}, {"LevelRate", "LEVELS / HOUR"}, {"Kills", "NPC KILLS"},
+	{"Money", "JENNI EARNED"}, {"Chests", "CHESTS LOOTED"}, {"Hops", "SERVER HOPS"}, {"Deaths", "DEATHS"},
+}) do
+	local tile = ui.Create("Frame", {LayoutOrder = order, BackgroundColor3 = ui.Colors.Surface, BorderSizePixel = 0}, grid)
+	ui.Create("UICorner", {CornerRadius = UDim.new(0, 7)}, tile)
+	ui.Create("TextLabel", {
+		Position = UDim2.fromOffset(12, 7), Size = UDim2.new(1, -24, 0, 16), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, Text = definition[2], TextColor3 = ui.Colors.Muted, TextSize = 9,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, tile)
+	labels[definition[1]] = ui.Create("TextLabel", {
+		Position = UDim2.fromOffset(12, 27), Size = UDim2.new(1, -24, 0, 26), BackgroundTransparency = 1,
+		Font = Enum.Font.GothamSemibold, Text = "--", TextColor3 = ui.Colors.Text, TextSize = 13,
+		TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = Enum.TextXAlignment.Left,
+	}, tile)
+end
+local status = ui.Create("TextLabel", {
+	Position = UDim2.fromOffset(14, 407), Size = UDim2.new(1, -28, 0, 30), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Reading character stats...", TextColor3 = ui.Colors.Muted, TextSize = 9,
+	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, card)
+
+local function render()
+	local elapsed = math.max(0, os.time() - session.StartedAt)
+	local function rate(value) return elapsed >= 60 and string.format("%.1f", value * 3600 / elapsed) or "--" end
+	labels.Time.Text = string.format("%dh %02dm %02ds", math.floor(elapsed / 3600), math.floor(elapsed / 60) % 60, elapsed % 60)
+	local level = sources.Level and session.CurrentLevel
+	local gained = level and math.max(0, level - (session.StartLevel or level)) or 0
+	labels.Level.Text = level and string.format("%d  (+%d)", level, gained) or "Not detected"
+	labels.LevelRate.Text = level and rate(gained) or "--"
+	for _, key in ipairs({"Kills", "Money", "Chests"}) do
+		labels[key].Text = sources[key] and (key == "Chests" and tostring(math.floor(session.Counters[key]))
+			or string.format("%d  (%s/h)", session.Counters[key], rate(session.Counters[key]))) or "Not detected"
+	end
+	labels.Hops.Text = tostring(session.Counters.Hops)
+	labels.Deaths.Text = tostring(session.Counters.Deaths)
+	if not saveOk then
+		status.Text = "Tracking this run. File saving is unavailable."
+	else
+		local count = 0
+		for _ in pairs(sources) do count += 1 end
+		status.Text = count == 4 and "Stats update live. Positive Jenni gains count as earnings."
+			or "Some stats aren't exposed yet. Capture Stats helps identify them."
+	end
+end
+
+local function capture()
+	local lines = {"BEYOND NEN SESSION STATS // PASSIVE v1", "Local player data only. No remote requests.",
+		"place=" .. game.PlaceId .. " universe=" .. game.GameId, "slot=" .. tostring(session.Slot)}
+	for key in pairs(definitions) do table.insert(lines, key .. " source=" .. (sources[key] and sources[key].Id or "NOT DETECTED")) end
+	local roots = getRoots()
+	for _, root in ipairs(roots) do
+		table.insert(lines, "[" .. root:GetFullName() .. "]")
+		for name, value in pairs(root:GetAttributes()) do table.insert(lines, "ATTR " .. name .. "=" .. tostring(value):sub(1, 500)) end
+		for _, child in ipairs(root:GetChildren()) do
+			if child:IsA("ValueBase") then
+				table.insert(lines, "VALUE " .. child.Name .. "=" .. tostring(child.Value):sub(1, 500))
+			else table.insert(lines, "CHILD " .. child.Name .. " [" .. child.ClassName .. "]") end
+		end
+	end
+	local report = table.concat(lines, "\n")
+	if #report > 120000 then report = report:sub(1, 120000) .. "\nTRUNCATED at 120KB" end
+	return writeLocal(reportFile, report)
+end
+
+ui.Button(card, "Reset Session", 14, 362, 164, function()
+	resetSession(session, os.time()); save(); render()
+end)
+ui.Button(card, "Capture Stats", 188, 362, 164, function()
+	local ok = capture()
+	status.Text = ok and "Saved beyond_nen_session_state.txt" or "Capture could not be saved."
+end, ui.Colors.AccentSoft)
+
+local function readSourceValue(source)
+	if not source.Object.Parent then return nil end
+	if source.Attribute then return source.Object:GetAttribute(source.Attribute) end
+	return source.Object.Value
+end
+
+local function sample(key)
+	local source = sources[key]
+	if not source then return end
+	local value = readSourceValue(source)
+	observe(session, key, value, source.Id, os.clock() >= source.ReadyAt)
+end
+
+local lastCaptureSignature
+local function refreshSources()
+	local roots, slot = getRoots()
+	if session.Slot and slot and session.Slot ~= slot then
+		session = newSession(os.time())
+		for key in pairs(definitions) do bind("stat:" .. key, nil); sources[key] = nil; pending[key] = nil end
+	end
+	if slot then session.Slot = slot end
+	for key, aliases in pairs(definitions) do
+		local source = sources[key]
+		if source and not source.Object.Parent then
+			bind("stat:" .. key, nil); sources[key] = nil; session.Samples[key] = nil; pending[key] = nil
+		end
+		local found = findSource(roots, aliases)
+		local old = sources[key]
+		if found and (not old or old.Object ~= found.Object or old.Attribute ~= found.Attribute) then
+			local candidate = pending[key]
+			-- Let replicated data settle before taking the first earnings baseline.
+			if not candidate or candidate.Object ~= found.Object or candidate.Id ~= found.Id then
+				pending[key] = {Object = found.Object, Id = found.Id, At = os.clock()}
+			elseif os.clock() - candidate.At >= 3 then
+				found.ReadyAt = os.clock() + 3
+				sources[key] = found; session.Samples[key] = nil; pending[key] = nil
+				local signal = found.Attribute and found.Object:GetAttributeChangedSignal(found.Attribute)
+					or found.Object:GetPropertyChangedSignal("Value")
+				bind("stat:" .. key, signal, function() sample(key) end)
+			end
+		elseif not found then
+			bind("stat:" .. key, nil)
+			sources[key] = nil; pending[key] = nil; session.Samples[key] = nil
+		end
+		sample(key)
+	end
+	local signature = {}
+	for _, key in ipairs({"Level", "Money", "Kills", "Chests"}) do table.insert(signature, sources[key] and sources[key].Id or "?") end
+	local joined = table.concat(signature, "|")
+	if joined ~= lastCaptureSignature then lastCaptureSignature = joined; capture() end
+end
+
+local watchedHumanoid
+local function hookCharacter(character)
+	bind("humanoid-added", nil); bind("death", nil)
+	watchedHumanoid = nil
+	if not character then return end
+	local function attach(humanoid)
+		if not humanoid:IsA("Humanoid") or watchedHumanoid == humanoid then return end
+		watchedHumanoid = humanoid
+		local counted = humanoid.Health <= 0
+		bind("death", humanoid.Died, function()
+			if counted then return end
+			counted = true; session.Counters.Deaths += 1; save(); render()
+		end)
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then attach(humanoid) end
+	bind("humanoid-added", character.ChildAdded, attach)
+end
+
+local updateElapsed, saveElapsed = 0, 0
+bind("character", player.CharacterAdded, hookCharacter)
+bind("character-removing", player.CharacterRemoving, function() hookCharacter(nil) end)
+bind("teleport", player.OnTeleport, function(state)
+	if state == Enum.TeleportState.Started then save() end
+end)
+bind("heartbeat", RunService.Heartbeat, function(delta)
+	updateElapsed += delta; saveElapsed += delta
+	if updateElapsed >= 1 then updateElapsed = 0; refreshSources(); render() end
+	if saveElapsed >= 15 then saveElapsed = 0; save() end
+end)
+controller.RegisterCleanup(function()
+	if not alive then return end
+	save(); alive = false
+	for _, connection in pairs(connections) do connection:Disconnect() end
+	table.clear(connections)
+end)
+controller.CaptureBeyondNenSessionState = capture
+hookCharacter(player.Character)
+refreshSources(); save(); render()
 
 end)()
 end

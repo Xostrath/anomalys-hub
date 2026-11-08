@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v6. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v7. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3179,6 +3179,9 @@ local weaponProfiles = {
 		["101558279775309"] = {Phase = .33, Name = "dagger M1-4"},
 		["128432742916508"] = {Phase = .42, Name = "dagger M1-5"},
 		["92183486518214"] = {Phase = .46, Name = "dagger extra strike"},
+		-- Six v6 damage snapshots at phases .537-.611, speed 1.04.
+		-- The exact move name and automatic parry outcome remain unverified.
+		["113521135913624"] = {Phase = .52, Name = "dagger additional strike (test)"},
 		-- Later hits persist after a confirmed first parry in the capture.
 		-- Each contact is attempted at most once; cooldowns still gate inputs.
 		["78084477149043"] = {Phases = {.30, .87, 1.12, 1.50}, Name = "dagger multi-hit"},
@@ -3194,7 +3197,7 @@ for _, key in ipairs({"sword", "dagger"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v6", "Fists / BigPitchfork / Sword / Dagger. Dagger combo and multi-hit timing ready for testing.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v7", "Fists / BigPitchfork / Sword / Dagger. Additional dagger strike mapped; input-state diagnostics expanded.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3207,12 +3210,13 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v6 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v7 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nFists: 12 animations. BigPitchfork: 5. Sword: 9. Dagger: 7 (one with four recorded contacts). New dagger/sword automatic timings are under test. No actor-name filters."
+		.. "\nFists: 12 animations. BigPitchfork: 5. Sword: 9. Dagger: 8 (one with four recorded contacts). New dagger/sword automatic timings are under test. No actor-name filters."
 		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger IDs select their profile. Explicit conflicting Character.Weapon is never overridden. Sword reach 12 studs; other profiles retain 9."
 		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
+		.. "\nCOMBAT_STATE records raw local attributes at inputs, damage and rejections; their clock bases may differ. NO_OBSERVED_REQUEST means no hook observation before the deadline/stop, not proof that nothing reached the server."
 		.. "\nUnknown weapons and animation variants are logged and skipped; a Fists label alone does not establish every fist animation's timing."
 		.. "\nConfirmed counts require ParryResult with local Parrier, matching attacker and a recent test input. Accepted is only an input acknowledgment."
 		.. "\n" .. table.concat(state.Lines, "\n") .. "\nSTATUS=" .. tostring(reason)
@@ -3239,6 +3243,26 @@ local function alive(model)
 	return model and model:IsDescendantOf(workspace) and humanoid and humanoid.Health > 0
 		and (type(health) ~= "number" or health > 0) and rootOf(model)
 end
+local function combatSnapshot(context, model)
+	if not model then return end
+	local values = {}
+	for _, key in ipairs({"Health", "Busy", "Interupt", "HoldingBlock", "ParryOnCooldown", "BlockOnCooldown", "Posture",
+		"LastHitTaken", "LastRag", "LastSkillFlinch", "ParryStunUntil", "ParryCooldownUntil", "BlockReblockUntil", "LastM1", "CriticalOnCooldown", "RushdownUntil"}) do
+		table.insert(values, key .. "=" .. tostring(model:GetAttribute(key)))
+	end
+	local ok, server = pcall(workspace.GetServerTimeNow, workspace)
+	note("COMBAT_STATE " .. context .. " server=" .. (ok and tostring(server) or "unavailable") .. " " .. table.concat(values, " "))
+end
+local function auditRequests(now, reason)
+	for serial, attempt in pairs(state.PendingInputs or {}) do
+		if attempt.RequestId then state.PendingInputs[serial] = nil
+		elseif now - attempt.At >= .3 or reason then
+			note(string.format("NO_OBSERVED_REQUEST input=%d elapsed=%.3f reason=%s", serial, now - attempt.At, reason or "observation-deadline"))
+			combatSnapshot("no-request input=" .. serial, attempt.Self)
+			state.PendingInputs[serial] = nil
+		end
+	end
+end
 local function release()
 	if not state.Held then return true end
 	local key = state.Held.Key
@@ -3253,6 +3277,7 @@ end
 stop = function(reason)
 	state.Enabled = false
 	for _ = 1, 3 do if release() then break end end
+	auditRequests(os.clock(), "stopped-" .. reason)
 	clearRigs()
 	if state.Unwatch then state.Unwatch(); state.Unwatch = nil end
 	button.Text, button.BackgroundColor3 = "Run Test (90s)", ui.Colors.AccentSoft
@@ -3432,7 +3457,7 @@ local function feedback(name, direction, args, started)
 	if not state.Enabled or started < state.Started then return end
 	local now = os.clock()
 	if name == "SecondaryRemotes.Combat.Block" then
-		if direction == "OUT FireServer" and args[1] == "Press" then
+		if (direction == "OUT FireServer" or direction == "OUT direct FireServer") and args[1] == "Press" and args[3] ~= nil then
 			local attempt = state.LastAttempt
 			if attempt and not attempt.RequestId and now - attempt.At <= .3 then
 				attempt.RequestId = args[3]; state.Attempts[args[3]] = attempt
@@ -3445,6 +3470,7 @@ local function feedback(name, direction, args, started)
 			note("DECISION id=" .. tostring(args[2]) .. " " .. tostring(args[3]) .. " reason=" .. tostring(args[4]))
 			if args[3] == "Rejected" then
 				state.Rejected += 1
+				combatSnapshot("rejected input=" .. attempt.Serial .. " reason=" .. tostring(args[4]), player.Character)
 				local delay = args[4] == "Cooldown" and tonumber(args[5]) or .12
 				state.Backoff = math.max(state.Backoff, now + math.clamp(delay or .15, .08, 2))
 			end
@@ -3468,6 +3494,7 @@ local function step()
 		stop("Block-key release failed"); return
 	end
 	if not state.Enabled then return end
+	auditRequests(now)
 	if state.LastStep and now - state.LastStep > .15 then note(string.format("FRAME_GAP seconds=%.3f", now - state.LastStep)) end
 	state.LastStep = now
 	if now - state.Started >= 90 then stop("Test complete"); return end
@@ -3485,6 +3512,7 @@ local function step()
 			note(string.format("DAMAGE %.3f health=%.3f holdingBlock=%s parryCooldown=%s blockCooldown=%s", state.LastHealth - health, health,
 				tostring(model:GetAttribute("HoldingBlock")), tostring(model:GetAttribute("ParryOnCooldown")), tostring(model:GetAttribute("BlockOnCooldown"))))
 			damageSnapshot(localRoot)
+			combatSnapshot("damage", model)
 		end
 		state.LastHealth = health
 	end
@@ -3548,8 +3576,10 @@ local function step()
 	if not best then show("Watching mapped Fists / BigPitchfork / Sword / Dagger attacks"); return end
 	best.Swing.Contact = best.Contact + 1
 	best.Swing.Used = best.Contact >= best.ContactCount
-	state.LastAttempt = {At = now, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
+	state.LastAttempt = {At = now, Self = model, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
+	state.PendingInputs[state.LastAttempt.Serial] = state.LastAttempt
 	state.Held = {Key = key, Until = now + .16}; state.Backoff = now + .25
+	combatSnapshot("input=" .. state.LastAttempt.Serial, model)
 	local ok = pcall(function() manager:SendKeyEvent(true, key, false, game) end)
 	if not ok then stop("Block input unavailable"); return end
 	state.Presses += 1
@@ -3563,7 +3593,7 @@ local function start()
 	if not manager then status.Text = "Block input unavailable in this executor."; return end
 	if controller.IsBeyondNenParryRecording and controller.IsBeyondNenParryRecording() then status.Text = "Stop + Save the manual recording before running this test."; return end
 	state.Started, state.Enabled = os.clock(), true
-	state.Lines, state.Unknown, state.Attempts, state.Results, state.PlayerModels = {}, {}, {}, {}, {}
+	state.Lines, state.Unknown, state.Attempts, state.Results, state.PlayerModels, state.PendingInputs = {}, {}, {}, {}, {}, {}
 	state.NextSync, state.NextPing, state.NextSave, state.Backoff = 0, 0, 0, 0
 	state.Gate, state.LastStep, state.RigSerial = nil, nil, 0
 	state.Presses, state.Parries, state.Rejected, state.DamageEvents, state.Lead = 0, 0, 0, 0, .145
@@ -3573,7 +3603,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,BigPitchfork,Sword,Dagger mapped=33 duration=90")
+	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,BigPitchfork,Sword,Dagger mapped=34 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

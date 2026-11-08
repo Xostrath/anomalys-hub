@@ -1958,98 +1958,38 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Beyond Nen fishing recorder and shared, passive fishing observations.
+-- Shared passive observations for the mapped fishing and meditation services.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local player = Players.LocalPlayer
-local playerGui = player:FindFirstChildOfClass("PlayerGui")
-local ui = controller.UI
-local path = "AnomalyHub/universal/beyond_nen_fishing_capture.txt"
-local capture = {Active = false, Closed = false, Serial = 0, Lines = {}, Bytes = 0, Connections = {}, LastUI = {}}
-local listeners, remoteConnections, watching = {}, {}, false
-
--- Persistent forwarding hooks are installed once. While stopped/unloaded their
--- target map is empty and no UI, character or capture callback is retained.
+local definitions = {
+	FishingService = {RF = {"Cast", "Reel"}, RE = {"Bite", "Hold", "Result"}},
+	MeditationService = {
+		RF = {"KeyPromptResult", "PlaceCarpet", "SetPicking", "StartMeditation", "StopMeditation", "UnplaceCarpet", "deleteSphere", "meditationSphreClick"},
+		RE = {"CreateBubble", "DestroyBubble", "EnterCarpet", "GameInput", "GamePrompt", "GameResult", "KeyPrompt", "MeditationStopped"},
+	},
+}
+local listeners, connections, closed = {}, {}, false
+-- Keep the established probe name so reloading upgrades its targets without
+-- stacking another set of forwarding hooks installed by the old fishing build.
 local probe = env.__AnomalyBeyondFishingProbe
 if type(probe) ~= "table" then
 	probe = {Targets = {}, Coverage = {}}
 	env.__AnomalyBeyondFishingProbe = probe
 end
 
-local function sample(value, depth, seen, budget)
-	depth, seen, budget = depth or 0, seen or {}, budget or {Left = 256}
-	budget.Left -= 1; if budget.Left < 0 then return "<node limit>" end
-	local kind = typeof(value)
-	if kind == "Instance" then return "<" .. value.ClassName .. ":" .. value:GetFullName() .. ">" end
-	if kind == "string" then return string.format("%q", value:sub(1, 400)) end
-	if kind ~= "table" then return tostring(value) end
-	if seen[value] then return "<cycle>" end
-	if depth >= 4 then return "<depth limit>" end
-	seen[value] = true
-	local fields, count = {}, 0
-	for key, item in pairs(value) do
-		if budget.Left <= 0 then table.insert(fields, "<node limit>"); break end
-		count += 1; if count > 24 then table.insert(fields, "<field limit>"); break end
-		table.insert(fields, sample(key, depth + 1, seen, budget) .. "=" .. sample(item, depth + 1, seen, budget))
-	end
-	seen[value] = nil
-	return "{" .. table.concat(fields, ",") .. "}"
-end
-
-local function log(text)
-	if #capture.Lines >= 2500 or capture.Bytes >= 300000 then capture.Limited = true; return end
-	local line = string.format("%.3fs\t%s", os.clock() - capture.Started, tostring(text):sub(1, 6000))
-	table.insert(capture.Lines, line); capture.Bytes += #line + 1
-end
-
-local function save(reason)
-	local report = "BEYOND NEN FISHING // PASSIVE v1\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
-		.. "\nNo inputs sent, requests replayed, scripts decompiled or game functions invoked.\n"
-		.. "Outgoing records appear after requests return; requestStart preserves their original time. Failed/pending requests may be absent.\n"
-		.. "UI sample interval=0.10s; tables limited to 4 levels/24 fields/256 nodes; GUI limited to 180 objects.\n"
-		.. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason
-		.. (capture.Limited and "\nREPORT LIMIT REACHED" or "")
-	capture.Report = report
-	if type(writefile) ~= "function" then return false end
-	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	return pcall(writefile, path, report)
-end
-
 local function observe(remote, direction, args, serial, started)
-	if capture.Closed or serial ~= probe.Serial then return end
-	local name = probe.Targets[remote]
-	if not name then return end
-	for callback in pairs(listeners) do pcall(callback, name, direction, args, started) end
-	if capture.Active and started >= capture.Started then
-		log(name .. " " .. direction .. " requestStart=" .. string.format("%.3f", started - capture.Started) .. " args=" .. sample(args))
+	if closed or serial ~= probe.Serial then return end
+	local definition = probe.Targets[remote]
+	local callbacks = definition and listeners[definition.Service]
+	if callbacks then
+		for callback in pairs(callbacks) do pcall(callback, definition.Name, direction, args, started) end
 	end
 end
 
-local function discover()
-	local targets = {}
-	for _, object in ipairs(ReplicatedStorage:GetDescendants()) do
-		if object.Name ~= "FishingService" then continue end
-		local rf, re = object:FindFirstChild("RF"), object:FindFirstChild("RE")
-		local cast, reel = rf and rf:FindFirstChild("Cast"), rf and rf:FindFirstChild("Reel")
-		if not cast or not reel or not cast:IsA("RemoteFunction") or not reel:IsA("RemoteFunction") then continue end
-		targets[cast], targets[reel] = "Cast", "Reel"
-		for _, name in ipairs({"Bite", "Hold", "Result"}) do
-			local remote = re and re:FindFirstChild(name)
-			if remote and remote:IsA("RemoteEvent") then targets[remote] = name end
-		end
-		return targets, cast, re and re:FindFirstChild("Hold")
-	end
-	return targets
-end
-
-local function installHooks(cast, hold)
-	local hook = env.hookmetamethod or hookmetamethod
-	local method = env.getnamecallmethod or getnamecallmethod
+local function installHooks(invokeRemote, fireRemote)
+	local hook, method = env.hookmetamethod or hookmetamethod, env.getnamecallmethod or getnamecallmethod
 	local wrap = env.newcclosure or newcclosure or function(callback) return callback end
 	if not probe.NamecallInstalled and type(hook) == "function" and type(method) == "function" then
 		local original
@@ -2059,7 +1999,7 @@ local function installHooks(cast, hold)
 				local valid, callMethod = pcall(method)
 				if not valid or (callMethod ~= "InvokeServer" and callMethod ~= "FireServer") then return original(self, ...) end
 				local callback, serial, started, args = probe.Callback, probe.Serial, os.clock(), table.pack(...)
-				-- Do not call Instance methods before forwarding: Volt dispatch can be affected.
+				-- Forward before Instance inspection: preserve Volt's namecall dispatch.
 				local returned = table.pack(original(self, ...))
 				pcall(callback, self, "OUT " .. callMethod, args, serial, started)
 				if callMethod == "InvokeServer" then pcall(callback, self, "RETURN namecall", returned, serial, started) end
@@ -2085,147 +2025,73 @@ local function installHooks(cast, hold)
 		end)
 		if ok then probe[flag] = true; table.insert(probe.Coverage, "direct " .. property) end
 	end
-	direct(cast, "InvokeServer", "InvokeInstalled")
-	direct(hold, "FireServer", "FireInstalled")
+	direct(invokeRemote, "InvokeServer", "InvokeInstalled")
+	direct(fireRemote, "FireServer", "FireInstalled")
 end
 
-local function syncObservers()
-	local needed = not capture.Closed and (capture.Active or next(listeners) ~= nil)
-	if needed and not watching then
-		local targets, cast, hold = discover()
-		probe.Targets = targets
-		installHooks(cast, hold)
-		probe.Serial = (probe.Serial or 0) + 1
-		probe.Callback = observe
-		watching = true
-		for remote in pairs(targets) do
-			if remote:IsA("RemoteEvent") then
-				local serial = probe.Serial
-				table.insert(remoteConnections, remote.OnClientEvent:Connect(function(...)
-					pcall(observe, remote, "IN event", table.pack(...), serial, os.clock())
-				end))
+local function sync()
+	local targets, invokeRemote, fireRemote = {}, nil, nil
+	if not closed and next(listeners) then
+		for _, object in ipairs(ReplicatedStorage:GetDescendants()) do
+			local definition = listeners[object.Name] and definitions[object.Name]
+			if not definition then continue end
+			for group, names in pairs(definition) do
+				local folder = object:FindFirstChild(group)
+				for _, name in ipairs(names) do
+					local remote = folder and folder:FindFirstChild(name)
+					local class = group == "RF" and "RemoteFunction" or "RemoteEvent"
+					if remote and remote:IsA(class) then
+						targets[remote] = {Service = object.Name, Name = name}
+						if group == "RF" then invokeRemote = invokeRemote or remote else fireRemote = fireRemote or remote end
+					end
+				end
 			end
 		end
-	elseif not needed and watching then
-		watching = false
-		if probe.Callback == observe then probe.Callback = nil; probe.Targets = {} end
-		for _, connection in ipairs(remoteConnections) do connection:Disconnect() end
-		table.clear(remoteConnections)
 	end
-end
-
-function controller.WatchBeyondNenFishing(callback)
-	if capture.Closed or type(callback) ~= "function" then return function() end end
-	listeners[callback] = true
-	syncObservers()
-	return function() listeners[callback] = nil; syncObservers() end
-end
-
-local function sampleUI()
-	local current = {}
-	local fishing = playerGui and playerGui:FindFirstChild("Fishing")
-	if fishing then
-		local objects = {fishing}
-		for _, object in ipairs(fishing:GetDescendants()) do
-			if #objects >= 180 then current["UI LIMIT"] = "180 objects; remaining GUI omitted"; break end
-			table.insert(objects, object)
-		end
-		for _, object in ipairs(objects) do
-			local info = object.ClassName
-			if object:IsA("LayerCollector") then info ..= " enabled=" .. tostring(object.Enabled) end
-			if object:IsA("GuiObject") then
-				info ..= " visible=" .. tostring(object.Visible) .. " pos=" .. tostring(object.Position) .. " size=" .. tostring(object.Size)
-					.. " absPos=" .. tostring(object.AbsolutePosition) .. " absSize=" .. tostring(object.AbsoluteSize) .. " rotation=" .. tostring(object.Rotation)
-			end
-			if object:IsA("TextLabel") or object:IsA("TextButton") then info ..= " text=" .. sample(object.Text) end
-			if object:IsA("GuiObject") then info ..= " color=" .. tostring(object.BackgroundColor3) end
-			current[object:GetFullName()] = info
-		end
-	else current["Fishing GUI"] = "not loaded" end
-	local character = player.Character
-	if character then
-		for _, object in ipairs(character:GetChildren()) do
-			if object:IsA("Tool") then current["Equipped tool:" .. object.Name] = "enabled=" .. tostring(object.Enabled) end
+	if next(targets) then
+		if probe.Callback ~= observe then probe.Serial = (probe.Serial or 0) + 1 end
+		probe.Targets, probe.Callback = targets, observe
+		installHooks(invokeRemote, fireRemote)
+	else
+		probe.Targets = {}
+		if probe.Callback == observe then probe.Callback = nil end
+	end
+	for remote, connection in pairs(connections) do
+		if not targets[remote] then connection:Disconnect(); connections[remote] = nil end
+	end
+	for remote in pairs(targets) do
+		if remote:IsA("RemoteEvent") and not connections[remote] then
+			local serial = probe.Serial
+			connections[remote] = remote.OnClientEvent:Connect(function(...)
+				pcall(observe, remote, "IN event", table.pack(...), serial, os.clock())
+			end)
 		end
 	end
-	for _, key in ipairs({"Fishing", "TitleFishCaught"}) do current["Player@" .. key] = tostring(player:GetAttribute(key)) end
-	for key, value in pairs(current) do if capture.LastUI[key] ~= value then log("STATE " .. key .. " " .. value) end end
-	for key in pairs(capture.LastUI) do if current[key] == nil then log("REMOVED " .. key) end end
-	capture.LastUI = current
 end
 
-local card = ui.Card(ui.Pages.Auto, "FISHING RECORDER", "Optional: record a manual catch or an auto-fishing run for troubleshooting.", 218)
-card.LayoutOrder = 20
-local status = ui.Create("TextLabel", {
-	Position = UDim2.fromOffset(14, 124), Size = UDim2.new(1, -28, 0, 76), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Ready. Equip a rod, start recording, then fish normally through one catch.",
-	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-}, card)
-local recordButton
-local function stop(reason)
-	if not capture.Active then return end
-	pcall(sampleUI)
-	capture.Active = false
-	syncObservers()
-	for _, connection in ipairs(capture.Connections) do connection:Disconnect() end
-	table.clear(capture.Connections)
-	local ok = save(reason)
-	status.Text = ok and "Recording saved. The catch is ready to review." or "File saving unavailable. Use Copy Recording."
-	recordButton.Text = "Record Fishing"
-end
-
-local function start()
-	if capture.Closed then return end
-	if capture.Active then stop("STOPPED"); return end
-	capture.Serial += 1
-	capture.Started, capture.LastSaved = os.clock(), os.clock()
-	capture.Lines, capture.Bytes, capture.Limited, capture.LastUI = {}, 0, false, {}
-	capture.Active = true
-	syncObservers()
-	log("Coverage: " .. (#probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "incoming events and UI only; outgoing hooks unavailable"))
-	log("Some outgoing calls may be observed by both hook types; IN events are logged once.")
-	for remote, name in pairs(probe.Targets) do log("REMOTE " .. name .. " " .. remote:GetFullName()) end
-	local function input(direction, value, processed)
-		if value.UserInputType == Enum.UserInputType.MouseMovement then return end
-		log(direction .. " " .. tostring(value.UserInputType) .. " " .. tostring(value.KeyCode) .. " processed=" .. tostring(processed))
+local function watch(service, callback)
+	if closed or type(callback) ~= "function" then return function() end end
+	listeners[service] = listeners[service] or {}
+	listeners[service][callback] = true
+	sync()
+	return function()
+		local callbacks = listeners[service]
+		if callbacks then
+			callbacks[callback] = nil
+			if not next(callbacks) then listeners[service] = nil end
+		end
+		sync()
 	end
-	table.insert(capture.Connections, UserInputService.InputBegan:Connect(function(value, processed) input("INPUT DOWN", value, processed) end))
-	table.insert(capture.Connections, UserInputService.InputEnded:Connect(function(value, processed) input("INPUT UP", value, processed) end))
-	pcall(sampleUI); save("RECORDING")
-	recordButton.Text = "Stop + Save"
-	status.Text = "Recording for up to 90 seconds. Cast, play the fishing minigame, then press Stop + Save after the result."
-	if next(probe.Targets) == nil then log("FishingService was not found; GUI/input recording only. Start a fresh recording after the rod is equipped.") end
 end
-
-recordButton = ui.FitColumn(ui.Button(card, "Record Fishing", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
-ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()
-	if capture.Active then save("RECORDING") end
-	if capture.Report and type(setclipboard) == "function" then
-		local ok = pcall(setclipboard, capture.Report)
-		status.Text = ok and "Recording copied." or "Clipboard unavailable."
-	end
-end), 1, 72)
-
-local elapsed = 0
-controller.Connect(RunService.Heartbeat, function(delta)
-	if not capture.Active then return end
-	elapsed += delta
-	if elapsed >= 0.1 then elapsed = 0; pcall(sampleUI) end
-	if capture.Limited then stop("LIMIT_REACHED")
-	elseif os.clock() - capture.Started >= 90 then stop("COMPLETE")
-	elseif os.clock() - capture.LastSaved >= 5 then save("RECORDING"); capture.LastSaved = os.clock() end
-end)
+function controller.WatchBeyondNenFishing(callback) return watch("FishingService", callback) end
+function controller.WatchBeyondNenMeditation(callback) return watch("MeditationService", callback) end
 controller.RegisterCleanup(function()
-	stop("UNLOAD")
-	capture.Closed = true
-	table.clear(listeners)
-	syncObservers()
+	closed = true; table.clear(listeners); sync()
 end)
-controller.CaptureBeyondNenFishing = start
 
 end)()
 ;(function()
--- Beyond Nen auto fishing v3. Uses normal mouse input so the game's client
+-- Beyond Nen auto fishing v4. Uses normal mouse input so the game's client
 -- retains its own session, cursor physics, progress and hold timestamps.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -2237,7 +2103,7 @@ local UserInputService = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
 local Workspace = game:GetService("Workspace")
 local ui = controller.UI
-local auto = {Enabled = false, Closed = false, Held = false, Phase = "Off", Catches = 0, Focused = true, Background = false, Lines = {}}
+local auto = {Enabled = false, Closed = false, Held = false, Phase = "Off", Catches = 0, Focused = true, Lines = {}}
 local inputManager
 pcall(function() inputManager = game:GetService("VirtualInputManager") end)
 local backend = "virtual"
@@ -2245,7 +2111,7 @@ local press = env.mouse1press or mouse1press
 local release = env.mouse1release or mouse1release
 local move = env.mousemoveabs or mousemoveabs
 local reportPath = "AnomalyHub/universal/beyond_nen_autofish_test.txt"
-local toggle, backgroundToggle, status
+local toggle, status
 
 local function note(message)
 	if #auto.Lines >= 800 then table.remove(auto.Lines, 1) end
@@ -2254,7 +2120,7 @@ end
 local function save()
 	if type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	pcall(writefile, reportPath, "BEYOND NEN AUTO FISHING v3\nplace=" .. tostring(game.PlaceId)
+	pcall(writefile, reportPath, "BEYOND NEN AUTO FISHING v4\nplace=" .. tostring(game.PlaceId)
 		.. "\n" .. table.concat(auto.Lines, "\n"))
 end
 local function show(message)
@@ -2385,11 +2251,11 @@ local function observe(name, direction, args)
 	end
 end
 
-local card = ui.Card(ui.Pages.Auto, "AUTO FISHING // v3", "Point at water with Fishing equipped. The hub can stay open; keep the casting spot clear of buttons.", 264)
+local card = ui.Card(ui.Pages.Auto, "AUTO FISHING // v4", "Point at water with Fishing equipped. Continues with the hub open or while tabbed out; keep the casting spot clear.", 218)
 card.LayoutOrder = 10
 status = ui.Create("TextLabel", {
-	Position = UDim2.fromOffset(14, 164), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Off. Background Test checks whether fishing continues while tabbed out.",
+	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Off. Enable Auto Fishing to cast, catch and recast, including while tabbed out.",
 	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
 }, card)
 local function enable(value)
@@ -2402,20 +2268,12 @@ local function enable(value)
 	auto.Unwatch = controller.WatchBeyondNenFishing(observe)
 	toggle.Text, toggle.BackgroundColor3 = "Auto Fishing: ON", ui.Colors.AccentSoft
 	show("Point at water outside the hub. Auto Fishing will cast for you.")
-	note("ENABLED; automatic casting ready; backgroundTest=" .. tostring(auto.Background)); save()
+	note("ENABLED; automatic casting and background fishing ready"); save()
 end
 toggle = ui.FitColumn(ui.Button(card, "Auto Fishing: OFF", 0, 0, 180, function() enable(not auto.Enabled) end), 0, 72)
 ui.FitColumn(ui.Button(card, "New Fishing Spot", 0, 0, 180, function()
 	if auto.Enabled then queueCast("Point at the new water spot outside the hub.", 0.8, true) end
 end), 1, 72)
-backgroundToggle = ui.FitColumn(ui.Button(card, "Background Test: OFF", 0, 0, 180, function()
-	auto.Background = not auto.Background
-	backgroundToggle.Text = auto.Background and "Background Test: ON" or "Background Test: OFF"
-	backgroundToggle.BackgroundColor3 = auto.Background and ui.Colors.AccentSoft or ui.Colors.Surface
-	if not auto.Background and not auto.Focused then send(false) end
-	show(auto.Background and "Test ready. Let fishing start, then tab out for 30 seconds and return." or "Background test off. Fishing pauses while tabbed out.")
-	note("BACKGROUND TEST " .. tostring(auto.Background)); save()
-end), 0, 116)
 
 local function geometry()
 	local playerGui = player:FindFirstChildOfClass("PlayerGui")
@@ -2445,9 +2303,9 @@ local function step()
 	if not tool then stop("Stopped: equip your Fishing tool before enabling again."); return end
 	if auto.Character and (character ~= auto.Character or tool ~= auto.Tool) then stop("Character or rod changed. Enable again to fish."); return end
 	if auto.Origin and (root.Position - auto.Origin).Magnitude > 12 then stop("You moved away from the fishing spot. Enable again at the new spot."); return end
-	if (not auto.Focused and not auto.Background) or GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then
+	if GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then
 		if auto.Phase == "Idle" or auto.Phase == "Aiming" then auto.Phase, auto.NextCast = "Idle", now + 0.8 end
-		send(false); resetMotion(); show("Input paused. Return to Roblox or close its chat/menu to continue."); return
+		send(false); resetMotion(); show("Input paused. Close Roblox's chat/menu to continue."); return
 	end
 	if auto.ReleaseAt and now >= auto.ReleaseAt then
 		if not send(false) then stop("Mouse release failed. Auto Fishing stopped."); return end
@@ -2467,7 +2325,7 @@ local function step()
 		local camera = Workspace.CurrentCamera
 		if not camera then return end
 		if not auto.Point then
-			if not auto.Focused then show("Return to Roblox and point at water once before the background test."); return end
+			if not auto.Focused then show("Return to Roblox and point at water once to set the fishing spot."); return end
 			local ok, point = pcall(function() return player:GetMouse().Hit.Position end)
 			if not ok or typeof(point) ~= "Vector3" or (point - root.Position).Magnitude > 500 then
 				auto.NextCast = now + 1; show("Point your cursor at nearby water to start casting."); return
@@ -2549,8 +2407,8 @@ end
 controller.Connect(RunService.RenderStepped, function()
 	if auto.Focused then update("render") end
 end)
--- Rendering can stop while unfocused. Use simulation ticks for the background
--- trial and report their actual cadence; this does not disable game throttling.
+-- Rendering can stop while unfocused. Use simulation ticks for background
+-- fishing and report their actual cadence; this does not disable game throttling.
 controller.Connect(RunService.Heartbeat, function()
 	if not auto.Focused then update("heartbeat") end
 end)
@@ -2558,11 +2416,11 @@ controller.Connect(UserInputService.WindowFocusReleased, function()
 	send(false)
 	auto.Focused = false
 	resetMotion()
-	-- Background trials never use OS-level mouse helpers in another application.
+	-- Background fishing never uses OS-level mouse helpers in another application.
 	if not auto.Held then backend = "virtual" end
 	local now = os.clock()
 	auto.BackgroundStats = {Ticks = 0, MaxGap = 0, LastTick = now, LastReport = now, Inputs = 0, Holds = 0, Casts = 0, Caught = 0, OtherResults = 0}
-	if auto.Enabled then note("FOCUS LOST backgroundTest=" .. tostring(auto.Background) .. " phase=" .. auto.Phase); save() end
+	if auto.Enabled then note("FOCUS LOST phase=" .. auto.Phase); save() end
 end)
 controller.Connect(UserInputService.WindowFocused, function()
 	auto.Focused = true
@@ -2573,6 +2431,160 @@ end)
 controller.Connect(player.OnTeleport, function() if auto.Enabled then stop("Stopped for travel.") end end)
 controller.RegisterCleanup(function() stop("Unloaded."); auto.Closed = true end)
 controller.SetBeyondNenAutoFishing = enable
+
+end)()
+;(function()
+-- Meditation setup: observe a complete manual session before adding automation.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local player = game:GetService("Players").LocalPlayer
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ui = controller.UI
+local path = "AnomalyHub/universal/beyond_nen_meditation_capture.txt"
+local capture = {Active = false, Closed = false, Lines = {}, Bytes = 0, LastUI = {}, Connections = {}}
+
+local function sample(value, depth, seen, budget)
+	depth, seen, budget = depth or 0, seen or {}, budget or {Left = 256}
+	budget.Left -= 1; if budget.Left < 0 then return "<node limit>" end
+	local kind = typeof(value)
+	if kind == "Instance" then
+		local detail = value.ClassName .. ":" .. value:GetFullName()
+		if value:IsA("BasePart") then detail ..= " position=" .. tostring(value.Position) .. " size=" .. tostring(value.Size) end
+		return "<" .. detail .. ">"
+	end
+	if kind == "string" then return string.format("%q", value:sub(1, 600)) end
+	if kind ~= "table" then return tostring(value) end
+	if seen[value] then return "<cycle>" end
+	if depth >= 4 then return "<depth limit>" end
+	seen[value] = true
+	local fields, count = {}, 0
+	for key, item in pairs(value) do
+		if budget.Left <= 0 then table.insert(fields, "<node limit>"); break end
+		count += 1; if count > 32 then table.insert(fields, "<field limit>"); break end
+		table.insert(fields, sample(key, depth + 1, seen, budget) .. "=" .. sample(item, depth + 1, seen, budget))
+	end
+	seen[value] = nil
+	return "{" .. table.concat(fields, ",") .. "}"
+end
+local function log(message)
+	if #capture.Lines >= 4000 or capture.Bytes >= 500000 then capture.Limited = true; return end
+	local line = string.format("%.3fs\t%s", os.clock() - capture.Started, tostring(message):sub(1, 7000))
+	table.insert(capture.Lines, line); capture.Bytes += #line + 1
+end
+local function save(reason)
+	capture.Report = "BEYOND NEN MEDITATION // PASSIVE v1\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
+		.. "\nObserves only the mapped MeditationService signals, Meditation GUI, equipment and local meditation stats."
+		.. "\nNo inputs sent, remotes invoked/replayed or scripts decompiled. Chat/text-entry keystrokes are excluded."
+		.. "\nOutgoing calls appear after they return; requestStart preserves original time. Hook paths may duplicate calls."
+		.. "\nLimits: 120 seconds, 4000 lines/500KB, 300 GUI objects, tables 4 levels/32 fields/256 nodes."
+		.. "\n" .. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason
+		.. (capture.Limited and "\nREPORT LIMIT REACHED" or "")
+	if type(writefile) ~= "function" then return false end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	return pcall(writefile, path, capture.Report)
+end
+local function snapshot()
+	local current = {}
+	local pg = player:FindFirstChildOfClass("PlayerGui")
+	local gui = pg and pg:FindFirstChild("Meditation")
+	if gui then
+		local objects = {gui}
+		for _, object in ipairs(gui:GetDescendants()) do
+			if #objects >= 300 then current["GUI LIMIT"] = "300 objects; remaining objects omitted"; break end
+			table.insert(objects, object)
+		end
+		for _, object in ipairs(objects) do
+			local detail = object.ClassName
+			if object:IsA("LayerCollector") then detail ..= " enabled=" .. tostring(object.Enabled) end
+			if object:IsA("GuiObject") then
+				detail ..= " visible=" .. tostring(object.Visible) .. " pos=" .. tostring(object.Position) .. " size=" .. tostring(object.Size)
+					.. " absPos=" .. tostring(object.AbsolutePosition) .. " absSize=" .. tostring(object.AbsoluteSize) .. " rotation=" .. tostring(object.Rotation)
+			end
+			if object:IsA("TextLabel") or object:IsA("TextButton") then detail ..= " text=" .. sample(object.Text) end
+			if object:IsA("ImageLabel") or object:IsA("ImageButton") then detail ..= " image=" .. sample(object.Image) end
+			current[object:GetFullName()] = detail
+		end
+	else current["Meditation GUI"] = "not loaded" end
+	for _, key in ipairs({"MeditationTechnique", "NenMeditation"}) do current["Player@" .. key] = tostring(player:GetAttribute(key)) end
+	local character = player.Character
+	if character then
+		for _, object in ipairs(character:GetChildren()) do
+			if object:IsA("Tool") then current["Tool:" .. object.Name] = "enabled=" .. tostring(object.Enabled) end
+		end
+	end
+	for key, value in pairs(current) do if capture.LastUI[key] ~= value then log("STATE " .. key .. " " .. value) end end
+	for key in pairs(capture.LastUI) do if current[key] == nil then log("REMOVED " .. key) end end
+	capture.LastUI = current
+end
+
+local card = ui.Card(ui.Pages.Auto, "AUTO MEDITATION SETUP", "Record placing your mat, starting meditation, several prompts and stopping. Automation comes after this capture.", 218)
+card.LayoutOrder = 20
+local status = ui.Create("TextLabel", {
+	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Ready. Turn Auto Fishing off, then record a manual meditation session.",
+	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, card)
+local recordButton
+local function stop(reason)
+	if not capture.Active then return end
+	pcall(snapshot); capture.Active = false
+	if capture.Unwatch then capture.Unwatch(); capture.Unwatch = nil end
+	for _, connection in ipairs(capture.Connections) do connection:Disconnect() end
+	table.clear(capture.Connections)
+	local saved = save(reason)
+	recordButton.Text = "Record Meditation"
+	status.Text = saved and "Meditation recording saved. Ready to review." or "File saving unavailable. Use Copy Recording."
+end
+local function start()
+	if capture.Closed then return end
+	if capture.Active then stop("STOPPED"); return end
+	capture.Lines, capture.Bytes, capture.LastUI, capture.Limited = {}, 0, {}, false
+	capture.Started, capture.LastSaved, capture.Active = os.clock(), os.clock(), true
+	local started = capture.Started
+	capture.Unwatch = controller.WatchBeyondNenMeditation(function(name, direction, args, requestStart)
+		if not capture.Active or capture.Started ~= started or requestStart < started then return end
+		log(name .. " " .. direction .. " requestStart=" .. string.format("%.3f", requestStart - started) .. " args=" .. sample(args))
+	end)
+	local probe = env.__AnomalyBeyondFishingProbe
+	log("Coverage: " .. (probe and #probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "incoming signals and UI only; outgoing hooks unavailable"))
+	local count = 0
+	for remote, definition in pairs(probe and probe.Targets or {}) do
+		if definition.Service == "MeditationService" then count += 1; log("REMOTE " .. definition.Name .. " " .. remote:GetFullName()) end
+	end
+	if count == 0 then log("MeditationService unavailable; GUI and input recording only.") end
+	local function input(direction, value, processed)
+		if UserInputService:GetFocusedTextBox() or value.UserInputType == Enum.UserInputType.MouseMovement then return end
+		log("INPUT " .. direction .. " " .. tostring(value.UserInputType) .. " " .. tostring(value.KeyCode) .. " processed=" .. tostring(processed)
+			.. " pointer=" .. tostring(UserInputService:GetMouseLocation()))
+	end
+	table.insert(capture.Connections, UserInputService.InputBegan:Connect(function(value, processed) input("DOWN", value, processed) end))
+	table.insert(capture.Connections, UserInputService.InputEnded:Connect(function(value, processed) input("UP", value, processed) end))
+	pcall(snapshot); save("RECORDING")
+	recordButton.Text = "Stop + Save"
+	status.Text = "Recording up to 2 minutes. Place the mat, start meditation, complete several prompts, stop meditating, then Stop + Save."
+end
+recordButton = ui.FitColumn(ui.Button(card, "Record Meditation", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
+ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()
+	if capture.Active then save("RECORDING") end
+	if capture.Report and type(setclipboard) == "function" then
+		local ok = pcall(setclipboard, capture.Report)
+		status.Text = ok and "Recording copied." or "Clipboard unavailable."
+	end
+end), 1, 72)
+local elapsed = 0
+controller.Connect(RunService.Heartbeat, function(delta)
+	if not capture.Active then return end
+	elapsed += delta
+	if elapsed >= 0.05 then elapsed = 0; pcall(snapshot) end
+	if capture.Limited then stop("LIMIT_REACHED")
+	elseif os.clock() - capture.Started >= 120 then stop("COMPLETE")
+	elseif os.clock() - capture.LastSaved >= 5 then save("RECORDING"); capture.LastSaved = os.clock() end
+end)
+controller.Connect(player.OnTeleport, function() stop("TELEPORT") end)
+controller.RegisterCleanup(function() stop("UNLOAD"); capture.Closed = true end)
+controller.CaptureBeyondNenMeditation = start
 
 end)()
 end

@@ -1393,6 +1393,8 @@ local function findSource(roots, names)
 end
 
 local sources, pending, labels, headings = {}, {}, {}, {}
+local killTest, killTestButton
+local killTestFile = "AnomalyHub/universal/beyond_nen_kill_test.txt"
 local card = ui.Card(ui.Pages.Home, "SESSION STATS", "Counts gains during this session. Carries across server hops; resets after 15 minutes away.", 522)
 card.LayoutOrder = -1
 local grid = ui.Create("Frame", {
@@ -1442,7 +1444,9 @@ local function render()
 	end
 	labels.Hops.Text = tostring(session.Counters.Hops)
 	labels.Deaths.Text = tostring(session.Counters.Deaths)
-	if not saveOk then
+	if killTest then
+		status.Text = string.format("Kill test recording: %ds left. Defeat one Port Marksman, then press Stop Kill Test.", math.max(0, math.ceil(60 - (os.clock() - killTest.Started))))
+	elseif not saveOk then
 		status.Text = "Tracking this run. File saving is unavailable."
 	else
 		local count = 0
@@ -1453,10 +1457,67 @@ local function render()
 	end
 end
 
+local function readSourceValue(source)
+	if not source.Object.Parent then return nil end
+	if source.Attribute then return source.Object:GetAttribute(source.Attribute) end
+	return source.Object.Value
+end
+
+-- Scoped capture of the active save's progress, including the nested counters
+-- the old root-only capture missed. These values are evidence, not kill credit.
+local function collectKillState()
+	local values, visited, nodes, limitHit = {}, {}, 0, false
+	local roots, slot = getRoots()
+	local function relevant(name)
+		local text = normalize(name)
+		for _, token in ipairs({"kill", "defeat", "bandit", "npc", "boss", "quest", "exp", "xp", "level", "jenni", "reward"}) do
+			if string.find(text, token, 1, true) then return true end
+		end
+		return false
+	end
+	local function record(key, value)
+		values[key] = tostring(value):gsub("[\r\n]", " "):sub(1, 256)
+	end
+	local function inspect(root, depth, dumpAll)
+		if visited[root] then return end
+		if nodes >= 256 then limitHit = true; return end
+		visited[root] = true; nodes += 1
+		local path = root:GetFullName()
+		for name, value in pairs(root:GetAttributes()) do
+			if dumpAll or relevant(name) then record(path .. "@" .. name, value) end
+		end
+		if root:IsA("ValueBase") and (dumpAll or relevant(root.Name)) then record(path .. ".Value", root.Value) end
+		if depth > 0 then
+			for _, child in ipairs(root:GetChildren()) do inspect(child, depth - 1, true) end
+		end
+	end
+	for _, root in ipairs(roots) do
+		inspect(root, 0, false)
+		for _, child in ipairs(root:GetChildren()) do
+			if child:IsA("ValueBase") and relevant(child.Name) then inspect(child, 0, false) end
+		end
+		for _, name in ipairs({"TitleNpcKinds", "TitleBossCores", "Milestones", "ActiveQuests", "CompletedQuests"}) do
+			local child = root:FindFirstChild(name)
+			if child then inspect(child, 3, true) end
+		end
+	end
+	if limitHit then values["CAPTURE_LIMIT"] = "256 objects; some progress data was omitted" end
+	return values, slot
+end
+
 local function capture()
-	local lines = {"BEYOND NEN SESSION STATS // PASSIVE v1", "Local player data only. No remote requests.",
+	local lines = {"BEYOND NEN SESSION STATS // PASSIVE v2 KILL SOURCES", "Local player data only. No remote requests.",
 		"place=" .. game.PlaceId .. " universe=" .. game.GameId, "slot=" .. tostring(session.Slot)}
-	for key in pairs(definitions) do table.insert(lines, key .. " source=" .. (sources[key] and sources[key].Id or "NOT DETECTED")) end
+	for key in pairs(definitions) do
+		local source, sample = sources[key], session.Samples[key]
+		table.insert(lines, key .. " source=" .. (source and source.Id or "NOT DETECTED")
+			.. " current=" .. tostring(source and readSourceValue(source)) .. " lastSample=" .. tostring(sample and sample.Value)
+			.. " ready=" .. tostring(sample and sample.Ready) .. " session=" .. tostring(session.Counters[key]))
+	end
+	local killValues = collectKillState()
+	local killKeys = {}; for key in pairs(killValues) do table.insert(killKeys, key) end; table.sort(killKeys)
+	table.insert(lines, "[ACTIVE KILL / QUEST PROGRESS]")
+	for _, key in ipairs(killKeys) do table.insert(lines, key .. "=" .. killValues[key]) end
 	local roots = getRoots()
 	for _, root in ipairs(roots) do
 		table.insert(lines, "[" .. root:GetFullName() .. "]")
@@ -1472,6 +1533,41 @@ local function capture()
 	return writeLocal(reportFile, report)
 end
 
+local function writeKillTest(reason)
+	if not killTest then return false end
+	return writeLocal(killTestFile, table.concat(killTest.Lines, "\n") .. "\nSTATUS=" .. reason)
+end
+
+local function stopKillTest(reason)
+	if not killTest then return end
+	local ok = writeKillTest(reason)
+	killTest = nil
+	if killTestButton then killTestButton.Text = "Record Kill Test" end
+	capture()
+	status.Text = ok and "Kill test saved locally." or "Kill test could not be saved."
+end
+
+local function sampleKillTest()
+	if not killTest then return end
+	local values, slot = collectKillState()
+	if slot ~= killTest.Slot then stopKillTest("SLOT_CHANGED"); return end
+	local elapsed = os.clock() - killTest.Started
+	local changed = {}
+	for key, value in pairs(values) do
+		if killTest.Previous[key] ~= value then table.insert(changed, key) end
+	end
+	for key in pairs(killTest.Previous) do if values[key] == nil then table.insert(changed, key) end end
+	table.sort(changed)
+	for _, key in ipairs(changed) do
+		local line = string.format("%.2fs\t%s\t%s -> %s", elapsed, key, tostring(killTest.Previous[key]), tostring(values[key]))
+		if #killTest.Lines >= 1200 or killTest.Bytes + #line >= 180000 then stopKillTest("LIMIT_REACHED"); return end
+		table.insert(killTest.Lines, line); killTest.Bytes += #line + 1
+	end
+	killTest.Previous = values
+	if elapsed >= 60 then stopKillTest("COMPLETE"); return end
+	if os.clock() - killTest.LastSaved >= 5 then writeKillTest("RECORDING"); killTest.LastSaved = os.clock() end
+end
+
 ui.Button(card, "Reset Session", 14, 434, 164, function()
 	resetSession(session, os.time()); save(); render()
 end)
@@ -1480,11 +1576,19 @@ ui.Button(card, "Capture Stats", 188, 434, 164, function()
 	status.Text = ok and "Saved beyond_nen_session_state.txt" or "Capture could not be saved."
 end, ui.Colors.AccentSoft)
 
-local function readSourceValue(source)
-	if not source.Object.Parent then return nil end
-	if source.Attribute then return source.Object:GetAttribute(source.Attribute) end
-	return source.Object.Value
-end
+killTestButton = ui.Button(card, "Record Kill Test", 362, 434, 164, function()
+	if killTest then sampleKillTest(); stopKillTest("STOPPED"); return end
+	local values, slot = collectKillState()
+	local lines = {"BEYOND NEN KILL TEST // PASSIVE v1", "Local stats and active-save progress only. No game requests; this recording does not award/count kills.",
+		"place=" .. tostring(game.PlaceId) .. " slot=" .. tostring(slot) .. " target=Port Marksman",
+		"Progress capture: 3 child levels, 256 objects; poll interval 0.25s.", "[BASELINE]"}
+	local keys = {}; for key in pairs(values) do table.insert(keys, key) end; table.sort(keys)
+	for _, key in ipairs(keys) do table.insert(lines, key .. "=" .. values[key]) end
+	killTest = {Started = os.clock(), Slot = slot, Previous = values, Lines = lines, Bytes = #table.concat(lines, "\n"), LastSaved = os.clock()}
+	if not writeKillTest("RECORDING") then killTest = nil; status.Text = "Kill test could not be saved."; return end
+	killTestButton.Text = "Stop Kill Test"
+	capture(); render()
+end, ui.Colors.AccentSoft)
 
 local function sample(key)
 	local source = sources[key]
@@ -1551,19 +1655,24 @@ local function hookCharacter(character)
 	bind("humanoid-added", character.ChildAdded, attach)
 end
 
-local updateElapsed, saveElapsed = 0, 0
+local updateElapsed, saveElapsed, testElapsed = 0, 0, 0
 bind("character", player.CharacterAdded, hookCharacter)
 bind("character-removing", player.CharacterRemoving, function() hookCharacter(nil) end)
 bind("teleport", player.OnTeleport, function(state)
-	if state == Enum.TeleportState.Started then save() end
+	if state == Enum.TeleportState.Started then sampleKillTest(); stopKillTest("TELEPORT"); save() end
 end)
 bind("heartbeat", RunService.Heartbeat, function(delta)
 	updateElapsed += delta; saveElapsed += delta
+	if killTest then
+		testElapsed += delta
+		if testElapsed >= 0.25 then testElapsed = 0; sampleKillTest() end
+	end
 	if updateElapsed >= 1 then updateElapsed = 0; refreshSources(); render() end
 	if saveElapsed >= 15 then saveElapsed = 0; save() end
 end)
 controller.RegisterCleanup(function()
 	if not alive then return end
+	sampleKillTest(); stopKillTest("UNLOAD")
 	save(); alive = false
 	for _, connection in pairs(connections) do connection:Disconnect() end
 	table.clear(connections)

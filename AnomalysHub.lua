@@ -99,7 +99,8 @@ local state = {
 	EspSettings = {Name = true, Level = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
 	NpcEspEnabled = false,
 	NpcEspDistance = 2500,
-	NpcEspSettings = {Name = true, Distance = true, Box = true, Health = true},
+	NpcEspSettings = {Name = true, Distance = true, Box = true, Health = true,
+		Quest = true, Enemy = true, Boss = true, Other = true, Unknown = true},
 	Noclip = false,
 	InfiniteJump = false,
 	SpeedEnabled = false,
@@ -1523,24 +1524,108 @@ local tracked, entries = {}, {}
 local addedConnection, removingConnection
 local watching, stopped = false, false
 
-local function removeEntry(humanoid)
-	local entry = entries[humanoid]
+-- Reviewed 2026-11-07 against the OPEN cards in these four Trello lists.
+-- https://trello.com/b/VOrwZLDN/beyond-nen
+-- Section headings, archived cards and descriptions of quest objectives are
+-- excluded. A quest to fight a Forest Brawler does not make it a quest giver.
+local catalogGroups = {
+	Quest = {
+		{"Diana", "wINxiMz8"}, {"Marcus", "GHXvOtYg"}, {"Contest Organizer", "G02iUZWC"},
+		{"Item Shipment NPC", "7VXAa7FN"}, {"Foreman Grant", "KOnQdPvA"}, {"Emily", "TqD9G1Lc"},
+		{"Lifeguard Noah", "01gwlnQw"}, {"Trader Finn", "7drwId68"}, {"Rohan", "1x6vvUFh"},
+		{"Black Merchant", "6g0bqhP6"}, {"Cole", "LhXgKRTG"},
+	},
+	Enemy = {
+		{"Forest Brawler", "co9wNC3j"}, {"Cave Brawler", "kVX3HTbv"}, {"Phantom Raider", "Q2nHIdi2"},
+		{"Angry Farmer", "QKKVlyAe"}, {"Farm Keeper", "PW0QWogx"}, {"Chief Farmer", "Y0JsbQoA"},
+		{"Port Invader", "5G8AMYIP"}, {"Port Marksman", "v9sPLjjO"}, {"Beach Brawler", "9kdUVNiO"},
+		{"Beach Warrior", "Wjt4MuAv"}, {"Foxbear Hunter", "Dj6YDh4a"}, {"Lost Hunter", "vhmHXLgJ"},
+		{"Zombie", "NJOc7prF"}, {"Big Zombie", "x1r6E7Un"}, {"Stone Soldier", "xHXbtvpo"},
+		{"Swamp Viper", "1HQC3Mhr"}, {"Purple Viper", "5nj5Ei7s"}, {"Crimson Swordsman", "fGvSIV44"},
+		{"Flame Worshipper", "TF3CsVEU"}, {"Volcano Warrior", "AZ3Sngs1"}, {"Fire Spirit", "goPrymVC"},
+	},
+	Boss = {
+		{"Crimson Flame", "WrThV0fN"}, {"Fox Bear", "bVfpKpq1"}, {"Black Blick", "nlSVC05l"},
+		{"Sandy Storm", "TdlOd70u"}, {"Beach King", "1vjHYcKn"}, {"Master Of The Swamp", "eh7N7SAy"},
+		{"Stone Eye", "rnxxt0PE"}, {"Mole Rat", "CgiTBJhd"}, {"Dracolith", "aQuRylja"},
+		{"Frost Fang", "RrQtzQds"},
+	},
+	Other = {
+		{"Bounty Appraiser", "DE6NO2Wk"}, {"General Merchant", "lrKEmUP6"}, {"Ore Merchant", "e4AUp7RH"},
+		{"Librarian", "6veqIiqU"}, {"Blacksmith", "mjHhbCs4"}, {"Knov", "IPFgUtpr"}, {"Shin", "sj7w324Y"},
+	},
+}
+local function normalizedName(value)
+	local text = string.lower(tostring(value or "")):gsub("<[^>]+>", "")
+	-- Allow explicit level badges and numbered spawn copies, not substring
+	-- matching (Foxbear Hunter must not match the Fox Bear boss).
+	text = text:gsub("%[%s*lv%.?%s*%d+%s*%]", ""):gsub("%[%s*lvl%.?%s*%d+%s*%]", "")
+	text = text:gsub("%[%s*level%s*%d+%s*%]", "")
+	return (text:gsub("[^%w]", ""))
+end
+local catalog = {}
+for kind, group in pairs(catalogGroups) do
+	for _, row in ipairs(group) do
+		catalog[normalizedName(row[1])] = {Kind = kind, Name = row[1], Source = "https://trello.com/c/" .. row[2]}
+	end
+end
+-- This card's title says Contest Organizer; its description says Content Organizer.
+catalog.contentorganizer = catalog.contestorganizer
+
+local function classify(model, humanoid)
+	local identifiers = {model:GetAttribute("DisplayName") or "", model:GetAttribute("NPCName") or "",
+		humanoid and humanoid.DisplayName or "", model.Name}
+	local found
+	for _, value in ipairs(identifiers) do
+		local key = normalizedName(value)
+		local match = catalog[key] or catalog[(key:gsub("%d+$", ""))]
+		if match then
+			if found and found.Kind ~= match.Kind then return "Unknown" end
+			found = found or match
+		end
+	end
+	if found then return found.Kind, found.Name, found.Source end
+	return "Unknown"
+end
+controller.ClassifyBeyondNenNpc = classify
+
+local roles = {
+	Quest = {Label = "QUEST", Color = Color3.fromRGB(134, 230, 173)},
+	Enemy = {Label = "ENEMY", Color = Color3.fromRGB(255, 115, 120)},
+	Boss = {Label = "BOSS", Color = Color3.fromRGB(255, 184, 92)},
+	Other = {Label = "OTHER NPC", Color = Color3.fromRGB(130, 202, 255)},
+	Unknown = {Label = "UNCLASSIFIED", Color = Color3.fromRGB(203, 191, 218)},
+}
+
+local function removeEntry(model)
+	local entry = entries[model]
 	if not entry then return end
-	entry.HealthBinding.Disconnect()
+	if entry.HealthBinding then entry.HealthBinding.Disconnect() end
 	entry.Gui:Destroy()
 	entry.BoxGui:Destroy()
-	entries[humanoid] = nil
+	entries[model] = nil
 end
 
 local function track(object)
-	if object:IsA("Humanoid") then tracked[object] = true end
+	local model
+	if object:IsA("Model") then
+		model = object
+	elseif object:IsA("Humanoid") or (object:IsA("BasePart") and (object.Name == "HumanoidRootPart" or object.Name == "Head")) then
+		model = object.Parent
+	end
+	if not model or not model:IsA("Model") or tracked[model] then return end
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	local kind = classify(model, humanoid)
+	-- Known quest/service rigs can be static models without a Humanoid. Their
+	-- labels still work, but they must never get an invented health bar.
+	if humanoid or kind == "Quest" or kind == "Other" then tracked[model] = true end
 end
 
 local function stopWatching()
 	watching = false
 	if addedConnection then addedConnection:Disconnect(); addedConnection = nil end
 	if removingConnection then removingConnection:Disconnect(); removingConnection = nil end
-	for humanoid in pairs(entries) do removeEntry(humanoid) end
+	for model in pairs(entries) do removeEntry(model) end
 	table.clear(tracked)
 end
 
@@ -1548,12 +1633,14 @@ local function startWatching()
 	if watching or stopped then return end
 	watching = true
 	-- Subscribe before the single initial scan so spawning/streaming cannot fall
-	-- into a gap. Subsequent updates visit humanoids, not the whole workspace.
+	-- into a gap. Subsequent updates visit tracked rigs, not the whole workspace.
 	addedConnection = Workspace.DescendantAdded:Connect(track)
 	removingConnection = Workspace.DescendantRemoving:Connect(function(object)
 		if tracked[object] then
 			tracked[object] = nil
 			removeEntry(object)
+		elseif object:IsA("Humanoid") and object.Parent then
+			removeEntry(object.Parent)
 		end
 	end)
 	for _, object in ipairs(Workspace:GetDescendants()) do track(object) end
@@ -1573,7 +1660,7 @@ local function displayName(model, humanoid)
 		local value = model:GetAttribute(key)
 		if type(value) == "string" and value:match("%S") then return value end
 	end
-	local value = humanoid.DisplayName
+	local value = humanoid and humanoid.DisplayName
 	if type(value) == "string" and value:match("%S") then return value end
 	return model.Name
 end
@@ -1626,43 +1713,52 @@ local function makeEntry(model, root)
 	return entry
 end
 
-local function updateNpc(humanoid, localRoot, characters)
-	local model = humanoid.Parent
-	if not model or not model:IsA("Model") or not model:IsDescendantOf(Workspace) then
-		tracked[humanoid] = nil
-		removeEntry(humanoid)
+local function updateNpc(model, localRoot, characters)
+	if not model:IsDescendantOf(Workspace) then
+		tracked[model] = nil
+		removeEntry(model)
 		return
 	end
-	if not localRoot or humanoid.Health <= 0 or isPlayerCharacter(model, characters) then
-		removeEntry(humanoid)
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	local kind, knownName = classify(model, humanoid)
+	if not localRoot or (humanoid and humanoid.Health <= 0) or isPlayerCharacter(model, characters)
+		or (not humanoid and kind ~= "Quest" and kind ~= "Other") or state.NpcEspSettings[kind] == false then
+		removeEntry(model)
 		return
 	end
-	local root = humanoid.RootPart or model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("Head")
-	if not root or not root:IsA("BasePart") or not root:IsDescendantOf(model) then removeEntry(humanoid); return end
+	local root = (humanoid and humanoid.RootPart) or model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("Head")
+	if not root or not root:IsA("BasePart") or not root:IsDescendantOf(model) then removeEntry(model); return end
 	local distance = (root.Position - localRoot.Position).Magnitude
-	if distance > state.NpcEspDistance then removeEntry(humanoid); return end
-	local entry = entries[humanoid]
-	if not entry or entry.Model ~= model or entry.Root ~= root then
-		removeEntry(humanoid)
+	if distance > state.NpcEspDistance then removeEntry(model); return end
+	local entry = entries[model]
+	if not entry or entry.Humanoid ~= humanoid or entry.Root ~= root then
+		removeEntry(model)
 		entry = makeEntry(model, root)
-		entry.HealthBinding = controller.BindEspHealth({Background = entry.Health, Fill = entry.Fill}, humanoid, function()
-			return state.NpcEspEnabled and state.NpcEspSettings.Health
-		end)
-		entries[humanoid] = entry
+		entry.Humanoid = humanoid
+		if humanoid then
+			entry.HealthBinding = controller.BindEspHealth({Background = entry.Health, Fill = entry.Fill}, humanoid, function()
+				return state.NpcEspEnabled and state.NpcEspSettings.Health
+			end)
+		else
+			entry.Health.Visible = false
+		end
+		entries[model] = entry
 	end
 	local settings, lines = state.NpcEspSettings, {}
-	if settings.Name then table.insert(lines, displayName(model, humanoid) .. " [NPC]") end
+	local role = roles[kind]
+	if settings.Name then table.insert(lines, (knownName or displayName(model, humanoid)) .. " [" .. role.Label .. "]") end
 	if settings.Distance then table.insert(lines, string.format("%d STUDS", math.floor(distance + 0.5))) end
 	entry.Label.Text = table.concat(lines, "\n")
+	entry.Label.TextColor3 = role.Color
 	entry.Gui.Enabled = #lines > 0
 	entry.Gui.MaxDistance = state.NpcEspDistance
 	entry.BoxGui.MaxDistance = state.NpcEspDistance
-	entry.BoxGui.Enabled = settings.Box or settings.Health
+	entry.BoxGui.Enabled = settings.Box or (settings.Health and humanoid ~= nil)
 	entry.Stroke.Enabled = settings.Box == true
-	entry.HealthBinding.Refresh()
+	if entry.HealthBinding then entry.HealthBinding.Refresh() end
 end
 
-local npcCard = ui.Card(ui.Pages.Players, "BEYOND NEN NPC ESP", "Names above NPCs, health beside their boxes. Range is in studs; only loaded NPCs are visible.", 244)
+local npcCard = ui.Card(ui.Pages.Players, "BEYOND NEN NPC ESP", "Green quests, red enemies, orange bosses, blue other NPCs, gray unclassified. Range is in studs.", 350)
 ui.Button(npcCard, state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF", 14, 72, 180, function(object)
 	state.NpcEspEnabled = not state.NpcEspEnabled
 	object.Text = state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF"
@@ -1676,8 +1772,9 @@ ui.ValueBox(npcCard, "NPC range (studs)", 204, 72, 180, state.NpcEspDistance, fu
 	box.Text = tostring(math.floor(state.NpcEspDistance))
 	controller.SaveConfig()
 end)
-local labels = {Name = "NPC name", Distance = "Distance", Health = "Health bar", Box = "Body box"}
-for index, key in ipairs({"Name", "Distance", "Health", "Box"}) do
+local labels = {Name = "NPC name / role", Distance = "Distance", Health = "Health bar", Box = "Body box",
+	Quest = "Quest NPCs", Enemy = "Enemy NPCs", Boss = "Bosses", Other = "Other NPCs", Unknown = "Unclassified"}
+for index, key in ipairs({"Name", "Distance", "Health", "Box", "Quest", "Enemy", "Boss", "Other", "Unknown"}) do
 	local enabled = state.NpcEspSettings[key] == true
 	ui.Button(npcCard, labels[key] .. ": " .. (enabled and "ON" or "OFF"), 14 + ((index - 1) % 2) * 190,
 		124 + math.floor((index - 1) / 2) * 42, 180, function(object)
@@ -1701,7 +1798,7 @@ controller.Connect(RunService.Heartbeat, function(delta)
 	for _, target in ipairs(Players:GetPlayers()) do
 		if target.Character then characters[target.Character] = true end
 	end
-	for humanoid in pairs(tracked) do updateNpc(humanoid, localRoot, characters) end
+	for model in pairs(tracked) do updateNpc(model, localRoot, characters) end
 end)
 controller.RegisterCleanup(function()
 	stopped = true

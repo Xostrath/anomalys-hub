@@ -670,36 +670,19 @@ local function removeEsp(target)
 	state.EspEntries[target] = nil
 end
 
-local function getEspVisualMetrics(character, root)
-	local camera = workspace.CurrentCamera
+local function getEspWorldMetrics(character, root)
+	local width, height = 4, 6
 	local centerOffset = Vector3.zero
-	local defaultInfoOffset = Vector3.new(0, 5.2, 0)
-	if not camera then return 76, 132, centerOffset, defaultInfoOffset end
-	local rootPoint = camera:WorldToViewportPoint(root.Position)
-	if rootPoint.Z <= 0 then return 28, 24, centerOffset, defaultInfoOffset end
-	local halfWidth, halfHeight, bodyPartCount, highestPoint = 0, 0, 0, 2.8
-	for _, part in ipairs(character:GetChildren()) do
-		if part:IsA("BasePart") and part ~= root and part.Transparency < 0.98 then
-			bodyPartCount += 1
-			local half = part.Size * 0.5
-			for _, x in ipairs({-1, 1}) do
-				for _, y in ipairs({-1, 1}) do
-					for _, z in ipairs({-1, 1}) do
-						local worldPoint = part.CFrame:PointToWorldSpace(Vector3.new(half.X * x, half.Y * y, half.Z * z))
-						local viewportPoint = camera:WorldToViewportPoint(worldPoint)
-						highestPoint = math.max(highestPoint, worldPoint.Y - root.Position.Y)
-						if viewportPoint.Z > 0 then
-							halfWidth = math.max(halfWidth, math.abs(viewportPoint.X - rootPoint.X))
-							halfHeight = math.max(halfHeight, math.abs(viewportPoint.Y - rootPoint.Y))
-						end
-					end
-				end
-			end
-		end
+	local ok, boundingCFrame, boundingSize = pcall(character.GetBoundingBox, character)
+	if ok and typeof(boundingCFrame) == "CFrame" and typeof(boundingSize) == "Vector3" then
+		-- Measure once in studs. Clamps keep oversized accessories from stretching
+		-- the box while still supporting unusually wide or tall avatars.
+		width = math.clamp(boundingSize.X + 0.35, 2.8, 6.5)
+		height = math.clamp(boundingSize.Y + 0.35, 4.5, 8.5)
+		centerOffset = boundingCFrame.Position - root.Position
 	end
-	if bodyPartCount == 0 then return 76, 132, centerOffset, defaultInfoOffset end
-	return math.clamp(halfWidth * 2 + 4, 28, 114), math.clamp(halfHeight * 2 + 4, 24, 152), centerOffset,
-		Vector3.new(0, highestPoint + 2.1, 0)
+	local infoOffset = centerOffset + Vector3.new(0, height * 0.5 + 1.8, 0)
+	return width, height, centerOffset, infoOffset
 end
 
 local function updateEsp(target, localRoot)
@@ -713,7 +696,11 @@ local function updateEsp(target, localRoot)
 	local entry = state.EspEntries[target]
 	if not entry or entry.Character ~= character then
 		removeEsp(target)
-		entry = {Character = character}
+		local boxWidthStuds, boxHeightStuds, boxOffset, infoOffset = getEspWorldMetrics(character, root)
+		entry = {
+			Character = character, BoxWidthStuds = boxWidthStuds, BoxHeightStuds = boxHeightStuds,
+			BoxOffset = boxOffset, InfoOffset = infoOffset,
+		}
 		entry.Gui = create("BillboardGui", {
 			Name = "AnomalyUniversalESP", Size = UDim2.fromOffset(240, 62), StudsOffsetWorldSpace = Vector3.new(0, 5.2, 0),
 			AlwaysOnTop = true, LightInfluence = 0, MaxDistance = state.EspDistance, Adornee = root,
@@ -725,11 +712,11 @@ local function updateEsp(target, localRoot)
 			TextYAlignment = Enum.TextYAlignment.Bottom, ZIndex = 5,
 		}, entry.Gui)
 		entry.BoxGui = create("BillboardGui", {
-			Name = "AnomalyUniversalESPBox", Size = UDim2.fromOffset(436, 132), StudsOffsetWorldSpace = Vector3.zero,
+			Name = "AnomalyUniversalESPBox", Size = UDim2.new(boxWidthStuds, 0, boxHeightStuds, 0), StudsOffsetWorldSpace = boxOffset,
 			AlwaysOnTop = true, LightInfluence = 0, MaxDistance = state.EspDistance, Adornee = root, ClipsDescendants = false,
 		}, gui)
 		entry.BoxFrame = create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(76, 132),
+			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromScale(1, 1),
 			BackgroundTransparency = 1, BorderSizePixel = 0,
 		}, entry.BoxGui)
 		entry.BoxStroke = create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.4, Transparency = 0}, entry.BoxFrame)
@@ -770,13 +757,12 @@ local function updateEsp(target, localRoot)
 		end
 		bar.Fill.Size = UDim2.fromScale(1, math.clamp(current / maximum, 0, 1))
 	end
-	local boxWidth, boxHeight, centerOffset, infoOffset = getEspVisualMetrics(character, root)
 	entry.Gui.MaxDistance = state.EspDistance
-	entry.Gui.StudsOffsetWorldSpace = infoOffset
+	entry.Gui.StudsOffsetWorldSpace = entry.InfoOffset
 	entry.BoxGui.MaxDistance = state.EspDistance
-	entry.BoxGui.Size = UDim2.fromOffset(boxWidth + 360, boxHeight)
-	entry.BoxGui.StudsOffsetWorldSpace = centerOffset
-	entry.BoxFrame.Size = UDim2.fromOffset(boxWidth, boxHeight)
+	entry.BoxGui.Size = UDim2.new(entry.BoxWidthStuds, 0, entry.BoxHeightStuds, 0)
+	entry.BoxGui.StudsOffsetWorldSpace = entry.BoxOffset
+	entry.BoxFrame.Size = UDim2.fromScale(1, 1)
 	local settings = state.EspSettings
 	local lines = {}
 	if settings.Name then table.insert(lines, target.DisplayName) end

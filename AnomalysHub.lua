@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v3. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v4. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3142,6 +3142,9 @@ local weaponProfiles = {
 		["79184695298895"] = {Phase = .35, Name = "alternate M1-4"},
 		["100550983587007"] = {Phase = .43, Name = "alternate M1-5"},
 		["96203123659316"] = {Phase = .60, Name = "heavy"},
+		-- CritActive/CriticalOnCooldown and hit receipts identify this Fists
+		-- critical. Contact-phase seed only; automatic parry not yet confirmed.
+		["110890307194193"] = {Phase = .57, Name = "critical (test)"},
 	}},
 	bigpitchfork = {Label = "BigPitchfork", Animations = {
 		-- Captured Character.Weapon="BigPitchfork". No actor-name checks.
@@ -3155,7 +3158,7 @@ local weaponProfiles = {
 local knownAnimations = {}
 for _, weapon in pairs(weaponProfiles) do for id in pairs(weapon.Animations) do knownAnimations[id] = true end end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v3", "Fists: both recorded combos + heavy. BigPitchfork: recorded combo + air attack.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v4", "Fists: both combos + heavy; critical timing under test. BigPitchfork: combo + air attack.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3168,10 +3171,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v3 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v4 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nFists: 11 observed animation timings (two combos + heavy). BigPitchfork: 5. Character.Weapon takes precedence over Player.CombatStyle. No actor-name filters."
+		.. "\nFists: 12 observed animation timings (two combos + heavy + experimental critical). BigPitchfork: 5. Character.Weapon takes precedence over Player.CombatStyle. No actor-name filters."
+		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
 		.. "\nUnknown weapons and animation variants are logged and skipped; a Fists label alone does not establish every fist animation's timing."
 		.. "\nConfirmed counts require ParryResult with local Parrier, matching attacker and a recent test input. Accepted is only an input acknowledgment."
 		.. "\n" .. table.concat(state.Lines, "\n") .. "\nSTATUS=" .. tostring(reason)
@@ -3184,6 +3188,9 @@ local function save(reason)
 end
 local function show(message)
 	status.Text = message .. "\nInputs: " .. (state.Presses or 0) .. " | Parry results: " .. (state.Parries or 0) .. " | Rejected: " .. (state.Rejected or 0)
+end
+local function gate(reason)
+	if state.Gate ~= reason then state.Gate = reason; note("GATE " .. reason) end
 end
 local function rootOf(model)
 	local root = model and (model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head"))
@@ -3230,7 +3237,7 @@ local function describeWeapon(rig)
 	local key, weapon, source = weaponOf(rig)
 	if rig.Weapon ~= key then
 		rig.Weapon = key
-		note("WEAPON actor=" .. rig.Model.Name .. " type=" .. key .. " source=" .. source)
+		note("WEAPON actor=" .. rig.Model.Name .. " type=" .. key .. " source=" .. source .. " actorId=" .. rig.Id)
 	end
 	return key, weapon
 end
@@ -3250,7 +3257,7 @@ local function damageSnapshot(localRoot)
 				table.insert(tracks, string.format("%s:%.3f@%.3f", id, track.TimePosition, track.Speed))
 			end
 		end
-		note(string.format("DAMAGE_NEARBY actor=%s weapon=%s distance=%.2f tracks(id:phase@speed)=%s", rig.Model.Name, key, distance, table.concat(tracks, ",")))
+		note(string.format("DAMAGE_NEARBY actor=%s weapon=%s distance=%.2f tracks(id:phase@speed)=%s actorId=%d", rig.Model.Name, key, distance, table.concat(tracks, ","), rig.Id))
 	end
 end
 local function watchTrack(rig, track)
@@ -3263,7 +3270,7 @@ local function watchTrack(rig, track)
 		rig.Tracks[track] = {Asset = id, At = os.clock()}
 	end
 	if weapon and weapon.Animations[id] then
-		note("SWING actor=" .. rig.Model.Name .. " weapon=" .. key .. " animation=" .. id)
+		note(string.format("SWING actor=%s weapon=%s animation=%s actorId=%d phase=%.3f speed=%.3f", rig.Model.Name, key, id, rig.Id, track.TimePosition, track.Speed))
 	elseif id and not state.Unknown[key .. ":" .. id] and tostring(track.Priority):find("Action", 1, true) then
 		state.Unknown[key .. ":" .. id] = true
 		note("UNMAPPED actor=" .. rig.Model.Name .. " weapon=" .. key .. " animation=" .. id .. " (not attempted)")
@@ -3301,7 +3308,8 @@ local function syncRigs(localRoot)
 		local rig = state.Rigs[model]
 		if rig and rig.Animator ~= animator then rig.Connection:Disconnect(); rig = nil end
 		if not rig then
-			rig = {Model = model, Owner = owners[model], Animator = animator, Tracks = {}}; state.Rigs[model] = rig
+			state.RigSerial += 1
+			rig = {Id = state.RigSerial, Model = model, Owner = owners[model], Animator = animator, Tracks = {}}; state.Rigs[model] = rig
 			rig.Connection = animator.AnimationPlayed:Connect(function(track) if state.Enabled then watchTrack(rig, track) end end)
 			for _, track in ipairs(animator:GetPlayingAnimationTracks()) do watchTrack(rig, track) end
 		end
@@ -3366,6 +3374,8 @@ local function step()
 		stop("Block-key release failed"); return
 	end
 	if not state.Enabled then return end
+	if state.LastStep and now - state.LastStep > .15 then note(string.format("FRAME_GAP seconds=%.3f", now - state.LastStep)) end
+	state.LastStep = now
 	if now - state.Started >= 90 then stop("Test complete"); return end
 	if controller.IsBeyondNenParryRecording and controller.IsBeyondNenParryRecording() then stop("Manual recorder opened"); return end
 	local model = player.Character
@@ -3373,7 +3383,7 @@ local function step()
 	if model ~= state.Character then
 		release(); clearRigs(); state.Character, state.LastAttempt = model, nil; state.Attempts = {}; state.NextSync = 0; state.LastHealth = nil
 	end
-	if not localRoot then release(); show("Waiting for your character"); return end
+	if not localRoot then gate("character-unavailable"); release(); show("Waiting for your character"); return end
 	local health = model:GetAttribute("Health")
 	if type(health) == "number" then
 		if state.LastHealth and health < state.LastHealth then
@@ -3384,17 +3394,27 @@ local function step()
 		end
 		state.LastHealth = health
 	end
-	if not state.Focused or GuiService.MenuIsOpen or Input:GetFocusedTextBox() then release(); show("Paused while chat, menu or another window is active"); return end
+	if not state.Focused or GuiService.MenuIsOpen or Input:GetFocusedTextBox() then
+		gate(not state.Focused and "window-unfocused" or (GuiService.MenuIsOpen and "menu-open" or "text-focused"))
+		release(); show("Paused while chat, menu or another window is active"); return
+	end
 	if now >= state.NextSync then state.NextSync = now + .2; syncRigs(localRoot) end
 	if now >= state.NextPing then state.NextPing = now + 2; state.Lead = networkLead() end
 	if now >= state.NextSave then state.NextSave = now + 2; save("RUNNING") end
 	local key = state.Key
 	if state.Held then
+		gate("auto-key-held")
 		local weapon = weaponProfiles[state.LastAttempt.Weapon]
 		show("Block tap: " .. (weapon and weapon.Label or "Unknown weapon")); return
 	end
-	if Input:IsKeyDown(key) or model:GetAttribute("HoldingBlock") == true then show("Manual/game block active; waiting for release"); return end
-	if now < state.Backoff or model:GetAttribute("ParryOnCooldown") == true or model:GetAttribute("BlockOnCooldown") == true then show("Waiting for block cooldown"); return end
+	if Input:IsKeyDown(key) or model:GetAttribute("HoldingBlock") == true then
+		gate(Input:IsKeyDown(key) and "physical-key-held" or "game-block-held"); show("Manual/game block active; waiting for release"); return
+	end
+	if now < state.Backoff or model:GetAttribute("ParryOnCooldown") == true or model:GetAttribute("BlockOnCooldown") == true then
+		gate(now < state.Backoff and "input-backoff" or (model:GetAttribute("ParryOnCooldown") == true and "parry-cooldown" or "block-cooldown"))
+		show("Waiting for block cooldown"); return
+	end
+	gate("ready")
 	local best
 	for _, rig in pairs(state.Rigs) do
 		local root = alive(rig.Model)
@@ -3407,28 +3427,36 @@ local function step()
 			if not profile then continue end
 			local phase, speed = track.TimePosition, track.Speed
 			local remaining = (profile.Phase - phase) / speed
-			if remaining < -.025 then swing.Used = true; continue end
+			if remaining < -.025 then
+				swing.Used = true
+				note(string.format("SKIP actorId=%d weapon=%s animation=%s reason=late phase=%.3f speed=%.3f eta=%.3f", rig.Id, weaponKey, swing.Asset, phase, speed, remaining))
+				continue
+			end
 			if remaining > state.Lead then continue end
 			local delta = localRoot.Position - root.Position
 			local distance = delta.Magnitude
 			-- Re-evaluate geometry at the moment of the tap, including a short
 			-- velocity projection for closing attacks, instead of a fixed timer.
 			local projected = delta + (localRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity) * math.max(0, remaining)
-			local facing = distance < 1 or root.CFrame.LookVector:Dot(delta.Unit) >= .15
+			local facingDot = distance < 1 and 1 or root.CFrame.LookVector:Dot(delta.Unit)
+			local facing = facingDot >= .15
 			if distance <= 12 and projected.Magnitude <= 9 and math.abs(delta.Y) <= 8 and facing then
-				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance} end
+				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance} end
+			elseif not swing.GeometryLogged then
+				swing.GeometryLogged = true
+				note(string.format("SKIP actorId=%d weapon=%s animation=%s reason=geometry phase=%.3f eta=%.3f distance=%.2f projected=%.2f vertical=%.2f facing=%.3f", rig.Id, weaponKey, swing.Asset, phase, remaining, distance, projected.Magnitude, delta.Y, facingDot))
 			end
 		end
 	end
 	if not best then show("Watching mapped Fists / BigPitchfork attacks"); return end
 	best.Swing.Used = true
-	state.LastAttempt = {At = now, Model = best.Model, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
+	state.LastAttempt = {At = now, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
 	state.Held = {Key = key, Until = now + .16}; state.Backoff = now + .25
 	local ok = pcall(function() manager:SendKeyEvent(true, key, false, game) end)
 	if not ok then stop("Block input unavailable"); return end
 	state.Presses += 1
-	note(string.format("KEY DOWN %s actor=%s weapon=%s animation=%s phase=%.3f speed=%.3f eta=%.3f distance=%.2f lead=%.3f",
-		key.Name, best.Model.Name, best.Weapon, best.Swing.Asset, best.Track.TimePosition, best.Track.Speed, best.Remaining, best.Distance, state.Lead))
+	note(string.format("KEY DOWN %s actor=%s weapon=%s animation=%s phase=%.3f speed=%.3f eta=%.3f distance=%.2f lead=%.3f actorId=%d",
+		key.Name, best.Model.Name, best.Weapon, best.Swing.Asset, best.Track.TimePosition, best.Track.Speed, best.Remaining, best.Distance, state.Lead, best.ActorId))
 	show("Block tap: " .. best.Label)
 end
 local function start()
@@ -3439,6 +3467,7 @@ local function start()
 	state.Started, state.Enabled = os.clock(), true
 	state.Lines, state.Unknown, state.Attempts, state.Results, state.PlayerModels = {}, {}, {}, {}, {}
 	state.NextSync, state.NextPing, state.NextSave, state.Backoff = 0, 0, 0, 0
+	state.Gate, state.LastStep, state.RigSerial = nil, nil, 0
 	state.Presses, state.Parries, state.Rejected, state.DamageEvents, state.Lead = 0, 0, 0, 0, .145
 	state.Epoch = (state.Epoch or 0) + 1
 	local ok, nonce = pcall(function() return HttpService:GenerateGUID(false) end)
@@ -3446,7 +3475,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,BigPitchfork mapped=16 duration=90")
+	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,BigPitchfork mapped=17 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

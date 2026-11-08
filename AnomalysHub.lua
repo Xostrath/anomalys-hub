@@ -3011,6 +3011,7 @@ end
 local function start()
 	if capture.Closed or controller.IsUnloaded() then return end
 	if capture.Active then stop("STOPPED"); return end
+	if controller.StopBeyondNenAutoParry then controller.StopBeyondNenAutoParry() end
 	if type(writefile) ~= "function" then status.Text = "Recording needs executor file access."; return end
 	capture.Epoch += 1
 	capture.Active, capture.Started, capture.NextSync, capture.NextMotion, capture.NextClock, capture.NextSave = true, os.clock(), 0, 0, 0, 0
@@ -3068,6 +3069,283 @@ controller.Connect(RunService.Heartbeat, function()
 end)
 controller.Connect(player.OnTeleport, function() stop("TELEPORT") end)
 controller.RegisterCleanup(function() stop("UNLOAD"); capture.Closed = true end)
+function controller.IsBeyondNenParryRecording() return capture.Active end
+
+end)()
+;(function()
+-- Beyond Nen auto-parry test v1. Seeds from the 2026-11-08 Chief Farmer capture.
+-- Animation phases are estimates from observed results, not server hitbox rules.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Input = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
+local manager; pcall(function() manager = game:GetService("VirtualInputManager") end)
+local player, ui = Players.LocalPlayer, controller.UI
+local path = "AnomalyHub/universal/beyond_nen_autoparry_test.txt"
+local profiles = {
+	["89044806752056"] = {Phase = .48, Name = "M1-1"},
+	["139612134161012"] = {Phase = .49, Name = "M1-2"},
+	["78313572240630"] = {Phase = .59, Name = "M1-3"},
+	["96407208954530"] = {Phase = .70, Name = "M1-4"},
+	["70453902034107"] = {Phase = .42, Name = "air attack"},
+}
+local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v1", "First test: 5 recorded Chief Farmer attacks. Other attack animations are not mapped yet.", 224)
+local status = ui.Create("TextLabel", {
+	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Ready. Start near Chief Farmer and let the test handle F. Stops and saves after 90 seconds.",
+	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, card)
+local button, stop
+local function note(message)
+	if #state.Lines >= 1500 then table.remove(state.Lines, 1) end
+	table.insert(state.Lines, string.format("%.4f %s", os.clock() - state.Started, message))
+end
+local function save(reason)
+	if not state.Started then return false end
+	state.Report = "BEYOND NEN AUTO PARRY TEST v1\nplace=" .. tostring(game.PlaceId)
+		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
+		.. "\nSeeded from Chief Farmer: 5 animations. Unknown animations are logged, never assumed to be attacks."
+		.. "\nConfirmed counts require ParryResult with local Parrier, matching attacker and a recent test input. Accepted is only an input acknowledgment."
+		.. "\n" .. table.concat(state.Lines, "\n") .. "\nSTATUS=" .. tostring(reason)
+	if type(writefile) ~= "function" then return false end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	return pcall(writefile, path, state.Report)
+end
+local function show(message)
+	status.Text = message .. "\nInputs: " .. (state.Presses or 0) .. " | Parry results: " .. (state.Parries or 0) .. " | Rejected: " .. (state.Rejected or 0)
+end
+local function rootOf(model)
+	local root = model and (model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head"))
+	return root and root:IsA("BasePart") and root or nil
+end
+local function alive(model)
+	local humanoid = model and model:FindFirstChildOfClass("Humanoid")
+	local health = model and model:GetAttribute("Health")
+	return model and model:IsDescendantOf(workspace) and humanoid and humanoid.Health > 0
+		and (type(health) ~= "number" or health > 0) and rootOf(model)
+end
+local function release()
+	if not state.Held then return true end
+	local key = state.Held.Key
+	local ok = pcall(function() manager:SendKeyEvent(false, key, false, game) end)
+	if ok then state.Held = nil; note("KEY UP " .. key.Name) end
+	return ok
+end
+local function clearRigs()
+	for _, rig in pairs(state.Rigs) do if rig.Connection then rig.Connection:Disconnect() end end
+	table.clear(state.Rigs)
+end
+stop = function(reason)
+	state.Enabled = false
+	for _ = 1, 3 do if release() then break end end
+	clearRigs()
+	if state.Unwatch then state.Unwatch(); state.Unwatch = nil end
+	button.Text, button.BackgroundColor3 = "Run Test (90s)", ui.Colors.AccentSoft
+	if state.Started then note("STOP " .. reason) end
+	local saved = save(reason)
+	show(reason .. (saved and ". Test saved." or ". File save unavailable; use Copy Test."))
+end
+controller.StopBeyondNenAutoParry = function() if state.Enabled then stop("Manual recorder opened") end end
+local function watchTrack(rig, track)
+	-- AnimationTrack objects can be reused for a new swing. AnimationPlayed resets
+	-- the per-swing flag; polling alone must not repeatedly tap the same animation.
+	local animation = track.Animation
+	local id = animation and tostring(animation.AnimationId):match("%d+")
+	if profiles[id] then
+		rig.Tracks[track] = {Profile = profiles[id], Asset = id, At = os.clock()}
+		note("SWING actor=" .. rig.Model.Name .. " animation=" .. id)
+	elseif id and not state.Unknown[id] and tostring(track.Priority):find("Action", 1, true) then
+		state.Unknown[id] = true
+		note("UNMAPPED actor=" .. rig.Model.Name .. " animation=" .. id .. " (not attempted)")
+	end
+end
+local function syncRigs(localRoot)
+	local pool, seen, owners, wanted = {}, {}, {}, {}
+	for _, target in ipairs(Players:GetPlayers()) do
+		if target.Character then owners[target.Character] = target; state.PlayerModels[target.Character] = target end
+	end
+	local function candidate(model)
+		if seen[model] then return end; seen[model] = true
+		if not model:IsA("Model") or model == player.Character then return end
+		local owner = state.PlayerModels[model]
+		if owner and owner.Character ~= model then return end
+		local root = alive(model)
+		if root then
+			local distance = (root.Position - localRoot.Position).Magnitude
+			if distance <= 60 then table.insert(pool, {Model = model, Distance = distance}) end
+		end
+	end
+	for model in pairs(owners) do candidate(model) end
+	local containers = {workspace}
+	local folder = workspace:FindFirstChild("Humanoids"); if folder then table.insert(containers, folder) end
+	for _, container in ipairs(containers) do
+		for index, model in ipairs(container:GetChildren()) do if index > 500 then break end; candidate(model) end
+	end
+	table.sort(pool, function(a, b) return a.Distance < b.Distance end)
+	for index = 1, math.min(#pool, 8) do
+		local model = pool[index].Model
+		local humanoid = model:FindFirstChildOfClass("Humanoid")
+		local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+		if not animator then continue end
+		wanted[model] = true
+		local rig = state.Rigs[model]
+		if rig and rig.Animator ~= animator then rig.Connection:Disconnect(); rig = nil end
+		if not rig then
+			rig = {Model = model, Animator = animator, Tracks = {}}; state.Rigs[model] = rig
+			rig.Connection = animator.AnimationPlayed:Connect(function(track) if state.Enabled then watchTrack(rig, track) end end)
+			for _, track in ipairs(animator:GetPlayingAnimationTracks()) do watchTrack(rig, track) end
+		end
+	end
+	for model, rig in pairs(state.Rigs) do
+		if not wanted[model] then rig.Connection:Disconnect(); state.Rigs[model] = nil end
+	end
+end
+local function blockKey()
+	local ok, bindings = pcall(HttpService.JSONDecode, HttpService, player:GetAttribute("KeybindsJson") or "")
+	local name = ok and type(bindings) == "table" and bindings.Block or "F"
+	local found, key = pcall(function() return Enum.KeyCode[name] end)
+	return found and key and key ~= Enum.KeyCode.Unknown and key or Enum.KeyCode.F
+end
+local function networkLead()
+	local network = Stats:FindFirstChild("Network")
+	local items = network and network:FindFirstChild("ServerStatsItem")
+	local ping = items and items:FindFirstChild("Data Ping")
+	local ok, ms = pcall(function() return ping:GetValue() end)
+	-- Test seed: ~140ms before the estimated contact at the captured ~90ms ping.
+	return .10 + (ok and type(ms) == "number" and ms == ms and math.clamp(ms / 2000, 0, .10) or .045)
+end
+local function feedback(name, direction, args, started)
+	if not state.Enabled or started < state.Started then return end
+	local now = os.clock()
+	if name == "SecondaryRemotes.Combat.Block" then
+		if direction == "OUT FireServer" and args[1] == "Press" then
+			local attempt = state.LastAttempt
+			if attempt and not attempt.RequestId and now - attempt.At <= .3 then
+				attempt.RequestId = args[3]; state.Attempts[args[3]] = attempt
+				note("REQUEST input=" .. attempt.Serial .. " id=" .. tostring(args[3]))
+			end
+		elseif direction == "IN event" and args[1] == "ParryDecision" then
+			local attempt = state.Attempts[args[2]]
+			if not attempt or attempt.Decision then return end
+			attempt.Decision = args[3]
+			note("DECISION id=" .. tostring(args[2]) .. " " .. tostring(args[3]) .. " reason=" .. tostring(args[4]))
+			if args[3] == "Rejected" then
+				state.Rejected += 1
+				local delay = args[4] == "Cooldown" and tonumber(args[5]) or .12
+				state.Backoff = math.max(state.Backoff, now + math.clamp(delay or .15, .08, 2))
+			end
+		end
+	elseif name == "SecondaryRemotes.Combat.PendingReaction" and direction == "IN event" and args[2] == "ParryResult" then
+		local data = args[3]
+		if type(data) ~= "table" or data.Parrier ~= player.Character then return end
+		local id = data.PredictionId or args[1]
+		if not id or state.Results[id] then return end; state.Results[id] = true
+		local attempt = state.LastAttempt
+		if attempt and attempt.Model == data.Attacker and now - attempt.At <= .8 then
+			state.Parries += 1
+			note("PARRY_RESULT id=" .. tostring(id) .. " actor=" .. data.Attacker.Name .. " after=" .. string.format("%.3f", now - attempt.At)
+				.. " cancelMove=" .. tostring(data.CancelMove))
+		else note("UNMATCHED_PARRY_RESULT id=" .. tostring(id)) end
+	end
+end
+local function step()
+	local now = os.clock()
+	if state.Held and (now >= state.Held.Until or not state.Enabled) and not release() then
+		stop("Block-key release failed"); return
+	end
+	if not state.Enabled then return end
+	if now - state.Started >= 90 then stop("Test complete"); return end
+	if controller.IsBeyondNenParryRecording and controller.IsBeyondNenParryRecording() then stop("Manual recorder opened"); return end
+	local model = player.Character
+	local localRoot = alive(model)
+	if model ~= state.Character then
+		release(); clearRigs(); state.Character, state.LastAttempt = model, nil; state.Attempts = {}; state.NextSync = 0; state.LastHealth = nil
+	end
+	if not localRoot then release(); show("Waiting for your character"); return end
+	local health = model:GetAttribute("Health")
+	if type(health) == "number" then
+		if state.LastHealth and health < state.LastHealth then note(string.format("DAMAGE %.3f health=%.3f", state.LastHealth - health, health)) end
+		state.LastHealth = health
+	end
+	if not state.Focused or GuiService.MenuIsOpen or Input:GetFocusedTextBox() then release(); show("Paused while chat, menu or another window is active"); return end
+	if now >= state.NextSync then state.NextSync = now + .2; syncRigs(localRoot) end
+	if now >= state.NextPing then state.NextPing = now + 2; state.Lead = networkLead() end
+	if now >= state.NextSave then state.NextSave = now + 2; save("RUNNING") end
+	local key = state.Key
+	if state.Held then show("Block tap: " .. state.LastAttempt.Model.Name); return end
+	if Input:IsKeyDown(key) or model:GetAttribute("HoldingBlock") == true then show("Manual/game block active; waiting for release"); return end
+	if now < state.Backoff or model:GetAttribute("ParryOnCooldown") == true or model:GetAttribute("BlockOnCooldown") == true then show("Waiting for block cooldown"); return end
+	local best
+	for _, rig in pairs(state.Rigs) do
+		local root = alive(rig.Model)
+		if not root then continue end
+		for track, swing in pairs(rig.Tracks) do
+			if not track.IsPlaying or now - swing.At > 5 then rig.Tracks[track] = nil; continue end
+			if swing.Used or track.Speed <= 0 or track.Looped then continue end
+			local phase, speed = track.TimePosition, track.Speed
+			local remaining = (swing.Profile.Phase - phase) / speed
+			if remaining < -.025 then swing.Used = true; continue end
+			if remaining > state.Lead then continue end
+			local delta = localRoot.Position - root.Position
+			local distance = delta.Magnitude
+			-- Re-evaluate geometry at the moment of the tap, including a short
+			-- velocity projection for closing attacks, instead of a fixed timer.
+			local projected = delta + (localRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity) * math.max(0, remaining)
+			local facing = distance < 1 or root.CFrame.LookVector:Dot(delta.Unit) >= .15
+			if distance <= 12 and projected.Magnitude <= 9 and math.abs(delta.Y) <= 8 and facing then
+				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, Track = track, Remaining = remaining, Distance = distance} end
+			end
+		end
+	end
+	if not best then show("Watching for recorded attacks nearby"); return end
+	best.Swing.Used = true
+	state.LastAttempt = {At = now, Model = best.Model, Animation = best.Swing.Asset, Serial = state.Presses + 1}
+	state.Held = {Key = key, Until = now + .16}; state.Backoff = now + .25
+	local ok = pcall(function() manager:SendKeyEvent(true, key, false, game) end)
+	if not ok then stop("Block input unavailable"); return end
+	state.Presses += 1
+	note(string.format("KEY DOWN %s actor=%s animation=%s phase=%.3f speed=%.3f eta=%.3f distance=%.2f lead=%.3f",
+		key.Name, best.Model.Name, best.Swing.Asset, best.Track.TimePosition, best.Track.Speed, best.Remaining, best.Distance, state.Lead))
+end
+local function start()
+	if state.Closed or controller.IsUnloaded() then return end
+	if state.Enabled then stop("Stopped by user"); return end
+	if not manager then status.Text = "Block input unavailable in this executor."; return end
+	if controller.IsBeyondNenParryRecording and controller.IsBeyondNenParryRecording() then status.Text = "Stop + Save the manual recording before running this test."; return end
+	state.Started, state.Enabled = os.clock(), true
+	state.Lines, state.Unknown, state.Attempts, state.Results, state.PlayerModels = {}, {}, {}, {}, {}
+	state.NextSync, state.NextPing, state.NextSave, state.Backoff = 0, 0, 0, 0
+	state.Presses, state.Parries, state.Rejected, state.Lead = 0, 0, 0, .145
+	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
+	state.Key = blockKey()
+	note("START key=" .. state.Key.Name .. " mapped=5 duration=90")
+	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
+	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
+	show("Test running. Let it handle your block key."); save("RUNNING")
+end
+button = ui.FitColumn(ui.Button(card, "Run Test (90s)", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
+ui.FitColumn(ui.Button(card, "Copy Test", 0, 0, 180, function()
+	if state.Enabled then save("RUNNING") end
+	if state.Report and type(setclipboard) == "function" then pcall(setclipboard, state.Report) end
+end), 1, 72)
+controller.Connect(RunService.Heartbeat, function()
+	if state.Closed then return end
+	local ok, err = pcall(step)
+	if not ok then if state.Started then note("ERROR " .. tostring(err)) end; stop("Test error") end
+end)
+controller.Connect(Input.WindowFocusReleased, function() state.Focused = false; release() end)
+controller.Connect(Input.WindowFocused, function() state.Focused = true end)
+controller.Connect(player:GetAttributeChangedSignal("KeybindsJson"), function()
+	if state.Enabled then release(); state.Key = blockKey(); note("BLOCK KEY " .. state.Key.Name) end
+end)
+controller.Connect(player.OnTeleport, function() if state.Enabled then stop("Travel") end end)
+controller.RegisterCleanup(function() if state.Enabled or state.Held then stop("Unload") end; state.Closed = true end)
 
 end)()
 ;(function()

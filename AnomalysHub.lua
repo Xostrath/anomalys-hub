@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v21. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v22. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3320,7 +3320,7 @@ for _, key in ipairs({"sword", "dagger", "bat"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v21", "Bear: improved distance and angle detection for strikes and rapid attacks. Run a test to check results.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v22", "Waits for early punch recovery before attempting a pending block. Skills and game restrictions still need testing.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3333,7 +3333,7 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v21 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v22 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
 		.. "\nFists: 13 animations. Pitchfork: 6. BigPitchfork: 8. Rifle: 6 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
@@ -3345,7 +3345,7 @@ local function save(reason)
 		.. "\nBear v21 geometry trials: strikes A/B/C/D/E reach15/17/15/17/13, max16/19/18/19/16, facing minimum-.85/-.45/-.65/-.7/.15. Rapid reach28/max30 accepts every facing after eight matching damage pulses at23-26 studs, including rear angles. Extended reach20/max23/facing-.8. Ranged45/max48 and additional28/max32/facing-.8 unchanged. All retain elevation8, timing, input backoff and game cooldown checks. These are response bounds from observed misses, not measured hitboxes or proof of parryability."
 		.. "\nBear rapid/extended skills require at least .08s before a follow-up contact; otherwise skip it and consider later contacts without bypassing cooldown. This experimental cutoff does not promise escape from hitstun. First contacts and other weapon timings retain their previous rules."
 		.. "\nBigPitchfork v15:16 confirmed parries/18 inputs; missing attacks and later multi-hit contacts accounted for most damage. New timings are test seeds, and the third multi-hit phase is inferred from a matched result between direct phase samples."
-		.. "\nLOCAL_RECOVERY: experimental defer for own active first-Fists animation72916536471630 below phase.32. v13 missing requests occur at.089-.280; an observed request occurs at.331. This is not a proven game lock boundary. No action is cancelled; waiting does not consume the incoming contact, and expired contacts are skipped normally."
+		.. "\nLOCAL_RECOVERY v22: own first/second/third Fists animations72916536471630/82905481242246/83801701641510 defer below phases.37/.40/.42. New tests include missing requests at.342/.358 for first, .342 for second and .280 for third; observed requests at.373/.416/.440, including confirmed parries after second/third. These are trial thresholds, not proven unlock boundaries: later-phase misses also exist. Track speed updates remaining wait. No action is cancelled; the pending contact stays available and expired contacts are skipped normally. Other punches and skills are not gated by inference."
 		.. "\nBat timings are initial seeds from v12 health-drop samples. Its multi-hit skill may contain additional contacts; no complete-move coverage or automatic success is assumed."
 		.. "\nFox Bear skill contacts retain normal input backoff, game cooldowns, facing and elevation checks. Known animation phases do not establish whether every skill contact is parryable."
 		.. "\nDagger 78084477149043 follow-ups use current distance within 9 studs regardless of facing/projection; its first contact retains directional checks. This test rule is not a measured hitbox."
@@ -3693,22 +3693,40 @@ local function feedback(name, direction, args, started)
 			end
 			note("PARRY_RESULT id=" .. tostring(id) .. " actor=" .. data.Attacker.Name .. " after=" .. string.format("%.3f", now - attempt.At)
 				.. " cancelMove=" .. tostring(data.CancelMove))
-		else note("UNMATCHED_PARRY_RESULT id=" .. tostring(id)) end
+		else
+			local attacker = data.Attacker
+			local rig = attacker and state.Rigs[attacker]
+			note("UNMATCHED_PARRY_RESULT id=" .. tostring(id) .. " actor=" .. tostring(attacker and attacker.Name)
+				.. " actorId=" .. tostring(rig and rig.Id) .. " lastInput=" .. tostring(attempt and attempt.Serial)
+				.. " lastActor=" .. tostring(attempt and attempt.Model and attempt.Model.Name)
+				.. " after=" .. (attempt and string.format("%.3f", now - attempt.At) or "n/a"))
+		end
 	end
 end
-local function openingPunchRecovery(model)
-	-- Test only the exact local animation with repeated early-phase missing
-	-- requests. Later punches, unknown skills and paused tracks are not gated.
+local ownPunchRecoveryPhases = {
+	["72916536471630"] = .37,
+	["82905481242246"] = .40,
+	["83801701641510"] = .42,
+}
+local function punchRecovery(model)
+	-- First three exact local punch IDs only. Observed request transitions
+	-- seed the thresholds; they do not prove when the game's lock clears.
 	local humanoid = model:FindFirstChildOfClass("Humanoid")
 	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
 	if not animator then return end
+	local recovery
 	for index, track in ipairs(animator:GetPlayingAnimationTracks()) do
 		if index > 12 then break end
-		if track.IsPlaying and not track.Looped and track.Speed > 0 and track.TimePosition < .32 then
+		if track.IsPlaying and not track.Looped and track.Speed > 0 then
 			local id = track.Animation and tostring(track.Animation.AnimationId):match("%d+")
-			if id == "72916536471630" then return track end
+			local limit = ownPunchRecoveryPhases[id]
+			if limit and track.TimePosition < limit then
+				local wait = (limit - track.TimePosition) / track.Speed
+				if not recovery or wait > recovery.Wait then recovery = {Asset = id, Track = track, Phase = limit, Wait = wait} end
+			end
 		end
 	end
+	return recovery
 end
 local function step()
 	local now = os.clock()
@@ -3762,7 +3780,7 @@ local function step()
 		show(state.Held.GuardConfirmed and "Guarding the remaining Rifle burst (test)" or ("Block tap: " .. (weapon and weapon.Label or "Unknown weapon"))); return
 	end
 	if Input:IsKeyDown(key) or model:GetAttribute("HoldingBlock") == true then
-		gate(Input:IsKeyDown(key) and "physical-key-held" or "game-block-held"); show("Manual/game block active; waiting for release"); return
+		gate(Input:IsKeyDown(key) and "physical-key-held" or "game-block-held"); show("Block key/game block active; waiting for release"); return
 	end
 	if now < state.Backoff or model:GetAttribute("ParryOnCooldown") == true or model:GetAttribute("BlockOnCooldown") == true then
 		gate(now < state.Backoff and "input-backoff" or (model:GetAttribute("ParryOnCooldown") == true and "parry-cooldown" or "block-cooldown"))
@@ -3812,12 +3830,13 @@ local function step()
 		end
 	end
 	if not best then gate("ready"); show("Watching mapped Fists / Pitchfork / BigPitchfork / Rifle / Sword / Dagger / Bat / Fox Bear attacks"); return end
-	local recovery = openingPunchRecovery(model)
+	local recovery = punchRecovery(model)
 	if recovery then
-		if state.Gate ~= "local-first-punch-recovery" then
-			note(string.format("LOCAL_RECOVERY animation=72916536471630 phase=%.3f speed=%.3f estimatedWait=%.3f enemy=%s contact=%d", recovery.TimePosition, recovery.Speed, (.32 - recovery.TimePosition) / recovery.Speed, best.Swing.Asset, best.Contact))
+		if state.Gate ~= "local-punch-recovery" or state.RecoveryAsset ~= recovery.Asset then
+			note(string.format("LOCAL_RECOVERY animation=%s phase=%.3f speed=%.3f threshold=%.3f estimatedWait=%.3f enemy=%s contact=%d", recovery.Asset, recovery.Track.TimePosition, recovery.Track.Speed, recovery.Phase, recovery.Wait, best.Swing.Asset, best.Contact))
 		end
-		gate("local-first-punch-recovery"); show("Waiting for your opening punch to recover (test)"); return
+		state.RecoveryAsset = recovery.Asset
+		gate("local-punch-recovery"); show("Waiting for your punch to recover (test)"); return
 	end
 	gate("ready")
 	best.Swing.Contact = best.Contact + 1

@@ -2262,6 +2262,7 @@ local function enable(value)
 	if auto.Closed then return end
 	if not value then stop(); return end
 	if auto.Enabled then return end
+	if controller.SetBeyondNenAutoMeditation then controller.SetBeyondNenAutoMeditation(false) end
 	auto.Enabled, auto.Phase, auto.Catches, auto.Lines, auto.Started = true, "Idle", 0, {}, true
 	auto.Point, auto.Origin, auto.Session, auto.ReleaseAt = nil, nil, nil, nil
 	auto.NextCast = os.clock() + 0.8
@@ -2519,8 +2520,8 @@ local function snapshot()
 	capture.LastUI = current
 end
 
-local card = ui.Card(ui.Pages.Auto, "AUTO MEDITATION SETUP", "Record placing your mat, starting meditation, several prompts and stopping. Automation comes after this capture.", 218)
-card.LayoutOrder = 20
+local card = ui.Card(ui.Pages.Auto, "MEDITATION RECORDER", "Record other meditation modes or a session that needs troubleshooting.", 218)
+card.LayoutOrder = 30
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Turn Auto Fishing off, then record a manual meditation session.",
@@ -2585,6 +2586,260 @@ end)
 controller.Connect(player.OnTeleport, function() stop("TELEPORT") end)
 controller.RegisterCleanup(function() stop("UNLOAD"); capture.Closed = true end)
 controller.CaptureBeyondNenMeditation = start
+
+end)()
+;(function()
+-- Auto Meditation v1: recorded Circles mode, normal mat/key/mouse controls.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local player = game:GetService("Players").LocalPlayer
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+local inputManager
+pcall(function() inputManager = game:GetService("VirtualInputManager") end)
+local ui = controller.UI
+local state = {Enabled = false, Closed = false, Focused = true, Phase = "Off", Hits = 0, Misses = 0, Lines = {}, Epoch = 0}
+local toggle, status
+local path = "AnomalyHub/universal/beyond_nen_automeditation_test.txt"
+
+local function note(message)
+	if #state.Lines >= 600 then table.remove(state.Lines, 1) end
+	table.insert(state.Lines, string.format("%.3f [%s] %s", os.clock(), state.Focused and "FOREGROUND" or "BACKGROUND", message))
+end
+local function save()
+	if not state.Started or type(writefile) ~= "function" then return end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	pcall(writefile, path, "BEYOND NEN AUTO MEDITATION v1 // CIRCLES\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n"))
+end
+local function show(message)
+	local text = message .. "\nConfirmed hits: " .. state.Hits .. " | Misses: " .. state.Misses
+	if status.Text ~= text then status.Text = text end
+end
+local function release()
+	local held = state.Held
+	if not held then return true end
+	local ok = pcall(function()
+		if held.Key then inputManager:SendKeyEvent(false, held.Key, false, game)
+		else inputManager:SendMouseButtonEvent(held.X, held.Y, 0, false, game, 0) end
+	end)
+	if ok then state.Held = nil; note("INPUT UP " .. (held.Key and held.Key.Name or "M1")) end
+	return ok
+end
+local function stop(reason)
+	state.Enabled = false
+	for _ = 1, 3 do if release() then break end end
+	state.Pending, state.Phase = nil, "Off"
+	if state.Unwatch then state.Unwatch(); state.Unwatch = nil end
+	toggle.Text, toggle.BackgroundColor3 = "Auto Meditation: OFF", ui.Colors.Surface
+	show(reason or "Off. Meditation controls returned to you.")
+	if state.Started then note("STOP " .. (reason or "toggle")); save() end
+end
+local function pressMouse(x, y, duration)
+	if state.Held then return false end
+	local ok = pcall(function()
+		inputManager:SendMouseMoveEvent(x, y, game)
+		state.Held = {X = x, Y = y, Until = os.clock() + duration}
+		inputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+	end)
+	if ok then note(string.format("MOUSE DOWN %.1f %.1f", x, y)) end
+	return ok
+end
+local function pressKey(key, duration)
+	if state.Held then return false end
+	state.Held = {Key = key, Until = os.clock() + duration}
+	local ok = pcall(function() inputManager:SendKeyEvent(true, key, false, game) end)
+	if ok then note("KEY DOWN " .. key.Name) end
+	return ok
+end
+local function gui()
+	local pg = player:FindFirstChildOfClass("PlayerGui")
+	local meditation = pg and pg:FindFirstChild("Meditation")
+	local training = meditation and meditation:FindFirstChild("NenTraining")
+	return meditation, training and meditation.Enabled and training.Visible, pg
+end
+local function obstructed(pg, x, y, target)
+	for _, object in ipairs(pg and pg:GetGuiObjectsAtPosition(x, y) or {}) do
+		if target and (object == target or object:IsDescendantOf(target)) then return false end
+		if (object.Active or object:IsA("GuiButton") or object:IsA("TextBox"))
+			and not (target and target:IsDescendantOf(object)) then return true end
+	end
+	return false
+end
+local function beginSession()
+	state.Epoch += 1; state.Pending = nil; state.Prompts, state.ResultRequests = {}, {}
+	state.Phase, state.NextAction, state.Attempts, state.EnterAttempts = "Training", os.clock() + 3, 0, 0
+	note("SESSION START " .. state.Epoch)
+end
+local function observe(name, direction, args, requestStart)
+	if not state.Enabled or state.Closed or type(requestStart) ~= "number" or requestStart < state.EnabledAt then return end
+	if name == "EnterCarpet" and direction == "IN event" then
+		beginSession()
+	elseif name == "StartMeditation" and direction:sub(1, 6) == "RETURN" then
+		if args[1] == true then
+			if state.Phase ~= "Training" then beginSession() end
+			show("Meditating. Waiting for a circle.")
+		else state.Phase, state.NextAction = "Idle", os.clock() + 3; note("START rejected") end
+	elseif name == "MeditationStopped" and direction == "IN event" then
+		stop("Meditation ended. Enable again when ready.")
+	elseif name == "GamePrompt" and direction == "IN event" then
+		local id, mode, data = args[1], args[2], args[3]
+		if id ~= nil and state.Prompts[id] then return end
+		if mode ~= "Circles" then
+			state.Pending = nil; show("Unmapped meditation mode: " .. tostring(mode) .. ". Record this mode before automating it.")
+			note("UNSUPPORTED " .. tostring(mode)); return
+		end
+		if (type(id) ~= "number" and type(id) ~= "string") or (type(id) == "number" and id ~= id)
+			or type(data) ~= "table" or type(data.Window) ~= "number" or data.Window ~= data.Window
+			or data.Window < 0.2 or data.Window > 5 or type(data.X) ~= "number" or type(data.Y) ~= "number"
+			or not (data.X >= 0 and data.X <= 1 and data.Y >= 0 and data.Y <= 1) then return end
+		state.Phase = "Training"
+		state.Pending = {Id = id, Born = os.clock(), Window = data.Window, X = data.X, Y = data.Y, Sent = false}
+		for oldId, prompt in pairs(state.Prompts) do
+			if os.clock() - prompt.Born > 30 then state.Prompts[oldId] = nil end
+		end
+		for started in pairs(state.ResultRequests) do
+			if os.clock() - started > 30 then state.ResultRequests[started] = nil end
+		end
+		state.Prompts[id] = state.Pending
+		note(string.format("PROMPT id=%s mode=Circles window=%.3f x=%.3f y=%.3f", tostring(id), data.Window, data.X, data.Y))
+	elseif name == "KeyPromptResult" and direction:sub(1, 3) == "OUT" then
+		local pending = args[1] ~= nil and state.Prompts[args[1]]
+		if pending and requestStart >= pending.Born then
+			pending.Responded = true
+			state.ResultRequests[requestStart] = pending
+			note("CLIENT RESULT id=" .. tostring(args[1]) .. " hit=" .. tostring(args[2]))
+		end
+	elseif name == "KeyPromptResult" and direction:sub(1, 6) == "RETURN" then
+		local pending, result = state.ResultRequests[requestStart], args[1]
+		state.ResultRequests[requestStart] = nil
+		if pending and not pending.Resolved and type(result) == "table" and type(result.hit) == "boolean" then
+			pending.Resolved = true
+			if result.hit then state.Hits += 1 else state.Misses += 1 end
+			note("CONFIRMED id=" .. tostring(pending.Id) .. " hit=" .. tostring(result.hit) .. " gained=" .. tostring(result.gained))
+			if state.Pending == pending then state.Pending = nil end
+			show(result.hit and "Hit confirmed." or "Miss confirmed."); save()
+		end
+	end
+end
+
+local card = ui.Card(ui.Pages.Auto, "AUTO MEDITATION // v1", "Uses your Meditation Mat and times Circles prompts. Keep circles clear of the hub or hide it with Right Alt.", 218)
+card.LayoutOrder = 20
+status = ui.Create("TextLabel", {
+	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Off. Have your Meditation Mat in the hotbar or stand next to your placed mat.",
+	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, card)
+local function enable(value)
+	if state.Closed then return end
+	if not value then stop(); return end
+	if state.Enabled then return end
+	if controller.SetBeyondNenAutoFishing then controller.SetBeyondNenAutoFishing(false) end
+	state.Enabled, state.Started, state.Phase = true, true, "Idle"
+	state.Hits, state.Misses, state.Lines, state.Prompts, state.ResultRequests = 0, 0, {}, {}, {}
+	state.Pending, state.Character, state.GroundPoint = nil, player.Character, nil
+	state.EnabledAt, state.NextAction, state.Attempts, state.EnterAttempts = os.clock(), os.clock() + 0.8, 0, 0
+	state.Unwatch = controller.WatchBeyondNenMeditation(observe)
+	toggle.Text, toggle.BackgroundColor3 = "Auto Meditation: ON", ui.Colors.AccentSoft
+	show("Preparing your mat. Stay nearby while meditation starts."); note("ENABLED"); save()
+end
+toggle = ui.FitColumn(ui.Button(card, "Auto Meditation: OFF", 0, 0, 180, function() enable(not state.Enabled) end), 0, 72)
+
+local function step()
+	local now = os.clock()
+	if state.Held and (not state.Enabled or state.Closed or now >= state.Held.Until) then
+		if not release() then stop("Unable to release meditation input."); return end
+	end
+	if not state.Enabled or state.Closed then return end
+	if now - (state.LastSaved or 0) > 5 then state.LastSaved = now; save() end
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if character ~= state.Character or not root or not humanoid or humanoid.Health <= 0 then stop("Character changed or unavailable."); return end
+	if GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then release(); show("Close Roblox's chat/menu to continue."); return end
+	local meditation, active, pg = gui()
+	if active then
+		if state.Phase ~= "Training" then state.Phase, state.Attempts = "Training", 0 end
+		local pending = state.Pending
+		if not pending then return end
+		local age = now - pending.Born
+		if age > pending.Window + 1 then state.Pending = nil; note("PROMPT ended without a returned result"); return end
+		if pending.Sent or pending.Responded or state.Held then return end
+		local circle, approach = meditation:FindFirstChild("AuraCircle"), meditation:FindFirstChild("AuraCircleApproach")
+		if not circle or not approach or not circle.Visible or not approach.Visible or circle.AbsoluteSize.X <= 0 then return end
+		if math.abs(circle.Position.X.Scale - pending.X) > 0.01 or math.abs(circle.Position.Y.Scale - pending.Y) > 0.01 then return end
+		local ratio = approach.AbsoluteSize.X / circle.AbsoluteSize.X
+		-- Wait for the live approach ring to meet the target. The recorded
+		-- prompt settles at Window and the successful click returned just after it.
+		if age < pending.Window * 0.8 or ratio > 1.01 or age > pending.Window + 0.12 then return end
+		local inset = meditation.IgnoreGuiInset and Vector2.new(0, 0) or GuiService:GetGuiInset()
+		local x = circle.AbsolutePosition.X + circle.AbsoluteSize.X * 0.5 + inset.X
+		local y = circle.AbsolutePosition.Y + circle.AbsoluteSize.Y * 0.5 + inset.Y
+		if obstructed(pg, x, y, circle) then show("Move or hide the hub so the circle can be clicked."); return end
+		pending.Sent = true
+		note(string.format("CIRCLE CLICK id=%s age=%.3f ratio=%.3f x=%.1f y=%.1f", tostring(pending.Id), age, ratio, x, y))
+		if not pressMouse(x, y, 0.035) then stop("Meditation mouse input unavailable.") end
+		return
+	end
+	if state.Held or now < state.NextAction then return end
+	if state.Phase == "Training" then state.Pending = nil; state.Phase = "Idle" end
+	local parts = Workspace:FindFirstChild("MeditationParts")
+	local mat = parts and parts:FindFirstChild(player.Name)
+	if mat and mat:IsA("BasePart") then
+		local prompt = mat:FindFirstChildWhichIsA("ProximityPrompt", true)
+		local range = prompt and prompt.MaxActivationDistance or 10
+		if (root.Position - mat.Position).Magnitude > range then show("Move within reach of your Meditation Mat."); return end
+		if prompt and not prompt.Enabled then show("Waiting for your mat's interaction to become available."); return end
+		if state.EnterAttempts >= 3 then stop("Meditation did not start. Enter your mat once, then enable Auto Meditation."); return end
+		local key = prompt and prompt.KeyboardKeyCode or Enum.KeyCode.T
+		if key == Enum.KeyCode.Unknown then key = Enum.KeyCode.T end
+		state.EnterAttempts += 1; state.NextAction = now + 4
+		note("ENTER MAT attempt=" .. state.EnterAttempts)
+		if not pressKey(key, math.clamp((prompt and prompt.HoldDuration or 0) + 0.08, 0.08, 3)) then stop("Mat interaction input unavailable.") end
+		return
+	end
+	if not state.Focused then show("Return to Roblox to place your mat first."); return end
+	local tool = character:FindFirstChild("Meditation Mat")
+	if not tool then
+		local backpack = player:FindFirstChildOfClass("Backpack")
+		tool = backpack and backpack:FindFirstChild("Meditation Mat")
+		if tool and tool:IsA("Tool") then humanoid:EquipTool(tool); state.NextAction = now + 0.4
+		else show("Put your Meditation Mat in the hotbar to place it."); state.NextAction = now + 1 end
+		return
+	end
+	if not tool:IsA("Tool") or not tool.Enabled then state.NextAction = now + 0.5; return end
+	if state.Attempts >= 3 then stop("Mat placement was not confirmed. Place it nearby and enable again."); return end
+	local camera = Workspace.CurrentCamera
+	if not camera then return end
+	local params = RaycastParams.new()
+	params.FilterType, params.FilterDescendantsInstances, params.IgnoreWater = Enum.RaycastFilterType.Exclude, {character}, false
+	local hit = Workspace:Raycast(root.Position + Vector3.new(0, 2, 0), Vector3.new(0, -18, 0), params)
+	if not hit or hit.Material == Enum.Material.Water then show("Stand on solid ground to place the mat."); state.NextAction = now + 1; return end
+	local point, visible = camera:WorldToViewportPoint(hit.Position)
+	if not visible or point.Z <= 0 then show("Look toward the ground beside you to place the mat."); return end
+	if obstructed(pg, point.X, point.Y) then show("Move or hide the hub so the mat can be placed."); return end
+	if state.Phase ~= "AimMat" then
+		local ok = pcall(function() inputManager:SendMouseMoveEvent(point.X, point.Y, game) end)
+		if not ok then stop("Mat placement input unavailable."); return end
+		state.Phase, state.NextAction = "AimMat", now + 0.12; return
+	end
+	state.Phase, state.NextAction, state.Attempts = "Idle", now + 3, state.Attempts + 1
+	note("PLACE MAT attempt=" .. state.Attempts)
+	if not pressMouse(point.X, point.Y, 0.06) then stop("Mat placement input unavailable.") end
+end
+local function update()
+	local ok, err = pcall(step)
+	if not ok and state.Enabled then note("ERROR " .. tostring(err)); stop("Auto Meditation stopped after an error.") end
+end
+controller.Connect(RunService.RenderStepped, function() if state.Focused then update() end end)
+controller.Connect(RunService.Heartbeat, function() if not state.Focused then update() end end)
+controller.Connect(UserInputService.WindowFocusReleased, function() release(); state.Focused = false; if state.Enabled then note("FOCUS LOST"); save() end end)
+controller.Connect(UserInputService.WindowFocused, function() state.Focused = true; release(); if state.Enabled then note("FOCUS RETURNED"); save() end end)
+controller.Connect(player.OnTeleport, function() if state.Enabled then stop("Stopped for travel.") end end)
+controller.RegisterCleanup(function() stop("Unloaded."); state.Closed = true end)
+controller.SetBeyondNenAutoMeditation = enable
 
 end)()
 end

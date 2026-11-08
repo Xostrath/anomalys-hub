@@ -3115,7 +3115,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v23. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v24. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3271,6 +3271,22 @@ local weaponProfiles = {
 		-- through this burst, with a hard time cap and normal lifecycle release.
 		["86446252027083"] = {Phases = {.42, .52, .62, .72, .82, .92, 1.02, 1.12, 1.22, 1.32, 1.42}, MinFollowupLead = .08, GuardThroughPhase = 1.65, Reach = 35, MaxDistance = 38, Name = "rifle burst (test)"},
 	}},
+	shockworkpistols = {Label = "Shockwork Pistols (test)", Animations = {
+		-- Explicit Character.Weapon in two v21 runs. Separate from Rifle and
+		-- generic Fists; carried tools and actor names do not select this profile.
+		-- Two episodes: 18 equal-damage samples cover these 13 phase windows,
+		-- speed1, range7.65-20.79. Missing pulses are not invented between them.
+		["73241145651241"] = {Phases = {.40, .50, .63, .75, 1.10, 1.22, 1.35, 1.82, 1.92, 2.06, 2.18, 2.32, 2.40}, MinFollowupLead = .08, Reach = 23, MaxDistance = 26, Name = "pistols burst A (test)"},
+		-- Two runs: pulses at .800/.825 through1.833/1.883, speed1, range
+		-- 25.05-26.46, facing-.060 to-.337. Final receipt has larger damage;
+		-- these are observed contact windows, not an established shot count.
+		["73875507755468"] = {Phases = {.78, .89, 1.00, 1.11, 1.23, 1.34, 1.46, 1.57, 1.69, 1.81}, MinFollowupLead = .08, Reach = 28, MaxDistance = 31, MinFacing = -.4, Name = "pistols burst B (test)"},
+		-- Two first-contact samples .508/.513, plus follow-up1.004; speed1.
+		["76637609852449"] = {Phases = {.48, .98}, MinFollowupLead = .08, Reach = 15, MaxDistance = 18, MinFacing = -.5, Name = "pistols two-contact strike (test)"},
+		-- Two samples .452/.465 at speed1.064, distances8.62/5.28; one rear
+		-- angle-.923. Geometry and timing seeds still require an automatic test.
+		["83129479286148"] = {Phase = .43, Reach = 10, MaxDistance = 13, MinFacing = -.95, Name = "pistols close strike (test)"},
+	}},
 	sword = {Label = "Sword (recorded)", Reach = 12, MaxDistance = 15, Animations = {
 		-- User identified "achive sword"; later equipment data says Archive Sword.
 		-- Player.CombatStyle remained Fists. These distinct animation IDs and
@@ -3290,7 +3306,9 @@ local weaponProfiles = {
 	dagger = {Label = "Dagger", Animations = {
 		-- Character.Weapon and equipped Tool both identify Phantom Goons Dagger.
 		-- ComboIndex confirms 1-5; seeds combine hit and manual-parry receipts.
-		["119352136287386"] = {Phase = .50, Name = "dagger M1-1"},
+		-- v23: facing-.790 skipped at4.27 studs, then damage at6.67/-.794.
+		-- Another -.114 skip delayed F until13ms before contact (FreshHitStun).
+		["119352136287386"] = {Phase = .50, MinFacing = -.85, Name = "dagger M1-1"},
 		["99627503377437"] = {Phase = .31, Name = "dagger M1-2"},
 		["95750611460664"] = {Phase = .27, Name = "dagger M1-3"},
 		["101558279775309"] = {Phase = .33, Name = "dagger M1-4"},
@@ -3309,7 +3327,9 @@ local weaponProfiles = {
 		-- phases 1.798/1.817 after the seventh, including after an earlier parry.
 		-- A health drop at distance 16.50 after a skip at projected 16.31 shows
 		-- the default melee range is insufficient. Broader bounds apply only here.
-		["81971337593137"] = {Phases = {.52, .70, .88, 1.06, 1.24, 1.42, 1.60, 1.78}, Reach = 18, MaxDistance = 22, Name = "dagger repeated strike"},
+		-- v23 contact7 hit after facing-.350 was skipped; first-contact
+		-- facing stays directional. Five other contacts confirmed parries.
+		["81971337593137"] = {Phases = {.52, .70, .88, 1.06, 1.24, 1.42, 1.60, 1.78}, Reach = 18, MaxDistance = 22, FollowupMinFacing = -.4, Name = "dagger repeated strike"},
 		-- Three damage samples at phases 1.354/1.367/1.421, speed 1.0, up to
 		-- 11.96 studs. Timing seed only: exact name and parryability unverified.
 		["17087924823"] = {Phase = 1.32, Reach = 13, MaxDistance = 16, Name = "dagger long-windup strike (test)"},
@@ -3328,7 +3348,7 @@ local targetModes = {"NPCs", "Players", "Both"}
 local savedTargets = controller.State and controller.State.BeyondNenParryTargets
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {},
 	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "NPCs"}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v23", "Choose NPCs, Players, or Both. NPCs ignores player swings; click Targets to change. Changing targets stops the current test.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v24", "Dagger angle fixes and initial Shockwork Pistols support. Choose NPCs, Players, or Both below; changing targets stops the test.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3341,11 +3361,12 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v23 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v24 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
 		.. "\nFists: 13 animations. Pitchfork: 6. BigPitchfork: 8. Rifle: 6 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
+		.. "\nShockwork Pistols v24: four exact animations from explicit weapon metadata, with 13/10/2/1 candidate contact windows. BurstA reach23/max26/facing.15; burstB reach28/max31/facing-.4; two-contact15/max18/facing-.5; close10/max13/facing-.95. Repeated contacts require .08s lead and normal cooldowns; no Rifle sustained-guard rule is inherited. Damage samples do not prove parryability or complete attack coverage. Other pistol animations stay unmapped."
 		.. "\nFists v20: alternate first strike reach12/max15, close radius10; second reach11/max14, close radius2; third reach11/max14. Close radius uses current distance without facing/velocity prediction, while retaining exact animation timing and elevation8. Trial bounds from observed damage, not measured hitboxes. Phase seeds and other Fists variants unchanged."
 		.. "\nRifle v16 had zero automatic inputs because it was unmapped. v18 added trial strike timings and eleven burst contact windows, not an established shot count. Burst reach35/max38 and strike A reach14/max17 are separate from default melee bounds. Burst follow-ups need .08s lead and respect game cooldown. Projectile speed/distance delay and full attack coverage remain unverified."
 		.. "\nRifle v18 confirmed6 close-attack and3 burst parries. v19 burst-only guard trial: initial F hold up to.30s; a matched ParryResult extends it through phase1.65, capped at2s total. Accepted alone never extends guard. Rejection, stopped/reused/paused track, target loss, focus/menu/chat/death/travel/unload release normally. Sustained block is not counted as another parry; whether it protects later bullets needs in-game testing."
@@ -3358,6 +3379,7 @@ local function save(reason)
 		.. "\nBat timings are initial seeds from v12 health-drop samples. Its multi-hit skill may contain additional contacts; no complete-move coverage or automatic success is assumed."
 		.. "\nFox Bear skill contacts retain normal input backoff, game cooldowns, facing and elevation checks. Known animation phases do not establish whether every skill contact is parryable."
 		.. "\nDagger 78084477149043 follow-ups use current distance within 9 studs regardless of facing/projection; its first contact retains directional checks. This test rule is not a measured hitbox."
+		.. "\nDagger v24: first combo strike119352136287386 allows facing>=-.85 after two angle-related misses; repeated-strike81971337593137 follow-ups allow>=-.4 after a skipped seventh contact hit. Its first contact still requires>=.15. Existing range, phase/speed timing and cooldown rules are unchanged."
 		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
 		.. "\nCOMBAT_STATE records raw local attributes at inputs, damage and rejections; their clock bases may differ. NO_OBSERVED_REQUEST means no hook observation before the deadline/stop, not proof that nothing reached the server."
 		.. "\nDECISION requestDelay is local elapsed time from outgoing observation to response, not isolated network latency. Rejected requests are not replayed or retimestamped."
@@ -3839,7 +3861,8 @@ local function step()
 			local radialFollowup = contact > 1 and profile.FollowupRadius
 			local closeThreat = profile.CloseRangeRadius and distance <= profile.CloseRangeRadius
 			local geometryMode = radialFollowup and "nearby-followup" or (closeThreat and "nearby-strike" or "directional")
-			local geometryOk = distance <= (profile.MaxDistance or weapon.MaxDistance or 12) and projected.Magnitude <= (profile.Reach or weapon.Reach or 9) and facingDot >= (profile.MinFacing or .15)
+			local minimumFacing = (contact > 1 and profile.FollowupMinFacing) or profile.MinFacing or .15
+			local geometryOk = distance <= (profile.MaxDistance or weapon.MaxDistance or 12) and projected.Magnitude <= (profile.Reach or weapon.Reach or 9) and facingDot >= minimumFacing
 			if radialFollowup then geometryOk = distance <= radialFollowup elseif closeThreat then geometryOk = true end
 			if geometryOk and math.abs(delta.Y) <= 8 then
 				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1, GuardThroughPhase = profile.GuardThroughPhase, GeometryMode = geometryMode} end
@@ -3849,7 +3872,7 @@ local function step()
 			end
 		end
 	end
-	if not best then gate("ready"); show("Watching mapped Fists / Pitchfork / BigPitchfork / Rifle / Sword / Dagger / Bat / Fox Bear attacks"); return end
+	if not best then gate("ready"); show("Watching mapped weapon attacks | Targets: " .. state.TargetMode); return end
 	local recovery = punchRecovery(model)
 	if recovery then
 		if state.Gate ~= "local-punch-recovery" or state.RecoveryAsset ~= recovery.Asset then
@@ -3893,7 +3916,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,Sword,Dagger,Bat,FoxBear mappedWeaponAnimations=68 duration=90")
+	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear mappedWeaponAnimations=72 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

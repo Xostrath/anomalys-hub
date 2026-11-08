@@ -626,7 +626,7 @@ local function captureRemoteFingerprint()
 end
 button(fingerprintCard, "Capture Fingerprint", 14, 76, 180, function() captureRemoteFingerprint() end, colors.AccentSoft)
 
-local behaviorCard = card(pages.Settings, "SESSION CONTROLS", "RightShift shows or hides the window. Reload fetches the current public build.", 172)
+local behaviorCard = card(pages.Settings, "SESSION CONTROLS", "Right Alt shows or hides the window. Reload fetches the current public build.", 172)
 local antiAfkToggle = button(behaviorCard, state.AntiAfk and "Anti-AFK: ON" or "Anti-AFK: OFF", 14, 72, 180, function(object)
 	state.AntiAfk = not state.AntiAfk
 	object.Text = state.AntiAfk and "Anti-AFK: ON" or "Anti-AFK: OFF"
@@ -734,7 +734,7 @@ end, Color3.fromRGB(55, 145, 91))
 button(behaviorCard, "Unload", 14, 116, 180, function() unload() end, colors.Danger)
 create("TextLabel", {
 	Position = UDim2.fromOffset(204, 120), Size = UDim2.new(1, -218, 0, 26), BackgroundTransparency = 1,
-	Font = Enum.Font.Code, Text = "Visibility key: RightShift", TextColor3 = colors.Muted, TextSize = 9,
+	Font = Enum.Font.Code, Text = "Visibility key: Right Alt", TextColor3 = colors.Muted, TextSize = 9,
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, behaviorCard)
 
@@ -977,7 +977,7 @@ end)
 
 connect(UserInputService.InputBegan, function(input, processed)
 	if processed or UserInputService:GetFocusedTextBox() then return end
-	if input.KeyCode == Enum.KeyCode.RightShift then controller.ToggleVisible() end
+	if input.KeyCode == Enum.KeyCode.RightAlt then controller.ToggleVisible() end
 end)
 
 connect(player.Idled, function()
@@ -2349,7 +2349,7 @@ local card = ui.Card(ui.Pages.Auto, "AUTO FISHING // v1", "Equip Fishing and cas
 card.LayoutOrder = 10
 status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Off. The hub must be hidden while fishing (Right Shift).",
+	Font = Enum.Font.Gotham, Text = "Off. The hub must be hidden while fishing (Right Alt).",
 	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
 }, card)
 local function enable(value)
@@ -2359,7 +2359,7 @@ local function enable(value)
 	auto.Enabled, auto.Phase, auto.Catches, auto.Lines, auto.Started = true, "Armed", 0, {}, true
 	auto.Unwatch = controller.WatchBeyondNenFishing(observe)
 	toggle.Text, toggle.BackgroundColor3 = "Auto Fishing: ON", ui.Colors.AccentSoft
-	show("Hide the hub with Right Shift, then cast once manually at your fishing spot.")
+	show("Hide the hub with Right Alt, then cast once manually at your fishing spot.")
 	note("ENABLED; awaiting manual cast"); save()
 end
 toggle = ui.FitColumn(ui.Button(card, "Auto Fishing: OFF", 0, 0, 180, function() enable(not auto.Enabled) end), 0, 72)

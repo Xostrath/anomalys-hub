@@ -396,7 +396,7 @@ task.spawn(function()
 	if not unloaded and ok and type(info) == "table" and type(info.Name) == "string" then gameNameLabel.Text = info.Name end
 end)
 
-local playerCard = card(pages.Players, "SPECTATE v4", "Choose a player with the arrows or open the list. Right-drag to orbit; scroll to zoom.", 202)
+local playerCard = card(pages.Players, "SPECTATE v5", "Choose a player with the arrows or open the list. Right-drag to orbit; scroll to zoom.", 202)
 local spectateBar = create("Frame", {
 	Name = "SpectateControls", Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 36),
 	BackgroundColor3 = colors.Surface, BorderSizePixel = 0,
@@ -463,7 +463,7 @@ local function refreshSpectateStatus()
 	spectateToggle.Text = viewing and "STOP SPECTATING" or "SPECTATE"
 	spectateToggle.BackgroundColor3 = viewing and colors.Danger or colors.AccentSoft
 	selectedLabel.Text = (selected and ("@" .. selected.Name .. "  |  ") or "")
-		.. (state.SpectateError or (viewing and ((state.SpectateWaiting and "Waiting for character: " or "Viewing: ") .. viewing.DisplayName)
+		.. (state.SpectateError or (viewing and (state.SpectateWaiting and (state.SpectateWaitReason or "Waiting for character") or ("Viewing: " .. viewing.DisplayName))
 			or (state.SpectateReturning and "Waiting for your character" or "Viewing your character"))
 		)
 end
@@ -1077,7 +1077,7 @@ print("[Anomaly] Universal profile loaded", game.GameId, game.PlaceId)
 
 end)()
 ;(function()
--- Spectate v3: own the rendered view instead of relying on a game's camera scripts.
+-- Spectate v5: dedicated camera plus bounded recovery of streamed-out characters.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" then return end
@@ -1091,6 +1091,7 @@ local closed, bound, dragging = false, false, false
 local saved, savedMouse, lastCamera, lastFrame, lastCharacter
 local yaw, pitch, distance = 0, math.rad(18), 14
 local lines, dirty, sampleAt, saveAt = {}, false, 0, 0
+local seen, nextRoster, requestBusy, nextRequest, selection = {}, 0, false, 0, 0
 local function note(text)
 	if controller.RecordSpectateEvent then controller.RecordSpectateEvent(text) end
 	if #lines >= 120 then table.remove(lines, 1) end
@@ -1101,7 +1102,7 @@ local function save()
 	if not dirty or type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
 	local ok = pcall(writefile, "AnomalyHub/universal/spectate_test.txt",
-		"ANOMALY SPECTATE v3 // LOCAL CAMERA AND CLICK DIAGNOSTICS\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(lines, "\n"))
+		"ANOMALY SPECTATE v5 // LOCAL CAMERA, CLICK AND STREAMING DIAGNOSTICS\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(lines, "\n"))
 	if ok then dirty = false end
 end
 local function refresh() controller.RefreshSpectateStatus() end
@@ -1112,6 +1113,78 @@ local function body(target)
 	if not character or not character:IsDescendantOf(workspace) or not humanoid or humanoid.Health <= 0
 		or not root or not root:IsA("BasePart") then return end
 	return character, humanoid, root
+end
+local function finitePosition(position)
+	return typeof(position) == "Vector3" and position.X == position.X and position.Y == position.Y and position.Z == position.Z
+		and math.abs(position.X) < math.huge and math.abs(position.Y) < math.huge and math.abs(position.Z) < math.huge
+end
+local function observe(target, now)
+	local character = target.Character
+	local entry = seen[target]
+	-- A respawn cannot reuse the previous body's position. Streamed-out models
+	-- can still be Player.Character, but must never be followed as live bodies.
+	if not entry or entry.Character ~= character then
+		entry = {Character = character, Attempts = 0, RetryAt = 0}; seen[target] = entry
+	end
+	local _, _, liveRoot = body(target)
+	if liveRoot and finitePosition(liveRoot.Position) then
+		entry.Position, entry.At, entry.Source = liveRoot.Position, now, "last seen live"
+		entry.Attempts, entry.RetryAt = 0, 0
+		entry.Failed = nil
+	elseif not entry.Position and character then
+		local retained = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head")
+		if retained and retained:IsA("BasePart") and finitePosition(retained.Position) then
+			entry.Position, entry.At, entry.Source = retained.Position, now, "retained root; age unknown"
+		end
+	end
+	return entry
+end
+local function waitReason(target)
+	if not workspace.CurrentCamera then return "Waiting for camera" end
+	local character = target.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.Health <= 0 then return "Waiting for respawn" end
+	if not workspace.StreamingEnabled then return "Waiting for character" end
+	local entry = observe(target, os.clock())
+	if not entry.Position or os.clock() - entry.At > 120 then return "Location unavailable - move closer" end
+	if entry.Pending then return "Loading last known area..." end
+	if entry.Failed then return "Area loading unavailable - move closer" end
+	if entry.Attempts >= 2 then return "Character unavailable - move closer" end
+	return entry.Attempts > 0 and "Waiting for character; retrying shortly" or "Waiting to load last known area"
+end
+local function refreshWait(target)
+	local reason = waitReason(target)
+	if state.SpectateWaitReason ~= reason then state.SpectateWaitReason = reason; refresh() end
+end
+local function recover(target, now)
+	if not workspace.StreamingEnabled or requestBusy or now < nextRequest or not state.SpectateWaiting then return end
+	local entry = observe(target, now)
+	local humanoid = entry.Character and entry.Character:FindFirstChildOfClass("Humanoid")
+	if not workspace.CurrentCamera or (humanoid and humanoid.Health <= 0) or not entry.Position or now - entry.At > 120
+		or entry.Attempts >= 2 or entry.Failed or now < entry.RetryAt then return end
+	local generation, position = selection, entry.Position
+	entry.Attempts += 1; entry.Pending = true; entry.RetryAt = now + 6
+	requestBusy, nextRequest = true, now + 3
+	note("STREAM REQUEST " .. target.Name .. " attempt=" .. entry.Attempts .. " source=" .. entry.Source
+		.. " observedAge=" .. string.format("%.1f", now - entry.At) .. " position=" .. tostring(position))
+	refreshWait(target)
+	task.spawn(function()
+		-- This only requests an area. Success is not proof the target exists there.
+		-- A finite timeout and single in-flight request keep clicks nonblocking.
+		if closed or controller.IsUnloaded() or generation ~= selection then
+			requestBusy, entry.Pending = false, false; return
+		end
+		local ok, err = pcall(function() player:RequestStreamAroundAsync(position, 3) end)
+		requestBusy, entry.Pending = false, false
+		if closed or controller.IsUnloaded() or generation ~= selection or state.SpectateTarget ~= target
+			or seen[target] ~= entry or target.Character ~= entry.Character then return end
+		entry.Failed = not ok
+		local _, _, root = body(target)
+		note("STREAM RETURN " .. target.Name .. " ok=" .. tostring(ok) .. " body=" .. tostring(root ~= nil)
+			.. (ok and "" or " error=" .. tostring(err)))
+		if state.SpectateWaiting then refreshWait(target) end
+		save()
+	end)
 end
 local function releaseMouse()
 	dragging = false
@@ -1139,7 +1212,9 @@ local function unbind()
 end
 local spectator = {}
 function spectator.Stop(reason)
+	selection += 1
 	state.SpectateTarget, state.SpectateWaiting, state.SpectateError = nil, false, nil
+	state.SpectateWaitReason = nil
 	releaseMouse()
 	state.SpectateReturning = saved ~= nil and not restore()
 	if not state.SpectateReturning or closed or controller.IsUnloaded() then
@@ -1168,14 +1243,16 @@ local function update()
 			state.SpectateWaiting = true; releaseMouse(); restore()
 			note("WAIT " .. target.Name .. " camera=" .. tostring(camera ~= nil) .. " body=" .. tostring(root ~= nil)); refresh()
 		end
+		refreshWait(target)
 		lastCamera, lastFrame, lastCharacter = nil, nil, nil
 		return
 	end
 	if not saved then
 		saved = {Type = camera.CameraType, Subject = camera.CameraSubject, Frame = camera.CFrame, Focus = camera.Focus}
 	end
-	if state.SpectateWaiting then state.SpectateWaiting = false; refresh() end
+	if state.SpectateWaiting then state.SpectateWaiting, state.SpectateWaitReason = false, nil; refresh() end
 	local now = os.clock()
+	if workspace.StreamingEnabled then observe(target, now) end
 	if now >= sampleAt then
 		sampleAt = now + 2
 		local overwritten = lastCamera == camera and lastFrame and (camera.CFrame.Position - lastFrame.Position).Magnitude > .1
@@ -1206,8 +1283,9 @@ function spectator.Start(target, source)
 	if closed or controller.IsUnloaded() then return false end
 	if not target or target == player then spectator.Stop(); return false end
 	if target.Parent ~= Players then note("REJECT departed player"); return false end
+	selection += 1
 	state.SelectedPlayer, state.SpectateTarget = target, target
-	state.SpectateReturning, state.SpectateError = false, nil
+	state.SpectateReturning, state.SpectateError, state.SpectateWaitReason = false, nil, nil
 	note("START " .. target.Name .. " source=" .. tostring(source or "hub")); sampleAt = 0
 	if not bound then
 		RunService:BindToRenderStep(stepName, Enum.RenderPriority.Last.Value + 1, safeUpdate)
@@ -1260,13 +1338,23 @@ controller.Connect(Input.InputEnded, function(input)
 end)
 controller.Connect(Input.WindowFocusReleased, releaseMouse)
 controller.Connect(RunService.Heartbeat, function()
+	if closed or controller.IsUnloaded() then return end
+	local now = os.clock()
+	if workspace.StreamingEnabled and now >= nextRoster then
+		nextRoster = now + 1
+		for _, target in ipairs(Players:GetPlayers()) do if target ~= player then observe(target, now) end end
+	end
+	local target = state.SpectateTarget
+	if target and target.Parent == Players then recover(target, now) end
 	if dirty and os.clock() >= saveAt then saveAt = os.clock() + 2; save() end
 end)
+controller.Connect(Players.PlayerRemoving, function(target) seen[target] = nil end)
 controller.RegisterCleanup(function()
 	closed = true; spectator.Stop("unload"); unbind()
+	table.clear(seen)
 	if state.Spectator == spectator then state.Spectator = nil end
 end)
-note("READY v3"); save()
+note("READY v5"); save()
 
 end)()
 ;(function()
@@ -1305,11 +1393,12 @@ local function log(message)
 	table.insert(capture.Lines, line); capture.Bytes += #line + 1
 end
 local function save(reason)
-	capture.Report = "ANOMALY SPECTATE CAPTURE v1 // PASSIVE\nplace=" .. tostring(game.PlaceId)
+	capture.Report = "ANOMALY SPECTATE CAPTURE v2 // PASSIVE\nplace=" .. tostring(game.PlaceId)
 		.. "\nCaptures local character availability, current camera, scoped leaderboard UI, and mouse clicks."
-		.. "\nNo inputs, teleports, streaming requests, remote calls, decompilation, or chat/typed text capture."
+		.. "\nThe recorder sends no inputs, teleports, streaming requests or remote calls; no decompilation or chat/typed text capture."
+		.. "\nSpectate itself may request a last-known area; STREAM events record attempts, not guaranteed character loading."
 		.. "\nUnknown positions stay unknown; LAST_SEEN positions are historical and do not establish a current location."
-		.. "\nLimits: 180 seconds, 3000 lines, 750KB; leaderboard 200 objects; click hit lists 8 objects."
+		.. "\nLimits: 180 seconds, 3000 lines, 750KB; leaderboard 200 objects; click hits first 8 plus up to 8 deeper leaderboard hits."
 		.. "\n" .. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason
 		.. (capture.Limited and "\nCAPTURE LIMIT REACHED" or "")
 	if type(writefile) ~= "function" then return false end
@@ -1402,7 +1491,7 @@ local function sample()
 	local camera = workspace.CurrentCamera
 	local selected, target = state.SelectedPlayer, state.SpectateTarget
 	log("STATE selected=" .. (selected and selected.Name or "nil") .. " viewing=" .. (target and target.Name or "nil")
-		.. " waiting=" .. tostring(state.SpectateWaiting) .. " cameraType=" .. tostring(read(camera, "CameraType"))
+		.. " waiting=" .. tostring(state.SpectateWaiting) .. " reason=" .. tostring(state.SpectateWaitReason) .. " cameraType=" .. tostring(read(camera, "CameraType"))
 		.. " subject=" .. describe(read(camera, "CameraSubject")) .. " frame=" .. tostring(read(camera, "CFrame")))
 	targetSnapshot(target or selected, true)
 	if os.clock() >= (capture.NextRoster or 0) then
@@ -1446,6 +1535,7 @@ controller.CaptureSpectateClick = function(phase, input, processed, target, row)
 	log("MOUSE " .. phase .. " button=" .. tostring(input.UserInputType) .. " screen=" .. tostring(input.Position)
 		.. " inset=" .. tostring(inset) .. " processed=" .. tostring(processed) .. " resolved=" .. (target and target.Name or "nil") .. " row=" .. describe(row))
 	if not pg then return end
+	local board = pg:FindFirstChild("Leaderboard")
 	for _, query in ipairs({{Name = "GUI", X = input.Position.X - inset.X, Y = input.Position.Y - inset.Y},
 		{Name = "RAW_DIAGNOSTIC", X = input.Position.X, Y = input.Position.Y}}) do
 		local hits = pg:GetGuiObjectsAtPosition(query.X, query.Y)
@@ -1455,6 +1545,19 @@ controller.CaptureSpectateClick = function(phase, input, processed, target, row)
 			-- Paths/geometry only: never copy arbitrary text from chat or input boxes.
 			log("HIT " .. query.Name .. " " .. i .. " " .. describe(object) .. " pos=" .. tostring(object.AbsolutePosition)
 				.. " size=" .. tostring(object.AbsoluteSize) .. " active=" .. tostring(object.Active) .. " visible=" .. tostring(object.Visible))
+		end
+		-- Transparent full-screen HUD frames can occupy all of the first 8 hits.
+		-- Keep native row geometry too, preserving its original hit-stack index.
+		local count = 0
+		if board then
+			for i = 9, #hits do
+				local object = hits[i]
+				if object == board or object:IsDescendantOf(board) then
+					log("HIT_LEADERBOARD " .. query.Name .. " " .. i .. " " .. describe(object) .. " pos=" .. tostring(object.AbsolutePosition)
+						.. " size=" .. tostring(object.AbsoluteSize) .. " active=" .. tostring(object.Active) .. " visible=" .. tostring(object.Visible))
+					count += 1; if count >= 8 then break end
+				end
+			end
 		end
 	end
 end
@@ -2682,7 +2785,7 @@ local player, ui = Players.LocalPlayer, controller.UI
 local path = "AnomalyHub/universal/beyond_nen_parry_capture.txt"
 local capture = {Active = false, Closed = false, Epoch = 0, Lines = {}, Bytes = 0, Rigs = {}, Connections = {}}
 local recordButton
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY RECORDER v1", "Record manual blocks and parries against one nearby opponent. Captures timing for the future auto-parry feature.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY RECORDER v2", "Record manual blocks and parries against one nearby opponent. Captures timing for the future auto-parry feature.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Record ordinary hits, held blocks, timed parries, and dash attacks. Use your normal block key.",
@@ -2719,9 +2822,10 @@ local function sample(value, depth, seen, budget)
 	return "{" .. table.concat(parts, ",") .. "}"
 end
 local function save(reason)
-	capture.Report = "BEYOND NEN PARRY CAPTURE v1 // PASSIVE\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
+	capture.Report = "BEYOND NEN PARRY CAPTURE v2 // PASSIVE\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
 		.. "\nNo block/attack inputs, remote requests/replays, script decompilation, or chat/typed-text recording."
 		.. "\nLocal character and up to 8 nearest loaded humanoids within 120 studs. Motion/track phase sampled at up to 20Hz; animation/input/attribute events have receipt timestamps."
+		.. "\nActor sources: player characters, direct Workspace models and Workspace.Humanoids (500 direct children per container)."
 		.. "\nATTR and remote outcomes are raw observations, not a verdict that a parry succeeded. ANIM_EXISTING was already playing when first seen."
 		.. "\nRemote calls are forwarded first; requestStart preserves the observed call time. Direct and namecall hooks may duplicate an event."
 		.. "\nClock fields preserve raw server/game values; they may use different time bases."
@@ -2802,6 +2906,10 @@ local function bindRig(model, owner)
 	end
 	return entry
 end
+local function recordingStatus()
+	status.Text = capture.NearbyText == "" and "Recording: no nearby opponent tracked. Move close enough to load their character, then check this message."
+		or ("Tracking nearby: " .. capture.NearbyText .. ". Take hits, hold F, then try timed F taps. Stop + Save when finished (2-minute limit).")
+end
 local function syncRigs()
 	local localModel = player.Character
 	local localRoot = rootOf(localModel)
@@ -2821,16 +2929,28 @@ local function syncRigs()
 		if distance <= 120 then table.insert(pool, {Model = model, Distance = distance}) end
 	end
 	for model in pairs(owners) do candidate(model) end
-	local folder = workspace:FindFirstChild("Humanoids")
-	if folder then
-		for index, model in ipairs(folder:GetChildren()) do
-			if index > 500 then if not capture.PoolLimit then log("ACTOR SCAN LIMIT 500"); capture.PoolLimit = true end; break end
+	-- The captured Chief Farmer is Workspace["Chief Farmer"], not inside Humanoids.
+	-- Scan these two shallow containers only; do not recursively walk the map.
+	local containers = {workspace}
+	local folder = workspace:FindFirstChild("Humanoids"); if folder then table.insert(containers, folder) end
+	for _, container in ipairs(containers) do
+		for index, model in ipairs(container:GetChildren()) do
+			if index > 500 then if not capture.PoolLimit then log("ACTOR SCAN LIMIT 500 per container"); capture.PoolLimit = true end; break end
 			candidate(model)
 		end
 	end
 	table.sort(pool, function(a, b) return a.Distance < b.Distance end)
+	local names = {}
 	for index = 1, math.min(#pool, 8) do
 		local model = pool[index].Model; wanted[model] = true; bindRig(model, owners[model])
+		if index <= 3 then table.insert(names, model.Name:sub(1, 48)) end
+	end
+	if #pool > 3 then table.insert(names, "+" .. (math.min(#pool, 8) - 3) .. " more") end
+	local nearby = table.concat(names, ", ")
+	if capture.NearbyText ~= nearby then
+		capture.NearbyText = nearby
+		log("NEARBY count=" .. math.min(#pool, 8) .. " names=" .. nearby)
+		recordingStatus()
 	end
 	for model, entry in pairs(capture.Rigs) do
 		if not wanted[model] then log("ACTOR_LEAVE id=" .. entry.Id .. " reason=out-of-scope-or-unloaded"); releaseRig(entry); capture.Rigs[model] = nil end
@@ -2896,6 +3016,7 @@ local function start()
 	capture.Active, capture.Started, capture.NextSync, capture.NextMotion, capture.NextClock, capture.NextSave = true, os.clock(), 0, 0, 0, 0
 	capture.Lines, capture.Bytes, capture.RigId, capture.TrackId, capture.Limited, capture.PoolLimit = {}, 0, 0, 0, false, false
 	capture.PlayerModels = {}
+	capture.NearbyText = nil
 	local epoch = capture.Epoch
 	capture.InputMap = inputMap()
 	local function input(direction, value, processed)
@@ -2924,7 +3045,7 @@ local function start()
 	if not ok then log("ERROR " .. tostring(err)); stop("START_ERROR"); return end
 	if not save("RECORDING") then stop("SAVE_FAILED"); return end
 	recordButton.Text, recordButton.BackgroundColor3 = "Stop + Save", ui.Colors.Danger
-	status.Text = "Recording up to 2 minutes. Take a few hits, hold block, try timed parries, and include dash attacks. Then Stop + Save."
+	recordingStatus()
 end
 recordButton = ui.FitColumn(ui.Button(card, "Record Parry", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
 ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()

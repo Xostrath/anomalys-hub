@@ -4595,6 +4595,22 @@ function progress.Menu(pg, player)
 	return {Root = menu, Done = done, Stop = stop, Rows = rows}
 end
 
+-- The Keys game uses this scoped prompt, not the circle or a hotbar label.
+-- Its children can stay Visible while the prompt itself is hidden.
+function progress.KeyPrompt(meditation)
+	local training = meditation and meditation:FindFirstChild("NenTraining")
+	local prompt = training and training:FindFirstChild("Prompt")
+	local label = prompt and prompt:FindFirstChild("Key")
+	local caption = prompt and prompt:FindFirstChild("Caption")
+	if not prompt or not prompt:IsA("GuiObject") or not progress.Visible(prompt)
+		or not label or not label:IsA("TextLabel") or not progress.Visible(label)
+		or not caption or textOf(caption) ~= "PRESS" or not progress.Visible(caption)
+		or prompt.AbsoluteSize.X <= 0 or prompt.AbsoluteSize.Y <= 0 then return nil end
+	local letter = textOf(label):upper()
+	if not letter:match("^[A-Z]$") then return nil end
+	return Enum.KeyCode[letter], prompt
+end
+
 -- Reel shares the cursor/target rail pattern observed in the game's fishing UI.
 -- Discover the visible component instead of assuming its ScreenGui's name.
 function progress.ReelRail(pg)
@@ -4655,7 +4671,7 @@ controller.BeyondNenMeditationProgress = progress
 
 end)()
 ;(function()
--- Auto Meditation v3: correct screen/GUI coordinates for training-menu clicks.
+-- Auto Meditation v4: Ken key prompts alongside Circles, Reel and limit rotation.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -4679,7 +4695,7 @@ end
 local function save()
 	if not state.Started or type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	pcall(writefile, path, "BEYOND NEN AUTO MEDITATION v3 // TRAINING ROTATION\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n"))
+	pcall(writefile, path, "BEYOND NEN AUTO MEDITATION v4 // TRAINING ROTATION\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n"))
 end
 local function show(message)
 	local text = message .. "\nConfirmed hits: " .. state.Hits .. " | Misses: " .. state.Misses
@@ -4704,7 +4720,7 @@ local function snapshotUI(section, pg)
 		if count > 300 then break end
 	end
 	state.UIReports[section] = table.concat(lines, "\n")
-	local reports = {"BEYOND NEN AUTO MEDITATION v3 // SCOPED UI"}
+	local reports = {"BEYOND NEN AUTO MEDITATION v4 // SCOPED UI"}
 	for _, text in pairs(state.UIReports) do table.insert(reports, text) end
 	pcall(writefile, "AnomalyHub/universal/beyond_nen_automeditation_ui.txt", table.concat(reports, "\n\n"))
 end
@@ -4861,7 +4877,7 @@ local function confirmed(pending, result)
 	if result.hit then state.Hits += 1 else state.Misses += 1 end
 	note("CONFIRMED id=" .. tostring(pending.Id) .. " mode=" .. tostring(pending.Mode) .. " hit=" .. tostring(result.hit) .. " gained=" .. tostring(result.gained))
 	if state.Pending == pending then
-		if pending.Mode == "Reel" then release() end
+		if pending.Mode == "Reel" or pending.Mode == "Keys" then release() end
 		state.Pending = nil
 	end
 	show(result.hit and "Hit confirmed." or "Miss confirmed."); save()
@@ -4879,7 +4895,7 @@ local function observe(name, direction, args, requestStart)
 	elseif name == "StartMeditation" and direction:sub(1, 6) == "RETURN" then
 		if args[1] == true then
 			if state.Phase ~= "Training" then beginSession() end
-			show("Meditating. Waiting for a circle.")
+			show("Meditating. Waiting for a training prompt.")
 		else state.Phase, state.NextAction = "Idle", os.clock() + 3; note("START rejected") end
 	elseif name == "MeditationStopped" and direction == "IN event" then
 		stop(state.AllCapped and "All available techniques reached their limits. Meditation finished." or "Meditation ended. Enable again when ready.")
@@ -4887,11 +4903,13 @@ local function observe(name, direction, args, requestStart)
 		state.Picking = args[1] == true
 		if state.Picking then release(); state.Pending = nil end
 		note("PICKING " .. tostring(state.Picking))
-	elseif name == "GamePrompt" and direction == "IN event" then
+	elseif (name == "GamePrompt" or name == "KeyPrompt") and direction == "IN event" then
 		local id, mode, data = args[1], args[2], args[3]
+		-- Ken's observed KeyPrompt carries (id, window, 0); the actual letter
+		-- is chosen by the client and must be read from its visible prompt.
+		if name == "KeyPrompt" then mode, data = "Keys", {Window = args[2]} end
 		syncTechnique()
-		if id ~= nil and state.Prompts[id] then return end
-		if mode ~= "Circles" and mode ~= "Reel" then
+		if mode ~= "Circles" and mode ~= "Reel" and not (name == "KeyPrompt" and mode == "Keys") then
 			release()
 			state.Pending = nil; show("Unmapped meditation mode: " .. tostring(mode) .. ". Record this mode before automating it.")
 			note("UNSUPPORTED " .. tostring(mode)); return
@@ -4899,17 +4917,18 @@ local function observe(name, direction, args, requestStart)
 		if (type(id) ~= "number" and type(id) ~= "string") or (type(id) == "number" and id ~= id)
 			or type(data) ~= "table" or type(data.Window) ~= "number" or data.Window ~= data.Window
 			or data.Window < 0.2 or data.Window > 5 then return end
+		if state.Prompts[id] then return end
 		if mode == "Circles" then
 			if type(data.X) ~= "number" or type(data.Y) ~= "number"
 				or not (data.X >= 0 and data.X <= 1 and data.Y >= 0 and data.Y <= 1) then return end
-		elseif type(data.Goals) ~= "table" or #data.Goals == 0 or #data.Goals > 16 then return end
-		if mode == "Reel" then
+		elseif mode == "Reel" then
+			if type(data.Goals) ~= "table" or #data.Goals == 0 or #data.Goals > 16 then return end
 			for _, goal in ipairs(data.Goals) do if type(goal) ~= "number" or not (goal >= 0 and goal <= 1) then return end end
 		end
 		release()
 		state.Phase = "Training"
-		state.Pending = {Id = id, Mode = mode, Born = os.clock(), Window = data.Window, X = data.X, Y = data.Y, Sent = false,
-			Deadline = os.clock() + (mode == "Reel" and 45 or data.Window + 1)}
+		state.Pending = {Id = id, Mode = mode, Born = requestStart, Window = data.Window, X = data.X, Y = data.Y, Sent = false,
+			Deadline = requestStart + (mode == "Reel" and 45 or data.Window + 1)}
 		for oldId, prompt in pairs(state.Prompts) do
 			if os.clock() - prompt.Born > 60 then state.Prompts[oldId] = nil end
 		end
@@ -4941,7 +4960,7 @@ local function observe(name, direction, args, requestStart)
 	end
 end
 
-local card = ui.Card(ui.Pages.Auto, "AUTO MEDITATION // v3", "Checks technique limits every 2 minutes and switches when capped. Keep the game controls clear, or hide the hub with Right Alt.", 218)
+local card = ui.Card(ui.Pages.Auto, "AUTO MEDITATION // v4", "Circles, Reel and Ken key presses. Checks technique limits every 2 minutes and switches when capped. Hide the hub with Right Alt if it covers a click target.", 218)
 card.LayoutOrder = 20
 status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
@@ -4965,6 +4984,28 @@ local function enable(value)
 	show("Preparing your mat. Stay nearby while meditation starts."); note("ENABLED"); save()
 end
 toggle = ui.FitColumn(ui.Button(card, "Auto Meditation: OFF", 0, 0, 180, function() enable(not state.Enabled) end), 0, 72)
+
+local function keyStep(pending, meditation, pg, now)
+	if pending.Sent or pending.Responded or state.Held or now >= pending.Born + pending.Window then return end
+	local key, prompt = progress.KeyPrompt(meditation)
+	if not key then
+		pending.Key, pending.KeyUI, pending.KeyReadyAt = nil, nil, nil
+		show("Waiting for Ken's visible key prompt.")
+		return
+	end
+	-- The event and UI can update on different frames. Re-read the live letter
+	-- after a short settling period rather than pressing the previous label.
+	if pending.Key ~= key or pending.KeyUI ~= prompt then
+		pending.Key, pending.KeyUI, pending.KeyReadyAt = key, prompt, now + 0.035
+		return
+	end
+	if now < pending.KeyReadyAt then return end
+	pending.Sent = true
+	note(string.format("KEY TAP id=%s key=%s age=%.3f window=%.3f", tostring(pending.Id), key.Name, now - pending.Born, pending.Window))
+	show("Training " .. tostring(state.Technique) .. " · Press " .. key.Name)
+	if not pressKey(key, 0.05) then stop("Meditation key input unavailable."); return end
+	if not pending.Captured then pending.Captured = true; pcall(snapshotUI, "Keys", pg) end
+end
 
 local function reelStep(pending, pg, now)
 	local x, center, half = progress.ReelGeometry(pending.Rail)
@@ -5045,6 +5086,7 @@ local function step()
 			release(); state.Pending = nil; note("PROMPT ended without a returned result mode=" .. tostring(pending.Mode)); return
 		end
 		if pending.Mode == "Reel" then reelStep(pending, pg, now); return end
+		if pending.Mode == "Keys" then keyStep(pending, meditation, pg, now); return end
 		if pending.Sent or pending.Responded or state.Held then return end
 		local circle, approach = meditation:FindFirstChild("AuraCircle"), meditation:FindFirstChild("AuraCircleApproach")
 		if not circle or not approach or not circle.Visible or not approach.Visible or circle.AbsoluteSize.X <= 0 then return end

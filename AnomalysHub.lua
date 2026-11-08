@@ -2807,7 +2807,7 @@ local player, ui = Players.LocalPlayer, controller.UI
 local path = "AnomalyHub/universal/beyond_nen_parry_capture.txt"
 local capture = {Active = false, Closed = false, Epoch = 0, Lines = {}, Bytes = 0, Rigs = {}, Connections = {}}
 local recordButton
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY RECORDER v2", "Record manual blocks and parries against one nearby opponent. Captures timing for the future auto-parry feature.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY RECORDER v3", "Record attacks and timed blocks. Each session now keeps its own history file.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Record ordinary hits, held blocks, timed parries, and dash attacks. Use your normal block key.",
@@ -2844,7 +2844,8 @@ local function sample(value, depth, seen, budget)
 	return "{" .. table.concat(parts, ",") .. "}"
 end
 local function save(reason)
-	capture.Report = "BEYOND NEN PARRY CAPTURE v2 // PASSIVE\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
+	capture.Report = "BEYOND NEN PARRY CAPTURE v3 // PASSIVE\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
+		.. "\nHISTORY=" .. tostring(capture.ArchivePath)
 		.. "\nNo block/attack inputs, remote requests/replays, script decompilation, or chat/typed-text recording."
 		.. "\nLocal character and up to 8 nearest loaded humanoids within 120 studs. Motion/track phase sampled at up to 20Hz; animation/input/attribute events have receipt timestamps."
 		.. "\nActor sources: player characters, direct Workspace models and Workspace.Humanoids (500 direct children per container)."
@@ -2856,7 +2857,9 @@ local function save(reason)
 		.. (capture.Limited and "\nCAPTURE LIMIT REACHED" or "")
 	if type(writefile) ~= "function" then return false end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	return pcall(writefile, path, capture.Report)
+	local latestSaved = pcall(writefile, path, capture.Report)
+	capture.HistorySaved = capture.ArchivePath and pcall(writefile, capture.ArchivePath, capture.Report) or false
+	return latestSaved
 end
 local function relevant(key)
 	key = string.lower(key)
@@ -3028,7 +3031,8 @@ local function stop(reason)
 	for _, entry in pairs(capture.Rigs) do releaseRig(entry) end; table.clear(capture.Rigs)
 	local saved = save(reason)
 	recordButton.Text, recordButton.BackgroundColor3 = "Record Parry", ui.Colors.AccentSoft
-	status.Text = saved and ("Recording saved" .. (capture.Limited and " (limit reached)" or "") .. ". Ready to review.") or "Could not save the file. Use Copy Recording."
+	status.Text = saved and ("Recording saved" .. (capture.Limited and " (limit reached)" or "")
+		.. (capture.HistorySaved and ". Separate history file kept." or ". History save failed; latest file only.")) or "Could not save the file. Use Copy Recording."
 end
 local function start()
 	if capture.Closed or controller.IsUnloaded() then return end
@@ -3036,6 +3040,17 @@ local function start()
 	if controller.StopBeyondNenAutoParry then controller.StopBeyondNenAutoParry() end
 	if type(writefile) ~= "function" then status.Text = "Recording needs executor file access."; return end
 	capture.Epoch += 1
+	local ok, nonce = pcall(function() return HttpService:GenerateGUID(false) end)
+	if not ok then nonce = tostring(math.floor(os.clock() * 1000000)) .. "_" .. capture.Epoch end
+	capture.ArchivePath = "AnomalyHub/universal/beyond_nen_parry_capture_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
+	-- Preserve the last old-format capture before the first v3 recording replaces it.
+	if not capture.Migrated and type(readfile) == "function" then
+		capture.Migrated = true
+		local readOk, previous = pcall(readfile, path)
+		if readOk and type(previous) == "string" and #previous <= 4500000 and previous:match("^BEYOND NEN PARRY CAPTURE v[12] ") then
+			pcall(writefile, capture.ArchivePath:gsub("%.txt$", "_previous.txt"), previous)
+		end
+	end
 	capture.Active, capture.Started, capture.NextSync, capture.NextMotion, capture.NextClock, capture.NextSave = true, os.clock(), 0, 0, 0, 0
 	capture.Lines, capture.Bytes, capture.RigId, capture.TrackId, capture.Limited, capture.PoolLimit = {}, 0, 0, 0, false, false
 	capture.PlayerModels = {}
@@ -3095,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v1. Seeds from the 2026-11-08 Chief Farmer capture.
+-- Beyond Nen auto-parry test v2. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3109,18 +3124,32 @@ local Stats = game:GetService("Stats")
 local manager; pcall(function() manager = game:GetService("VirtualInputManager") end)
 local player, ui = Players.LocalPlayer, controller.UI
 local path = "AnomalyHub/universal/beyond_nen_autoparry_test.txt"
-local profiles = {
-	["89044806752056"] = {Phase = .48, Name = "M1-1"},
-	["139612134161012"] = {Phase = .49, Name = "M1-2"},
-	["78313572240630"] = {Phase = .59, Name = "M1-3"},
-	["96407208954530"] = {Phase = .70, Name = "M1-4"},
-	["70453902034107"] = {Phase = .42, Name = "air attack"},
+local weaponProfiles = {
+	fists = {Label = "Fists", Animations = {
+		-- Fists CombatStyle on both observed players. LandedHit/settled M1
+		-- samples seed these phases; they still require an automatic-input test.
+		["72916536471630"] = {Phase = .28, Name = "M1-1"},
+		["82905481242246"] = {Phase = .30, Name = "M1-2"},
+		["83801701641510"] = {Phase = .30, Name = "M1-3"},
+		["130150003771445"] = {Phase = .32, Name = "M1-4"},
+		["136592942743129"] = {Phase = .52, Name = "M1-5"},
+	}},
+	bigpitchfork = {Label = "BigPitchfork", Animations = {
+		-- Captured Character.Weapon="BigPitchfork". No actor-name checks.
+		["89044806752056"] = {Phase = .48, Name = "M1-1"},
+		["139612134161012"] = {Phase = .49, Name = "M1-2"},
+		["78313572240630"] = {Phase = .59, Name = "M1-3"},
+		["96407208954530"] = {Phase = .70, Name = "M1-4"},
+		["70453902034107"] = {Phase = .42, Name = "air attack"},
+	}},
 }
+local knownAnimations = {}
+for _, weapon in pairs(weaponProfiles) do for id in pairs(weapon.Animations) do knownAnimations[id] = true end end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v1", "First test: 5 recorded Chief Farmer attacks. Other attack animations are not mapped yet.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v2", "Weapon profiles: Fists / BigPitchfork. Each needs its own mapped attack animations.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Ready. Start near Chief Farmer and let the test handle F. Stops and saves after 90 seconds.",
+	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
 	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
 }, card)
 local button, stop
@@ -3130,9 +3159,10 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v1\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v2 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nSeeded from Chief Farmer: 5 animations. Unknown animations are logged, never assumed to be attacks."
+		.. "\nFists and BigPitchfork: 5 observed animation timings each. Character.Weapon takes precedence over Player.CombatStyle. No actor-name filters."
+		.. "\nUnknown weapons and animation variants are logged and skipped; a Fists label alone does not establish every fist animation's timing."
 		.. "\nConfirmed counts require ParryResult with local Parrier, matching attacker and a recent test input. Accepted is only an input acknowledgment."
 		.. "\n" .. table.concat(state.Lines, "\n") .. "\nSTATUS=" .. tostring(reason)
 	if type(writefile) ~= "function" then return false end
@@ -3174,17 +3204,37 @@ stop = function(reason)
 	show(reason .. (saved and ". Test saved." or ". File save unavailable; use Copy Test."))
 end
 controller.StopBeyondNenAutoParry = function() if state.Enabled then stop("Manual recorder opened") end end
+local function weaponOf(rig)
+	local value, source = rig.Model:GetAttribute("Weapon"), "Character.Weapon"
+	if type(value) ~= "string" or value:match("^%s*$") then
+		value, source = rig.Owner and rig.Owner:GetAttribute("CombatStyle"), "Player.CombatStyle"
+	end
+	local key = type(value) == "string" and value:lower():gsub("[%s_%-]", "") or "unknown"
+	if key == "fist" then key = "fists" end
+	return key, weaponProfiles[key], source
+end
+local function describeWeapon(rig)
+	local key, weapon, source = weaponOf(rig)
+	if rig.Weapon ~= key then
+		rig.Weapon = key
+		note("WEAPON actor=" .. rig.Model.Name .. " type=" .. key .. " source=" .. source)
+	end
+	return key, weapon
+end
 local function watchTrack(rig, track)
 	-- AnimationTrack objects can be reused for a new swing. AnimationPlayed resets
 	-- the per-swing flag; polling alone must not repeatedly tap the same animation.
 	local animation = track.Animation
 	local id = animation and tostring(animation.AnimationId):match("%d+")
-	if profiles[id] then
-		rig.Tracks[track] = {Profile = profiles[id], Asset = id, At = os.clock()}
-		note("SWING actor=" .. rig.Model.Name .. " animation=" .. id)
-	elseif id and not state.Unknown[id] and tostring(track.Priority):find("Action", 1, true) then
-		state.Unknown[id] = true
-		note("UNMAPPED actor=" .. rig.Model.Name .. " animation=" .. id .. " (not attempted)")
+	local key, weapon = describeWeapon(rig)
+	if knownAnimations[id] then
+		rig.Tracks[track] = {Asset = id, At = os.clock()}
+	end
+	if weapon and weapon.Animations[id] then
+		note("SWING actor=" .. rig.Model.Name .. " weapon=" .. key .. " animation=" .. id)
+	elseif id and not state.Unknown[key .. ":" .. id] and tostring(track.Priority):find("Action", 1, true) then
+		state.Unknown[key .. ":" .. id] = true
+		note("UNMAPPED actor=" .. rig.Model.Name .. " weapon=" .. key .. " animation=" .. id .. " (not attempted)")
 	end
 end
 local function syncRigs(localRoot)
@@ -3219,10 +3269,12 @@ local function syncRigs(localRoot)
 		local rig = state.Rigs[model]
 		if rig and rig.Animator ~= animator then rig.Connection:Disconnect(); rig = nil end
 		if not rig then
-			rig = {Model = model, Animator = animator, Tracks = {}}; state.Rigs[model] = rig
+			rig = {Model = model, Owner = owners[model], Animator = animator, Tracks = {}}; state.Rigs[model] = rig
 			rig.Connection = animator.AnimationPlayed:Connect(function(track) if state.Enabled then watchTrack(rig, track) end end)
 			for _, track in ipairs(animator:GetPlayingAnimationTracks()) do watchTrack(rig, track) end
 		end
+		rig.Owner = owners[model]
+		describeWeapon(rig)
 	end
 	for model, rig in pairs(state.Rigs) do
 		if not wanted[model] then rig.Connection:Disconnect(); state.Rigs[model] = nil end
@@ -3300,18 +3352,24 @@ local function step()
 	if now >= state.NextPing then state.NextPing = now + 2; state.Lead = networkLead() end
 	if now >= state.NextSave then state.NextSave = now + 2; save("RUNNING") end
 	local key = state.Key
-	if state.Held then show("Block tap: " .. state.LastAttempt.Model.Name); return end
+	if state.Held then
+		local weapon = weaponProfiles[state.LastAttempt.Weapon]
+		show("Block tap: " .. (weapon and weapon.Label or "Unknown weapon")); return
+	end
 	if Input:IsKeyDown(key) or model:GetAttribute("HoldingBlock") == true then show("Manual/game block active; waiting for release"); return end
 	if now < state.Backoff or model:GetAttribute("ParryOnCooldown") == true or model:GetAttribute("BlockOnCooldown") == true then show("Waiting for block cooldown"); return end
 	local best
 	for _, rig in pairs(state.Rigs) do
 		local root = alive(rig.Model)
 		if not root then continue end
+		local weaponKey, weapon = describeWeapon(rig)
 		for track, swing in pairs(rig.Tracks) do
 			if not track.IsPlaying or now - swing.At > 5 then rig.Tracks[track] = nil; continue end
 			if swing.Used or track.Speed <= 0 or track.Looped then continue end
+			local profile = weapon and weapon.Animations[swing.Asset]
+			if not profile then continue end
 			local phase, speed = track.TimePosition, track.Speed
-			local remaining = (swing.Profile.Phase - phase) / speed
+			local remaining = (profile.Phase - phase) / speed
 			if remaining < -.025 then swing.Used = true; continue end
 			if remaining > state.Lead then continue end
 			local delta = localRoot.Position - root.Position
@@ -3321,19 +3379,20 @@ local function step()
 			local projected = delta + (localRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity) * math.max(0, remaining)
 			local facing = distance < 1 or root.CFrame.LookVector:Dot(delta.Unit) >= .15
 			if distance <= 12 and projected.Magnitude <= 9 and math.abs(delta.Y) <= 8 and facing then
-				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, Track = track, Remaining = remaining, Distance = distance} end
+				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance} end
 			end
 		end
 	end
-	if not best then show("Watching for recorded attacks nearby"); return end
+	if not best then show("Watching mapped Fists / BigPitchfork attacks"); return end
 	best.Swing.Used = true
-	state.LastAttempt = {At = now, Model = best.Model, Animation = best.Swing.Asset, Serial = state.Presses + 1}
+	state.LastAttempt = {At = now, Model = best.Model, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
 	state.Held = {Key = key, Until = now + .16}; state.Backoff = now + .25
 	local ok = pcall(function() manager:SendKeyEvent(true, key, false, game) end)
 	if not ok then stop("Block input unavailable"); return end
 	state.Presses += 1
-	note(string.format("KEY DOWN %s actor=%s animation=%s phase=%.3f speed=%.3f eta=%.3f distance=%.2f lead=%.3f",
-		key.Name, best.Model.Name, best.Swing.Asset, best.Track.TimePosition, best.Track.Speed, best.Remaining, best.Distance, state.Lead))
+	note(string.format("KEY DOWN %s actor=%s weapon=%s animation=%s phase=%.3f speed=%.3f eta=%.3f distance=%.2f lead=%.3f",
+		key.Name, best.Model.Name, best.Weapon, best.Swing.Asset, best.Track.TimePosition, best.Track.Speed, best.Remaining, best.Distance, state.Lead))
+	show("Block tap: " .. best.Label)
 end
 local function start()
 	if state.Closed or controller.IsUnloaded() then return end
@@ -3346,7 +3405,7 @@ local function start()
 	state.Presses, state.Parries, state.Rejected, state.Lead = 0, 0, 0, .145
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " mapped=5 duration=90")
+	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,BigPitchfork mapped=10 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

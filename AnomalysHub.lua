@@ -96,7 +96,7 @@ local state = {
 	SpectateTarget = nil,
 	EspEnabled = false,
 	EspDistance = 2500,
-	EspSettings = {Name = true, Lineage = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
+	EspSettings = {Name = true, Level = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
 	Noclip = false,
 	InfiniteJump = false,
 	SpeedEnabled = false,
@@ -124,6 +124,10 @@ local function loadConfig()
 	state.EspEnabled = decoded.EspEnabled == true
 	state.EspDistance = math.clamp(tonumber(decoded.EspDistance) or 2500, 100, 10000)
 	if type(decoded.EspSettings) == "table" then
+		-- Carry the old identity-field toggle forward when upgrading a saved profile.
+		if decoded.EspSettings.Level == nil and type(decoded.EspSettings.Lineage) == "boolean" then
+			state.EspSettings.Level = decoded.EspSettings.Lineage
+		end
 		for key in pairs(state.EspSettings) do
 			if type(decoded.EspSettings[key]) == "boolean" then state.EspSettings[key] = decoded.EspSettings[key] end
 		end
@@ -779,8 +783,9 @@ local function updateEsp(target, localRoot)
 	local settings = state.EspSettings
 	local lines = {}
 	if settings.Name then table.insert(lines, target.DisplayName) end
-	local lineage = extra and tostring(extra.Lineage or extra.Clan or "Unknown") or "Unknown"
-	if settings.Lineage then table.insert(lines, "LINEAGE // " .. lineage) end
+	local level = extra and tonumber(extra.Level)
+	local levelText = level and level == level and level >= 0 and level < math.huge and tostring(math.floor(level)) or "--"
+	if settings.Level then table.insert(lines, "LEVEL // " .. levelText) end
 	if settings.Distance then table.insert(lines, string.format("%d STUDS", math.floor(distance + 0.5))) end
 	entry.InfoLabel.Text = table.concat(lines, "\n")
 	entry.Gui.Enabled = #lines > 0
@@ -904,8 +909,6 @@ controller.GameIdentity = {
 }
 
 local Players = game:GetService("Players")
-local localPlayer = Players.LocalPlayer
-local playerGui = localPlayer and localPlayer:FindFirstChildOfClass("PlayerGui")
 local cache = setmetatable({}, {__mode = "k"})
 
 local function normalize(name)
@@ -957,70 +960,20 @@ local function readAlias(sources, aliases)
 	return nil
 end
 
-local clanAliases = {"Lineage", "LineageName", "LineageId", "Bloodline", "Clan", "ClanName", "ClanId", "Family", "FamilyName", "LastName", "Surname", "Heritage", "Origin"}
 local energyAliases = {"Energy", "CurrentEnergy", "Nen", "CurrentNen", "Aura", "CurrentAura"}
 local maxEnergyAliases = {"MaxEnergy", "EnergyMax", "MaximumEnergy", "MaxNen", "NenMax", "MaxAura", "AuraMax"}
 local staminaAliases = {"Stamina", "CurrentStamina", "Endurance", "CurrentEndurance"}
 local maxStaminaAliases = {"MaxStamina", "StaminaMax", "MaximumStamina", "MaxEndurance", "EnduranceMax"}
-local knownLineages = {}
-for _, lineage in ipairs({
-	"Zoldyck", "Kurta", "Freecss", "Frecss", "Lucifer", "Lucilfer", "Morrow", "Netero",
-	"Hill", "Hazama", "Krueger", "Koshi", "Nostrade", "Mackernasey", "Magcub", "Bine",
-	"Murasaki", "Kawalsko", "Kwalski", "Tocino", "Ndongo", "Clow", "Hackett",
-}) do
-	knownLineages[normalize(lineage)] = lineage
-end
-
-local function cleanLineageText(text, labelName)
-	text = tostring(text or ""):gsub("<.->", ""):gsub("^%s+", ""):gsub("%s+$", "")
-	if text == "" then return nil end
-	local upper = string.upper(text)
-	local prefixed = upper:match("LINEAGE%s*[/:%-]+%s*(.+)")
-		or upper:match("CLAN%s*[/:%-]+%s*(.+)")
-		or upper:match("FAMILY%s*[/:%-]+%s*(.+)")
-	if prefixed and prefixed ~= "" and prefixed ~= "UNKNOWN" then return prefixed end
-	local normalizedName = normalize(labelName)
-	if (normalizedName:find("lineage", 1, true) or normalizedName:find("clan", 1, true) or normalizedName:find("family", 1, true))
-		and upper ~= "LINEAGE" and upper ~= "CLAN" and upper ~= "FAMILY" and upper ~= "UNKNOWN" then
-		return text
+local function readPlayerLevel(target)
+	-- Confirmed in the session capture: Players.<player>@Level.
+	-- Avoid recursive searches that could return an item or inactive save's level.
+	local value = tonumber(target:GetAttribute("Level"))
+	if not value then
+		local stats = target:FindFirstChild("leaderstats")
+		local level = stats and stats:FindFirstChild("Level")
+		if level and level:IsA("ValueBase") then value = tonumber(level.Value) end
 	end
-	local known = knownLineages[normalize(text)]
-	if known then return known end
-	return nil
-end
-
-local function readLineageFromText(target, character)
-	local function scan(root, requireTargetBillboard)
-		if not root then return nil end
-		for _, object in ipairs(root:GetDescendants()) do
-			if object:IsA("TextLabel") or object:IsA("TextButton") then
-				if not (controller.UI and controller.UI.Gui and object:IsDescendantOf(controller.UI.Gui)) then
-					if requireTargetBillboard then
-						local billboard = object:FindFirstAncestorWhichIsA("BillboardGui")
-						local adornee = billboard and billboard.Adornee
-						if not billboard or not ((adornee and adornee:IsDescendantOf(character)) or billboard:IsDescendantOf(character)) then
-							continue
-						end
-					end
-					local lineage = cleanLineageText(object.Text, object.Name)
-					if lineage then return lineage end
-				end
-			end
-		end
-		return nil
-	end
-	return scan(character, false) or scan(playerGui, true)
-end
-
-local function readKnownLineageValue(sources)
-	for _, source in pairs(sources) do
-		local value = readSource(source)
-		if type(value) == "string" then
-			local known = knownLineages[normalize(value)]
-			if known then return known end
-		end
-	end
-	return nil
+	return value and value == value and value >= 0 and value < math.huge and value or nil
 end
 
 function controller.ResolvePlayerEspData(target, character, humanoid)
@@ -1031,13 +984,8 @@ function controller.ResolvePlayerEspData(target, character, humanoid)
 		cache[target] = entry
 	end
 	local sources = entry.Sources
-	local lineage = readAlias(sources, clanAliases) or readKnownLineageValue(sources)
-	if lineage == nil and (entry.LineageCheckedAt == nil or now - entry.LineageCheckedAt >= 1) then
-		entry.LineageCheckedAt = now
-		entry.LineageText = readLineageFromText(target, character)
-	end
 	return {
-		Lineage = lineage or entry.LineageText or "Unknown",
+		Level = readPlayerLevel(target),
 		Energy = readAlias(sources, energyAliases),
 		MaxEnergy = readAlias(sources, maxEnergyAliases),
 		Stamina = readAlias(sources, staminaAliases),
@@ -1058,10 +1006,10 @@ end
 if type(ui) == "table" and ui.Pages and ui.Pages.Players and type(ui.Card) == "function" and type(ui.Button) == "function" then
 	local optionsCard = ui.Card(ui.Pages.Players, "BEYOND NEN ESP OPTIONS", "Choose exactly which identity fields, body outline, and resource bars are visible.", 236)
 	local labels = {
-		Name = "Name", Lineage = "Lineage", Distance = "Distance", Box = "Body box",
+		Name = "Name", Level = "Level", Distance = "Distance", Box = "Body box",
 		Health = "Health bar", Energy = "Energy bar", Stamina = "Stamina bar",
 	}
-	local order = {"Name", "Lineage", "Distance", "Box", "Health", "Energy", "Stamina"}
+	local order = {"Name", "Level", "Distance", "Box", "Health", "Energy", "Stamina"}
 	for index, key in ipairs(order) do
 		local column = (index - 1) % 2
 		local row = math.floor((index - 1) / 2)
@@ -1078,11 +1026,11 @@ end
 
 local function captureEspState()
 	local lines = {
-		"BEYOND NEN ESP STATE // PASSIVE v2",
+		"BEYOND NEN ESP STATE // PASSIVE v3 LEVEL",
 		"place=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId),
 		"No remotes were fired or invoked.",
 	}
-	local keywords = {"clan", "family", "energy", "stamina", "endurance", "aura", "nen"}
+	local keywords = {"level", "energy", "stamina", "endurance", "aura", "nen"}
 	local function relevant(text)
 		text = string.lower(tostring(text))
 		for _, keyword in ipairs(keywords) do if string.find(text, keyword, 1, true) then return true end end
@@ -1132,7 +1080,7 @@ end
 controller.CaptureBeyondNenEspState = captureEspState
 
 if type(ui) == "table" and ui.Pages and ui.Pages.Players and type(ui.Card) == "function" and type(ui.Button) == "function" then
-	local discoveryCard = ui.Card(ui.Pages.Players, "BEYOND NEN ESP DISCOVERY", "If lineage, energy, or stamina is missing, capture the passive client state and send the saved report.", 126)
+	local discoveryCard = ui.Card(ui.Pages.Players, "BEYOND NEN ESP DISCOVERY", "If level, energy, or stamina is missing, capture the passive client state and send the saved report.", 126)
 	local status = ui.Create("TextLabel", {
 		Position = UDim2.fromOffset(204, 73), Size = UDim2.new(1, -218, 0, 40), BackgroundTransparency = 1,
 		Font = Enum.Font.Gotham, Text = "No remotes are fired.", TextColor3 = ui.Colors.Muted, TextSize = 9,

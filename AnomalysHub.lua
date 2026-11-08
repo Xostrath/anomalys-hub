@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v12. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v13. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3169,15 +3169,28 @@ local weaponProfiles = {
 	}},
 	foxbear = {Label = "Fox Bear", Reach = 13, MaxDistance = 16, Animations = {
 		-- Explicit Character.Weapon="Fox Bear" in v10, independent of actor name.
-		-- Five distinct strikes have nearby health-drop phase samples at speed 1,
-		-- up to 11.73 studs. These are test seeds, not confirmed automatic parries.
-		-- Long sequences 85729441475501 / 109000405251112 remain diagnostic:
-		-- their first contacts and distance dependence were not fully captured.
-		["109115837378623"] = {Phase = .62, Name = "Fox Bear strike A (test)"},
+		-- v12 confirms 13 automatic parries across strikes A-D. Strike E still
+		-- needs confirmation. Keep successful phases separate from skill timings.
+		-- Strike A hit at 13.99 studs after projected distance 14.11 was skipped;
+		-- extend only this strike's reach, retaining facing/elevation checks.
+		["109115837378623"] = {Phase = .62, Reach = 15, Name = "Fox Bear strike A"},
 		["120428998246938"] = {Phase = .48, Name = "Fox Bear strike B (test)"},
 		["81775052619110"] = {Phase = .40, Name = "Fox Bear strike C (test)"},
 		["114094657247629"] = {Phase = .40, Name = "Fox Bear strike D (test)"},
 		["119367900570682"] = {Phase = .62, Name = "Fox Bear strike E (test)"},
+		-- Two v12 sequences capture the rapid skill's first contact at phases
+		-- 1.567/1.588, distances 11.42/16.62; later contacts agree with v10.
+		-- Contact seeds are not proof every pulse can be parried: normal input
+		-- backoff and game cooldowns still apply and skip expired contacts.
+		["85729441475501"] = {Phases = {1.55, 1.67, 1.78, 1.89, 2.01, 2.13, 2.24, 2.36}, Reach = 19, MaxDistance = 22, Name = "Fox Bear rapid skill (test)"},
+		-- v12 records five contacts at 1.442/1.896/2.246/2.821/3.712, up to
+		-- 13.15 studs. v10 corroborates 1.871/3.708 and elapsed first/fourth
+		-- contacts, but exact move names and automatic outcomes remain unknown.
+		["109000405251112"] = {Phases = {1.42, 1.86, 2.22, 2.79, 3.68}, Reach = 15, MaxDistance = 18, Name = "Fox Bear extended skill (test)"},
+		-- Two v12 runs show 44.85 damage at phases 2.021/2.000/2.004 from
+		-- 8.46/34.73/43.05 studs. Separate range/timing seed; the exact skill,
+		-- targeting shape and whether it can be parried remain unverified.
+		["139886760981001"] = {Phase = 1.98, Reach = 45, MaxDistance = 48, Name = "Fox Bear ranged skill (test)"},
 	}},
 	sword = {Label = "Sword (recorded)", Reach = 12, MaxDistance = 15, Animations = {
 		-- User identified "achive sword"; later equipment data says Archive Sword.
@@ -3233,7 +3246,7 @@ for _, key in ipairs({"sword", "dagger"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v12", "Fists / Pitchfork / BigPitchfork / Sword / Dagger / Fox Bear. Five Fox Bear strikes added; longer skills still need capture.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v13", "Fox Bear: three skills added for testing; strike reach adjusted. Existing weapon profiles retained.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3246,11 +3259,12 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v12 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v13 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 10. Fox Bear: 5 strikes; longer skills remain unmapped. Pitchfork has a four-contact move; Dagger has five- and eight-contact moves. New timings remain under test. No actor-name filters."
-		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger IDs select their profile. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Fox Bear 13; Dagger repeated strike 18 and long-windup strike 13."
+		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 10. Fox Bear: 5 strikes and three skills with eight/five/one contact seeds. Pitchfork has a four-contact move; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
+		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger IDs select their profile. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Fox Bear 13 (strike A/extended skill 15, rapid skill 19, ranged skill 45); Dagger repeated strike 18 and long-windup strike 13."
+		.. "\nFox Bear skill contacts retain normal input backoff, game cooldowns, facing and elevation checks. Known animation phases do not establish whether every skill contact is parryable."
 		.. "\nDagger 78084477149043 follow-ups use current distance within 9 studs regardless of facing/projection; its first contact retains directional checks. This test rule is not a measured hitbox."
 		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
 		.. "\nCOMBAT_STATE records raw local attributes at inputs, damage and rejections; their clock bases may differ. NO_OBSERVED_REQUEST means no hook observation before the deadline/stop, not proof that nothing reached the server."
@@ -3678,7 +3692,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger,FoxBear mappedWeaponAnimations=47 duration=90")
+	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger,FoxBear mappedWeaponAnimations=50 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

@@ -2225,7 +2225,7 @@ controller.CaptureBeyondNenFishing = start
 
 end)()
 ;(function()
--- Beyond Nen auto fishing v2. Uses normal mouse input so the game's client
+-- Beyond Nen auto fishing v3. Uses normal mouse input so the game's client
 -- retains its own session, cursor physics, progress and hold timestamps.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -2237,7 +2237,7 @@ local UserInputService = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
 local Workspace = game:GetService("Workspace")
 local ui = controller.UI
-local auto = {Enabled = false, Closed = false, Held = false, Phase = "Off", Catches = 0, Focused = true, Lines = {}}
+local auto = {Enabled = false, Closed = false, Held = false, Phase = "Off", Catches = 0, Focused = true, Background = false, Lines = {}}
 local inputManager
 pcall(function() inputManager = game:GetService("VirtualInputManager") end)
 local backend = "virtual"
@@ -2245,16 +2245,16 @@ local press = env.mouse1press or mouse1press
 local release = env.mouse1release or mouse1release
 local move = env.mousemoveabs or mousemoveabs
 local reportPath = "AnomalyHub/universal/beyond_nen_autofish_test.txt"
-local toggle, status
+local toggle, backgroundToggle, status
 
 local function note(message)
 	if #auto.Lines >= 800 then table.remove(auto.Lines, 1) end
-	table.insert(auto.Lines, string.format("%.3f %s", os.clock(), message))
+	table.insert(auto.Lines, string.format("%.3f [%s] %s", os.clock(), auto.Focused and "FOREGROUND" or "BACKGROUND", message))
 end
 local function save()
 	if type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	pcall(writefile, reportPath, "BEYOND NEN AUTO FISHING v2\nplace=" .. tostring(game.PlaceId)
+	pcall(writefile, reportPath, "BEYOND NEN AUTO FISHING v3\nplace=" .. tostring(game.PlaceId)
 		.. "\n" .. table.concat(auto.Lines, "\n"))
 end
 local function show(message)
@@ -2269,11 +2269,27 @@ local function rod()
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if tool and tool:IsA("Tool") and humanoid and humanoid.Health > 0 and root then return tool, character, root end
 end
+local function blocked(x, y)
+	local pg = player:FindFirstChildOfClass("PlayerGui")
+	for _, object in ipairs(pg and pg:GetGuiObjectsAtPosition(x, y) or {}) do
+		if object.Active or object:IsA("GuiButton") or object:IsA("TextBox") then return true end
+	end
+	return false
+end
+local function reelPoint()
+	local camera = Workspace.CurrentCamera
+	if not camera then return end
+	local size = camera.ViewportSize
+	for _, point in ipairs({{size.X - 8, size.Y - 8}, {8, size.Y - 8}, {size.X - 8, size.Y * 0.5}, {8, size.Y * 0.5}}) do
+		if not blocked(point[1], point[2]) then return point[1], point[2] end
+	end
+end
 local function aim(x, y)
+	if not auto.Focused and backend ~= "virtual" then return false end
 	local ok = pcall(function()
 		if backend == "virtual" then inputManager:SendMouseMoveEvent(x, y, game) else move(x, y) end
 	end)
-	if not ok and backend == "virtual" and type(press) == "function" and type(release) == "function" and type(move) == "function" then
+	if not ok and auto.Focused and backend == "virtual" and type(press) == "function" and type(release) == "function" and type(move) == "function" then
 		backend = "executor"
 		ok = pcall(move, x, y)
 	end
@@ -2281,6 +2297,8 @@ local function aim(x, y)
 end
 local function send(down, x, y)
 	if auto.Held == down then return true end
+	if not auto.Focused and backend ~= "virtual" then return false end
+	if not down then x, y = auto.InputX, auto.InputY end
 	x, y = x or auto.InputX, y or auto.InputY
 	if not x or not y then return not down end
 	local ok = pcall(function()
@@ -2292,13 +2310,14 @@ local function send(down, x, y)
 		end
 	end)
 	-- Choose one backend for each press/release pair. Never change on key-up.
-	if not ok and down and backend == "virtual" and type(press) == "function"
+	if not ok and down and auto.Focused and backend == "virtual" and type(press) == "function"
 		and type(release) == "function" and type(move) == "function" then
 		backend = "executor"
 		ok = pcall(function() move(x, y); press() end)
 	end
 	if ok then
 		auto.Held, auto.InputX, auto.InputY, auto.ChangedAt = down, x, y, os.clock()
+		if not auto.Focused and auto.BackgroundStats then auto.BackgroundStats.Inputs += 1 end
 		note(down and "MOUSE DOWN" or "MOUSE UP")
 	end
 	return ok
@@ -2328,6 +2347,10 @@ local function queueCast(reason, delay, clearPoint)
 end
 local function observe(name, direction, args)
 	if not auto.Enabled or auto.Closed then return end
+	if not auto.Focused and auto.BackgroundStats and name == "Hold" and direction:sub(1, 3) == "OUT" then
+		auto.BackgroundStats.Holds += 1
+		note("OBSERVED Hold " .. tostring(args[2]))
+	end
 	if name == "Cast" and direction:sub(1, 3) == "OUT" then
 		local tool, character, root = rod()
 		if tool and typeof(args[1]) == "Vector3" then
@@ -2339,6 +2362,7 @@ local function observe(name, direction, args)
 		if args[1] == true and args[2] ~= nil and auto.Point then
 			if auto.Session ~= args[2] then
 				auto.Session, auto.Phase, auto.Deadline = args[2], "Waiting", os.clock() + 60
+				if not auto.Focused and auto.BackgroundStats then auto.BackgroundStats.Casts += 1 end
 				note("CAST ACCEPTED session=" .. tostring(args[2])); show("Line cast. Waiting for a bite.")
 			end
 		elseif auto.Phase == "CastPending" then queueCast("Cast not accepted. Point at water; retrying shortly.", 2, true) end
@@ -2351,17 +2375,21 @@ local function observe(name, direction, args)
 		send(false)
 		local result = type(args[2]) == "table" and args[2] or {}
 		if result.Outcome == "Caught" then auto.Catches += math.max(1, tonumber(result.Count) or 1) end
+		if not auto.Focused and auto.BackgroundStats then
+			local key = result.Outcome == "Caught" and "Caught" or "OtherResults"
+			auto.BackgroundStats[key] += 1
+		end
 		local outcome = tostring(result.Outcome or "Finished") .. (result.Fish and (": " .. tostring(result.Fish)) or "")
 		note("RESULT " .. outcome)
 		queueCast(outcome .. ". Preparing the next cast.", 1.5); save()
 	end
 end
 
-local card = ui.Card(ui.Pages.Auto, "AUTO FISHING // v2", "Equip Fishing, hide the hub and point at water. Casting, catching and missed-cast retries are automatic.", 218)
+local card = ui.Card(ui.Pages.Auto, "AUTO FISHING // v3", "Point at water with Fishing equipped. The hub can stay open; keep the casting spot clear of buttons.", 264)
 card.LayoutOrder = 10
 status = ui.Create("TextLabel", {
-	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Off. The hub must be hidden while fishing (Right Alt).",
+	Position = UDim2.fromOffset(14, 164), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Off. Background Test checks whether fishing continues while tabbed out.",
 	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
 }, card)
 local function enable(value)
@@ -2373,13 +2401,21 @@ local function enable(value)
 	auto.NextCast = os.clock() + 0.8
 	auto.Unwatch = controller.WatchBeyondNenFishing(observe)
 	toggle.Text, toggle.BackgroundColor3 = "Auto Fishing: ON", ui.Colors.AccentSoft
-	show("Hide the hub with Right Alt and point at water. Auto Fishing will cast for you.")
-	note("ENABLED; automatic casting ready"); save()
+	show("Point at water outside the hub. Auto Fishing will cast for you.")
+	note("ENABLED; automatic casting ready; backgroundTest=" .. tostring(auto.Background)); save()
 end
 toggle = ui.FitColumn(ui.Button(card, "Auto Fishing: OFF", 0, 0, 180, function() enable(not auto.Enabled) end), 0, 72)
 ui.FitColumn(ui.Button(card, "New Fishing Spot", 0, 0, 180, function()
-	if auto.Enabled then queueCast("Hide the hub and point at the new water spot.", 0.8, true) end
+	if auto.Enabled then queueCast("Point at the new water spot outside the hub.", 0.8, true) end
 end), 1, 72)
+backgroundToggle = ui.FitColumn(ui.Button(card, "Background Test: OFF", 0, 0, 180, function()
+	auto.Background = not auto.Background
+	backgroundToggle.Text = auto.Background and "Background Test: ON" or "Background Test: OFF"
+	backgroundToggle.BackgroundColor3 = auto.Background and ui.Colors.AccentSoft or ui.Colors.Surface
+	if not auto.Background and not auto.Focused then send(false) end
+	show(auto.Background and "Test ready. Let fishing start, then tab out for 30 seconds and return." or "Background test off. Fishing pauses while tabbed out.")
+	note("BACKGROUND TEST " .. tostring(auto.Background)); save()
+end), 0, 116)
 
 local function geometry()
 	local playerGui = player:FindFirstChildOfClass("PlayerGui")
@@ -2409,9 +2445,9 @@ local function step()
 	if not tool then stop("Stopped: equip your Fishing tool before enabling again."); return end
 	if auto.Character and (character ~= auto.Character or tool ~= auto.Tool) then stop("Character or rod changed. Enable again to fish."); return end
 	if auto.Origin and (root.Position - auto.Origin).Magnitude > 12 then stop("You moved away from the fishing spot. Enable again at the new spot."); return end
-	if not auto.Focused or controller.State.Visible or GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then
+	if (not auto.Focused and not auto.Background) or GuiService.MenuIsOpen or UserInputService:GetFocusedTextBox() then
 		if auto.Phase == "Idle" or auto.Phase == "Aiming" then auto.Phase, auto.NextCast = "Idle", now + 0.8 end
-		send(false); resetMotion(); show("Input paused. Close the hub/chat/menu to continue fishing."); return
+		send(false); resetMotion(); show("Input paused. Return to Roblox or close its chat/menu to continue."); return
 	end
 	if auto.ReleaseAt and now >= auto.ReleaseAt then
 		if not send(false) then stop("Mouse release failed. Auto Fishing stopped."); return end
@@ -2431,6 +2467,7 @@ local function step()
 		local camera = Workspace.CurrentCamera
 		if not camera then return end
 		if not auto.Point then
+			if not auto.Focused then show("Return to Roblox and point at water once before the background test."); return end
 			local ok, point = pcall(function() return player:GetMouse().Hit.Position end)
 			if not ok or typeof(point) ~= "Vector3" or (point - root.Position).Magnitude > 500 then
 				auto.NextCast = now + 1; show("Point your cursor at nearby water to start casting."); return
@@ -2439,9 +2476,11 @@ local function step()
 		end
 		local point, onScreen = camera:WorldToViewportPoint(auto.Point)
 		if not onScreen or point.Z <= 0 then show("Turn the camera toward the saved fishing spot to recast."); return end
-		local pg = player:FindFirstChildOfClass("PlayerGui")
-		for _, object in ipairs(pg and pg:GetGuiObjectsAtPosition(point.X, point.Y) or {}) do
-			if object.Active or object:IsA("GuiButton") or object:IsA("TextBox") then show("Move the camera so the fishing spot is clear of buttons and menus."); return end
+		if blocked(point.X, point.Y) then
+			-- An unconfirmed first aim may have been sampled while pointing at the
+			-- hub. Let the user's next cursor position choose a clear water spot.
+			if not auto.Origin then auto.Point = nil end
+			show("Move the hub aside so the water spot is clear of buttons."); return
 		end
 		if tool.Enabled == false then show("Waiting for the rod to be ready."); return end
 		-- Let Mouse.Hit update before activating the rod; a move and click in the
@@ -2479,11 +2518,10 @@ local function step()
 	if prediction > center + band then down = false
 	elseif prediction < center - band then down = true end
 	if down ~= auto.Held and now - (auto.ChangedAt or 0) >= 0.045 then
-		local camera = Workspace.CurrentCamera
-		if camera then
-			local viewport = camera.ViewportSize
-			if not send(down, viewport.X - 8, viewport.Y - 8) then stop("Mouse input failed. Auto Fishing stopped."); return end
-		end
+		local xInput, yInput = auto.InputX, auto.InputY
+		if down then xInput, yInput = reelPoint() end
+		if down and not xInput then show("Move the hub away from a screen edge so fishing has a clear input spot."); return end
+		if not send(down, xInput, yInput) then stop("Mouse input failed. Auto Fishing stopped."); return end
 	end
 	if now - (auto.LastSample or 0) >= 1 then
 		auto.LastSample = now
@@ -2492,12 +2530,46 @@ local function step()
 	show("Reeling: " .. progress)
 end
 
-controller.Connect(RunService.RenderStepped, function()
+local function update(source)
+	local now = os.clock()
+	if auto.Enabled and not auto.Focused and auto.BackgroundStats then
+		local stats = auto.BackgroundStats
+		stats.Ticks += 1
+		stats.MaxGap = math.max(stats.MaxGap, now - stats.LastTick)
+		stats.LastTick = now
+		if now - stats.LastReport >= 2 then
+			stats.LastReport = now
+			note(string.format("BACKGROUND CHECK driver=%s ticks=%d maxGap=%.3f inputs=%d observedHolds=%d acceptedCasts=%d caught=%d otherResults=%d phase=%s status=%s",
+				source, stats.Ticks, stats.MaxGap, stats.Inputs, stats.Holds, stats.Casts, stats.Caught, stats.OtherResults, auto.Phase, auto.Message or ""))
+		end
+	end
 	local ok, err = pcall(step)
 	if not ok and auto.Enabled then stop("Auto Fishing stopped after an error."); note(tostring(err)); save() end
+end
+controller.Connect(RunService.RenderStepped, function()
+	if auto.Focused then update("render") end
 end)
-controller.Connect(UserInputService.WindowFocusReleased, function() auto.Focused = false; send(false) end)
-controller.Connect(UserInputService.WindowFocused, function() auto.Focused = true end)
+-- Rendering can stop while unfocused. Use simulation ticks for the background
+-- trial and report their actual cadence; this does not disable game throttling.
+controller.Connect(RunService.Heartbeat, function()
+	if not auto.Focused then update("heartbeat") end
+end)
+controller.Connect(UserInputService.WindowFocusReleased, function()
+	send(false)
+	auto.Focused = false
+	resetMotion()
+	-- Background trials never use OS-level mouse helpers in another application.
+	if not auto.Held then backend = "virtual" end
+	local now = os.clock()
+	auto.BackgroundStats = {Ticks = 0, MaxGap = 0, LastTick = now, LastReport = now, Inputs = 0, Holds = 0, Casts = 0, Caught = 0, OtherResults = 0}
+	if auto.Enabled then note("FOCUS LOST backgroundTest=" .. tostring(auto.Background) .. " phase=" .. auto.Phase); save() end
+end)
+controller.Connect(UserInputService.WindowFocused, function()
+	auto.Focused = true
+	send(false)
+	if auto.Enabled then note("FOCUS RETURNED phase=" .. auto.Phase); save() end
+	resetMotion()
+end)
 controller.Connect(player.OnTeleport, function() if auto.Enabled then stop("Stopped for travel.") end end)
 controller.RegisterCleanup(function() stop("Unloaded."); auto.Closed = true end)
 controller.SetBeyondNenAutoFishing = enable

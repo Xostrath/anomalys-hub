@@ -431,13 +431,28 @@ local serverStatus = create("TextLabel", {
 	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
 }, serverCard)
 
+local function downloadLatestPublicSource()
+	local apiUrl = "https://api.github.com/repos/Xostrath/anomalys-hub/git/ref/heads/main?anomaly_ref=" .. HttpService:GenerateGUID(false)
+	local ok, refBody = pcall(function() return game:HttpGet(apiUrl) end)
+	if ok and type(refBody) == "string" then
+		local decodedOk, ref = pcall(HttpService.JSONDecode, HttpService, refBody)
+		local sha = decodedOk and type(ref) == "table" and type(ref.object) == "table" and ref.object.sha or nil
+		if type(sha) == "string" and sha:match("^[%da-fA-F]+$") then
+			local immutableUrl = "https://raw.githubusercontent.com/Xostrath/anomalys-hub/" .. sha .. "/AnomalysHub.lua"
+			local sourceOk, source = pcall(function() return game:HttpGet(immutableUrl) end)
+			if sourceOk and type(source) == "string" and #source > 1000 then return source end
+		end
+	end
+	local fallback = "https://raw.githubusercontent.com/Xostrath/anomalys-hub/refs/heads/main/AnomalysHub.lua"
+	local sourceOk, source = pcall(function() return game:HttpGet(fallback .. "?anomaly_ref=" .. HttpService:GenerateGUID(false)) end)
+	return sourceOk and source or nil
+end
+
 local function queueReload()
 	local queue = env.queue_on_teleport or env.queueonteleport or env.syn and env.syn.queue_on_teleport
 	local url = env.__GohanHubLoaderUrl
 	if type(queue) ~= "function" or type(url) ~= "string" or url == "" then return false end
-	local quoted = string.format("%q", url)
-	local queued = "task.wait(10);local u=" .. quoted
-		.. ";local s=u:find('?',1,true) and '&' or '?';loadstring(game:HttpGet(u..s..'anomaly_reload='..tostring(os.time())))()"
+	local queued = "task.wait(10);local h=game:GetService('HttpService');local a='https://api.github.com/repos/Xostrath/anomalys-hub/git/ref/heads/main?anomaly_ref='..tostring(os.time());local o,r=pcall(function()return h:JSONDecode(game:HttpGet(a))end);local u=o and r and r.object and r.object.sha and ('https://raw.githubusercontent.com/Xostrath/anomalys-hub/'..r.object.sha..'/AnomalysHub.lua') or 'https://raw.githubusercontent.com/Xostrath/anomalys-hub/refs/heads/main/AnomalysHub.lua';loadstring(game:HttpGet(u))()"
 	return pcall(queue, queued)
 end
 
@@ -585,13 +600,8 @@ controller.State = state
 controller.Connect = connect
 function controller.Reload()
 	local source = nil
-	local url = env.__GohanHubLoaderUrl
-	if type(url) == "string" and url ~= "" then
-		url = url:gsub("#.*$", "")
-		local separator = url:find("?", 1, true) and "&" or "?"
-		local freshUrl = url .. separator .. "anomaly_reload=" .. HttpService:GenerateGUID(false)
-		local ok, result = pcall(function() return game:HttpGet(freshUrl) end)
-		if ok then source = result end
+	if env.GohanHubEnvironment ~= "local" then
+		source = downloadLatestPublicSource()
 	elseif env.GohanHubEnvironment == "local" then
 		source = env.__GohanHubSource
 	end
@@ -18983,9 +18993,8 @@ function qolState.ServerNavigation.QueueSelfForTeleport()
 	-- Runs in the destination only; never sleeps during injection or queuing.
 	local reloadDelay = "if not game:IsLoaded() then game.Loaded:Wait() end;task.wait(10);"
 	if queueFunction and type(loaderUrl) == "string" and string.match(loaderUrl, "^https://") then
-		local quotedUrl = string.format("%q", loaderUrl)
-		local queuedLoader = reloadDelay .. "local u=" .. quotedUrl
-			.. ";local s=u:find('?',1,true) and '&' or '?';loadstring(game:HttpGet(u..s..'anomaly_reload='..tostring(os.time())))()"
+		local queuedLoader = reloadDelay
+			.. "local h=game:GetService('HttpService');local a='https://api.github.com/repos/Xostrath/anomalys-hub/git/ref/heads/main?anomaly_ref='..tostring(os.time());local o,r=pcall(function()return h:JSONDecode(game:HttpGet(a))end);local u=o and r and r.object and r.object.sha and ('https://raw.githubusercontent.com/Xostrath/anomalys-hub/'..r.object.sha..'/AnomalysHub.lua') or 'https://raw.githubusercontent.com/Xostrath/anomalys-hub/refs/heads/main/AnomalysHub.lua';loadstring(game:HttpGet(u))()"
 		local ok = pcall(queueFunction, queuedLoader)
 		if ok then qolState.ServerNavigation.TeleportQueueArmed = true end
 		if ok then
@@ -26419,16 +26428,19 @@ function controller.Reload()
 				if not reader then error("readfile unavailable") end
 				return reader("GohanHub_dev.lua")
 			end
-			local url=environment.__GohanHubLoaderUrl
-			if type(url)~="string" or not url:match("^https://") then
-				url="https://raw.githubusercontent.com/Xostrath/anomalys-hub/main/AnomalysHub.lua"
+			local apiUrl="https://api.github.com/repos/Xostrath/anomalys-hub/git/ref/heads/main?anomaly_ref="..HttpService:GenerateGUID(false)
+			local refOk,refBody=pcall(function()return game:HttpGet(apiUrl)end)
+			if refOk and type(refBody)=="string" then
+				local decodedOk,ref=pcall(HttpService.JSONDecode,HttpService,refBody)
+				local sha=decodedOk and type(ref)=="table" and type(ref.object)=="table" and ref.object.sha or nil
+				if type(sha)=="string" and sha:match("^[%da-fA-F]+$") then
+					local immutableUrl="https://raw.githubusercontent.com/Xostrath/anomalys-hub/"..sha.."/AnomalysHub.lua"
+					local sourceOk,immutableSource=pcall(function()return game:HttpGet(immutableUrl)end)
+					if sourceOk and type(immutableSource)=="string" and #immutableSource>1000 then return immutableSource end
+				end
 			end
-			-- A fixed HttpGet URL can return the executor's previous download.
-			-- Request a fresh URL each time; never silently reuse the injected source.
-			url=url:gsub("#.*$", "")
-			local separator=url:find("?",1,true) and "&" or "?"
-			local freshUrl=url..separator.."anomaly_reload="..HttpService:GenerateGUID(false)
-			return game:HttpGet(freshUrl)
+			local fallback="https://raw.githubusercontent.com/Xostrath/anomalys-hub/refs/heads/main/AnomalysHub.lua"
+			return game:HttpGet(fallback.."?anomaly_ref="..HttpService:GenerateGUID(false))
 		end)
 		if not alive() then return end
 		if not ok or type(source)~="string" or source=="" then failed("Could not read hub source: "..tostring(source));return end

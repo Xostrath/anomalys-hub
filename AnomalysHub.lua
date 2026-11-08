@@ -100,7 +100,7 @@ local state = {
 	NpcEspEnabled = false,
 	NpcEspDistance = 2500,
 	NpcEspSettings = {Name = true, Distance = true, Box = true,
-		Quest = true, Enemy = true, Boss = true, Other = true, Unknown = true},
+		Quest = true, Enemy = true, Boss = true, Other = true},
 	Noclip = false,
 	InfiniteJump = false,
 	SpeedEnabled = false,
@@ -1658,7 +1658,6 @@ local roles = {
 	Enemy = {Label = "ENEMY", Color = Color3.fromRGB(255, 115, 120)},
 	Boss = {Label = "BOSS", Color = Color3.fromRGB(255, 184, 92)},
 	Other = {Label = "OTHER NPC", Color = Color3.fromRGB(130, 202, 255)},
-	Unknown = {Label = "UNCLASSIFIED", Color = Color3.fromRGB(203, 191, 218)},
 }
 
 local function removeEntry(model)
@@ -1769,9 +1768,13 @@ local function updateNpc(model, localRoot, characters)
 		return
 	end
 	local humanoid = model:FindFirstChildOfClass("Humanoid")
-	local kind, knownName = classify(model, humanoid)
+	local catalogKind, knownName = classify(model, humanoid)
+	-- User preference: unrecognized NPCs share the Quest label, color and toggle.
+	-- Keep catalog matching separate so this fallback cannot admit scenery models
+	-- without a Humanoid or claim an unverified name came from Trello.
+	local kind = catalogKind == "Unknown" and "Quest" or catalogKind
 	if not localRoot or (humanoid and humanoid.Health <= 0) or isPlayerCharacter(model, characters)
-		or (not humanoid and kind ~= "Quest" and kind ~= "Other") or state.NpcEspSettings[kind] == false then
+		or (not humanoid and catalogKind ~= "Quest" and catalogKind ~= "Other") or state.NpcEspSettings[kind] == false then
 		removeEntry(model)
 		return
 	end
@@ -1799,7 +1802,7 @@ local function updateNpc(model, localRoot, characters)
 	entry.Stroke.Enabled = settings.Box == true
 end
 
-local npcCard = ui.Card(ui.Pages.ESP, "NPC ESP", "Names, roles, distance, and outlines for NPCs. Control each category below.", 382)
+local npcCard = ui.Card(ui.Pages.ESP, "NPC ESP", "Names, roles, distance, and outlines for NPCs. Unrecognized NPCs are grouped with quests.", 340)
 npcCard.LayoutOrder = 20
 ui.Create("TextLabel", {Position = UDim2.new(0.5, 4, 0, 62), Size = UDim2.new(0.5, -18, 0, 16), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "MAX DISTANCE (STUDS)", TextColor3 = colors.Muted, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left}, npcCard)
@@ -1819,7 +1822,7 @@ end), 1, 86)
 ui.OptionGrid(npcCard, {{"Name", "NPC name / role"}, {"Distance", "Distance"}, {"Box", "Body box"}}, state.NpcEspSettings, 136)
 ui.Create("TextLabel", {Position = UDim2.fromOffset(14, 226), Size = UDim2.new(1, -28, 0, 16), BackgroundTransparency = 1,
 	Font = Enum.Font.GothamSemibold, Text = "NPC TYPES", TextColor3 = colors.Accent, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left}, npcCard)
-ui.OptionGrid(npcCard, {{"Quest", "Quest NPCs"}, {"Enemy", "Enemy NPCs"}, {"Boss", "Bosses"}, {"Other", "Other NPCs"}, {"Unknown", "Unclassified"}}, state.NpcEspSettings, 250)
+ui.OptionGrid(npcCard, {{"Quest", "Quest NPCs"}, {"Enemy", "Enemy NPCs"}, {"Boss", "Bosses"}, {"Other", "Other NPCs"}}, state.NpcEspSettings, 250)
 
 local elapsed = 0
 controller.Connect(RunService.Heartbeat, function(delta)

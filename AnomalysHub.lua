@@ -394,7 +394,7 @@ task.spawn(function()
 	if not unloaded and ok and type(info) == "table" and type(info.Name) == "string" then gameNameLabel.Text = info.Name end
 end)
 
-local playerCard = card(pages.Players, "PLAYER DIRECTORY", "Search by display name or username, then select a player below.", 354)
+local playerCard = card(pages.Players, "PLAYER DIRECTORY", "Click a player to spectate. Click them again or your own name to return.", 354)
 local playerSearch = valueBox(playerCard, "Search players...", 14, 72, 180, "", function() end)
 playerSearch.Size = UDim2.new(1, -138, 0, 34)
 local refreshPlayersButton = button(playerCard, "Refresh", 0, 72, 98, function() if state.RefreshPlayers then state.RefreshPlayers() end end)
@@ -411,7 +411,7 @@ local playerCountLabel = create("TextLabel", {
 	Position = UDim2.fromOffset(14, 318), Size = UDim2.new(1, -28, 0, 22), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "", TextColor3 = colors.Muted, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
 }, playerCard)
-local selectedCard = card(pages.Players, "SPECTATE", "Select a player above. Stop View returns the camera to your character.", 172)
+local selectedCard = card(pages.Players, "SPECTATE v2", "Click a name above to follow them. Stop View returns to your character.", 172)
 local selectedLabel = create("TextLabel", {
 	Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 42), BackgroundTransparency = 1,
 	Font = Enum.Font.GothamSemibold, Text = "No player selected", TextColor3 = colors.Text, TextSize = 11,
@@ -422,28 +422,87 @@ local function refreshSpectateStatus()
 	local selected = state.SelectedPlayer
 	local viewing = state.SpectateTarget
 	selectedLabel.Text = (selected and ("Selected: " .. selected.DisplayName) or "No player selected")
-		.. "\n" .. (viewing and ("Viewing: " .. viewing.DisplayName) or "Viewing your character")
+		.. "\n" .. (viewing and ((state.SpectateWaiting and "Waiting for character: " or "Viewing: ") .. viewing.DisplayName)
+			or (state.SpectateReturning and "Waiting for your character" or "Viewing your character"))
+end
+
+local spectateStepName = "AnomalyUniversalSpectate"
+local spectateBound, spectateCamera, spectateHumanoid = false, nil, nil
+local updateSpectating
+
+local function bindSpectateCamera(enabled)
+	if enabled == spectateBound then return end
+	spectateBound = enabled
+	if enabled then
+		-- Set the subject before Roblox's camera update so normal orbit/zoom still work.
+		RunService:BindToRenderStep(spectateStepName, Enum.RenderPriority.Camera.Value - 1, function()
+			if not unloaded then updateSpectating() end
+		end)
+	else
+		RunService:UnbindFromRenderStep(spectateStepName)
+	end
+end
+
+local function followSpectateCharacter(target)
+	local character = target.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and (character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head"))
+	local camera = workspace.CurrentCamera
+	if not camera or not humanoid or humanoid.Health <= 0 or not root or not root:IsA("BasePart")
+		or not character:IsDescendantOf(workspace) then return false end
+	if camera.CameraType ~= Enum.CameraType.Custom then camera.CameraType = Enum.CameraType.Custom end
+	if camera.CameraSubject ~= humanoid then camera.CameraSubject = humanoid end
+	if camera ~= spectateCamera or humanoid ~= spectateHumanoid then
+		-- Move immediately on acquisition/respawn; subsequent frames leave orbit and zoom alone.
+		local focus = root.Position + Vector3.new(0, 2, 0)
+		camera.CFrame = CFrame.lookAt(focus + Vector3.new(0, 4, 12), focus)
+		camera.Focus = CFrame.new(focus)
+		spectateCamera, spectateHumanoid = camera, humanoid
+	end
+	return true
 end
 
 local function stopSpectating()
-	state.SpectateTarget = nil
-	local character = player.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	if workspace.CurrentCamera and humanoid then workspace.CurrentCamera.CameraSubject = humanoid end
+	local active = state.SpectateTarget ~= nil or state.SpectateReturning == true
+	state.SpectateTarget, state.SpectateWaiting = nil, false
+	state.SpectateReturning = active and not followSpectateCharacter(player)
+	if unloaded and active and workspace.CurrentCamera then
+		-- Roblox will attach to the local Humanoid when a pending respawn finishes.
+		workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+	end
+	bindSpectateCamera(state.SpectateReturning and not unloaded)
+	spectateCamera, spectateHumanoid = nil, nil
 	refreshSpectateStatus()
 end
 
-local function spectateSelected()
-	local target = state.SelectedPlayer
-	if not target or target == player then stopSpectating(); return end
-	if state.SpectateTarget == target then refreshSpectateStatus(); return end
-	local humanoid = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
-	if not humanoid or humanoid.Health <= 0 or not workspace.CurrentCamera then
-		selectedLabel.Text = "Selected: " .. target.DisplayName .. "\nCharacter unavailable. Try again when they spawn."
+updateSpectating = function()
+	local target = state.SpectateTarget
+	if not target then
+		if state.SpectateReturning and followSpectateCharacter(player) then
+			state.SpectateReturning = false
+			bindSpectateCamera(false)
+			spectateCamera, spectateHumanoid = nil, nil
+			refreshSpectateStatus()
+		end
 		return
 	end
+	if target.Parent ~= Players then stopSpectating(); return end
+	local waiting = not followSpectateCharacter(target)
+	if waiting then followSpectateCharacter(player) end
+	if state.SpectateWaiting ~= waiting then
+		state.SpectateWaiting = waiting
+		refreshSpectateStatus()
+	end
+end
+
+local function spectateSelected()
+	if unloaded then return end
+	local target = state.SelectedPlayer
+	if not target or target == player or target.Parent ~= Players then stopSpectating(); return end
 	state.SpectateTarget = target
-	workspace.CurrentCamera.CameraSubject = humanoid
+	state.SpectateReturning = false
+	bindSpectateCamera(true)
+	updateSpectating()
 	refreshSpectateStatus()
 end
 
@@ -781,12 +840,12 @@ function state.RefreshPlayers(leaving)
 			Font = Enum.Font.GothamSemibold, Text = target == player and "YOU" or (level and level >= 0 and level < math.huge and ("LV. " .. math.floor(level)) or ""),
 			TextColor3 = colors.Accent, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right}, row)
 		table.insert(playerRowConnections, row.Activated:Connect(function()
-			if state.SelectedPlayer == target then
+			if state.SpectateTarget == target then
 				state.SelectedPlayer = nil
-				if state.SpectateTarget == target then stopSpectating() end
+				stopSpectating()
 			else
 				state.SelectedPlayer = target
-				if target == player then stopSpectating() end
+				spectateSelected()
 			end
 			refreshSpectateStatus()
 			state.RefreshPlayers()
@@ -796,7 +855,7 @@ function state.RefreshPlayers(leaving)
 		create("TextLabel", {Name = "EmptyResults", Size = UDim2.new(1, -8, 0, 42), BackgroundTransparency = 1,
 			Font = Enum.Font.Gotham, Text = "No players match your search.", TextColor3 = colors.Muted, TextSize = 11}, playerList)
 	end
-	playerCountLabel.Text = string.format("%d of %d players  |  Click a name to select", shown, total)
+	playerCountLabel.Text = string.format("%d of %d players  |  Click a name to spectate", shown, total)
 end
 state.RefreshPlayers()
 connect(playerSearch:GetPropertyChangedSignal("Text"), function() state.RefreshPlayers() end)

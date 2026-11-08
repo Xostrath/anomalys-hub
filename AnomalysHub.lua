@@ -721,11 +721,11 @@ local function updateEsp(target, localRoot)
 		}, entry.BoxGui)
 		entry.BoxStroke = create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.4, Transparency = 0}, entry.BoxFrame)
 		entry.InfoLabel = create("TextLabel", {
-			Name = "Identity", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0.5, 62, 0.5, 0),
-			Size = UDim2.fromOffset(174, 66), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
+			Name = "Identity", AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 0.5, -76),
+			Size = UDim2.fromOffset(240, 62), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
 			TextColor3 = colors.Text, TextStrokeColor3 = Color3.new(), TextStrokeTransparency = 0.12,
-			TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-			TextYAlignment = Enum.TextYAlignment.Center, ZIndex = 5,
+			TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Bottom, ZIndex = 5,
 		}, entry.BoxGui)
 		local function makeResourceBar(name, rightOffset, fillColor)
 			local background = create("Frame", {
@@ -767,7 +767,7 @@ local function updateEsp(target, localRoot)
 	entry.BoxGui.Size = UDim2.fromOffset(boxWidth + 360, boxHeight)
 	entry.BoxGui.StudsOffsetWorldSpace = centerOffset
 	entry.BoxFrame.Size = UDim2.fromOffset(boxWidth, boxHeight)
-	entry.InfoLabel.Position = UDim2.new(0.5, boxWidth / 2 + 30, 0.5, 0)
+	entry.InfoLabel.Position = UDim2.new(0.5, 0, 0.5, -(boxHeight / 2) - 10)
 	local settings = state.EspSettings
 	local lines = {}
 	if settings.Name then table.insert(lines, target.DisplayName) end
@@ -896,6 +896,8 @@ controller.GameIdentity = {
 }
 
 local Players = game:GetService("Players")
+local localPlayer = Players.LocalPlayer
+local playerGui = localPlayer and localPlayer:FindFirstChildOfClass("PlayerGui")
 local cache = setmetatable({}, {__mode = "k"})
 
 local function normalize(name)
@@ -947,11 +949,60 @@ local function readAlias(sources, aliases)
 	return nil
 end
 
-local clanAliases = {"Clan", "ClanName", "Family", "FamilyName"}
+local clanAliases = {"Lineage", "LineageName", "Bloodline", "Clan", "ClanName", "Family", "FamilyName"}
 local energyAliases = {"Energy", "CurrentEnergy", "Nen", "CurrentNen", "Aura", "CurrentAura"}
 local maxEnergyAliases = {"MaxEnergy", "EnergyMax", "MaximumEnergy", "MaxNen", "NenMax", "MaxAura", "AuraMax"}
 local staminaAliases = {"Stamina", "CurrentStamina", "Endurance", "CurrentEndurance"}
 local maxStaminaAliases = {"MaxStamina", "StaminaMax", "MaximumStamina", "MaxEndurance", "EnduranceMax"}
+local knownLineages = {}
+for _, lineage in ipairs({
+	"Zoldyck", "Kurta", "Freecss", "Frecss", "Lucifer", "Lucilfer", "Morrow", "Netero",
+	"Hill", "Hazama", "Krueger", "Koshi", "Nostrade", "Mackernasey", "Magcub", "Bine",
+	"Murasaki", "Kawalsko", "Kwalski", "Tocino", "Ndongo", "Clow", "Hackett",
+}) do
+	knownLineages[normalize(lineage)] = lineage
+end
+
+local function cleanLineageText(text, labelName)
+	text = tostring(text or ""):gsub("<.->", ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if text == "" then return nil end
+	local upper = string.upper(text)
+	local prefixed = upper:match("LINEAGE%s*[/:%-]+%s*(.+)")
+		or upper:match("CLAN%s*[/:%-]+%s*(.+)")
+		or upper:match("FAMILY%s*[/:%-]+%s*(.+)")
+	if prefixed and prefixed ~= "" and prefixed ~= "UNKNOWN" then return prefixed end
+	local normalizedName = normalize(labelName)
+	if (normalizedName:find("lineage", 1, true) or normalizedName:find("clan", 1, true) or normalizedName:find("family", 1, true))
+		and upper ~= "LINEAGE" and upper ~= "CLAN" and upper ~= "FAMILY" and upper ~= "UNKNOWN" then
+		return text
+	end
+	local known = knownLineages[normalize(text)]
+	if known then return known end
+	return nil
+end
+
+local function readLineageFromText(target, character)
+	local function scan(root, requireTargetBillboard)
+		if not root then return nil end
+		for _, object in ipairs(root:GetDescendants()) do
+			if object:IsA("TextLabel") or object:IsA("TextButton") then
+				if not (controller.UI and controller.UI.Gui and object:IsDescendantOf(controller.UI.Gui)) then
+					if requireTargetBillboard then
+						local billboard = object:FindFirstAncestorWhichIsA("BillboardGui")
+						local adornee = billboard and billboard.Adornee
+						if not billboard or not ((adornee and adornee:IsDescendantOf(character)) or billboard:IsDescendantOf(character)) then
+							continue
+						end
+					end
+					local lineage = cleanLineageText(object.Text, object.Name)
+					if lineage then return lineage end
+				end
+			end
+		end
+		return nil
+	end
+	return scan(character, false) or scan(playerGui, true)
+end
 
 function controller.ResolvePlayerEspData(target, character, humanoid)
 	local now = os.clock()
@@ -961,8 +1012,13 @@ function controller.ResolvePlayerEspData(target, character, humanoid)
 		cache[target] = entry
 	end
 	local sources = entry.Sources
+	local lineage = readAlias(sources, clanAliases)
+	if lineage == nil and (entry.LineageCheckedAt == nil or now - entry.LineageCheckedAt >= 1) then
+		entry.LineageCheckedAt = now
+		entry.LineageText = readLineageFromText(target, character)
+	end
 	return {
-		Lineage = readAlias(sources, clanAliases) or "Unknown",
+		Lineage = lineage or entry.LineageText or "Unknown",
 		Energy = readAlias(sources, energyAliases),
 		MaxEnergy = readAlias(sources, maxEnergyAliases),
 		Stamina = readAlias(sources, staminaAliases),
@@ -1030,6 +1086,9 @@ local function captureEspState()
 			if object:IsA("ValueBase") and relevant(object.Name) then
 				local valueOk, value = pcall(function() return object.Value end)
 				if valueOk then table.insert(lines, string.format("VALUE\t%s\t%s", object:GetFullName(), tostring(value))) end
+			end
+			if (object:IsA("TextLabel") or object:IsA("TextButton")) and (label ~= "LOCAL PLAYER GUI" or relevant(object.Name) or relevant(object.Text)) then
+				table.insert(lines, string.format("TEXT\t%s\tname=%s\ttext=%s", object:GetFullName(), object.Name, tostring(object.Text)))
 			end
 		end
 	end

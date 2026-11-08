@@ -396,7 +396,7 @@ task.spawn(function()
 	if not unloaded and ok and type(info) == "table" and type(info.Name) == "string" then gameNameLabel.Text = info.Name end
 end)
 
-local playerCard = card(pages.Players, "SPECTATE v5", "Choose a player with the arrows or open the list. Right-drag to orbit; scroll to zoom.", 202)
+local playerCard = card(pages.Players, "SPECTATE v6", "Choose a player with the arrows or open the list. Right-drag to orbit; scroll to zoom.", 202)
 local spectateBar = create("Frame", {
 	Name = "SpectateControls", Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 36),
 	BackgroundColor3 = colors.Surface, BorderSizePixel = 0,
@@ -1077,7 +1077,7 @@ print("[Anomaly] Universal profile loaded", game.GameId, game.PlaceId)
 
 end)()
 ;(function()
--- Spectate v5: dedicated camera plus bounded recovery of streamed-out characters.
+-- Spectate v6: streaming recovery and consistent input/GUI pointer coordinates.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" then return end
@@ -1102,7 +1102,7 @@ local function save()
 	if not dirty or type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
 	local ok = pcall(writefile, "AnomalyHub/universal/spectate_test.txt",
-		"ANOMALY SPECTATE v5 // LOCAL CAMERA, CLICK AND STREAMING DIAGNOSTICS\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(lines, "\n"))
+		"ANOMALY SPECTATE v6 // LOCAL CAMERA, CLICK AND STREAMING DIAGNOSTICS\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(lines, "\n"))
 	if ok then dirty = false end
 end
 local function refresh() controller.RefreshSpectateStatus() end
@@ -1304,11 +1304,14 @@ end
 controller.SpectateTrace = note
 state.Spectator = spectator
 
-local function pointerOnUI(position)
+local function pointerOnUI(position, screenCoordinates)
 	local pg = player:FindFirstChildOfClass("PlayerGui")
 	if not pg then return false end
-	local inset = GuiService:GetGuiInset()
-	for _, object in ipairs(pg:GetGuiObjectsAtPosition(position.X - inset.X, position.Y - inset.Y)) do
+	local x, y = position.X, position.Y
+	if screenCoordinates then
+		local inset = GuiService:GetGuiInset(); x, y = x - inset.X, y - inset.Y
+	end
+	for _, object in ipairs(pg:GetGuiObjectsAtPosition(x, y)) do
 		if object == controller.UI.Window or object:IsDescendantOf(controller.UI.Window) then return true end
 		local node = object
 		while node and node ~= pg do
@@ -1329,7 +1332,7 @@ controller.Connect(Input.InputChanged, function(input, processed)
 	if closed or not state.SpectateTarget or state.SpectateWaiting or Input:GetFocusedTextBox() then releaseMouse(); return end
 	if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then
 		yaw -= input.Delta.X * .006; pitch = math.clamp(pitch + input.Delta.Y * .006, math.rad(-70), math.rad(80))
-	elseif input.UserInputType == Enum.UserInputType.MouseWheel and not processed and not pointerOnUI(Input:GetMouseLocation()) then
+	elseif input.UserInputType == Enum.UserInputType.MouseWheel and not processed and not pointerOnUI(Input:GetMouseLocation(), true) then
 		distance = math.clamp(distance * math.exp(-input.Position.Z * .12), 3, 100)
 	end
 end)
@@ -1354,7 +1357,7 @@ controller.RegisterCleanup(function()
 	table.clear(seen)
 	if state.Spectator == spectator then state.Spectator = nil end
 end)
-note("READY v5"); save()
+note("READY v6"); save()
 
 end)()
 ;(function()
@@ -1528,16 +1531,17 @@ local function start()
 end
 controller.RecordSpectateEvent = function(message) log("EVENT " .. message) end
 controller.IsSpectateRecording = function() return capture.Active end
-controller.CaptureSpectateClick = function(phase, input, processed, target, row)
+controller.CaptureSpectateClick = function(phase, input, processed, target, row, position)
 	if not capture.Active or Input:GetFocusedTextBox() then return end
 	local pg = player:FindFirstChildOfClass("PlayerGui")
 	local inset = GuiService:GetGuiInset()
-	log("MOUSE " .. phase .. " button=" .. tostring(input.UserInputType) .. " screen=" .. tostring(input.Position)
+	position = position or input.Position
+	log("MOUSE " .. phase .. " button=" .. tostring(input.UserInputType) .. " input=" .. tostring(input.Position) .. " used=" .. tostring(position)
 		.. " inset=" .. tostring(inset) .. " processed=" .. tostring(processed) .. " resolved=" .. (target and target.Name or "nil") .. " row=" .. describe(row))
 	if not pg then return end
 	local board = pg:FindFirstChild("Leaderboard")
-	for _, query in ipairs({{Name = "GUI", X = input.Position.X - inset.X, Y = input.Position.Y - inset.Y},
-		{Name = "RAW_DIAGNOSTIC", X = input.Position.X, Y = input.Position.Y}}) do
+	for _, query in ipairs({{Name = "GUI", X = position.X, Y = position.Y},
+		{Name = "LEGACY_OFFSET", X = input.Position.X - inset.X, Y = input.Position.Y - inset.Y}}) do
 		local hits = pg:GetGuiObjectsAtPosition(query.X, query.Y)
 		log("HITS " .. query.Name .. " count=" .. #hits)
 		for i = 1, math.min(#hits, 8) do
@@ -1818,8 +1822,9 @@ local function hit(position)
 	if not pg then return end
 	local board = pg:FindFirstChild("Leaderboard")
 	if not board then return end
-	local inset = GuiService:GetGuiInset()
-	for _, object in ipairs(pg:GetGuiObjectsAtPosition(position.X - inset.X, position.Y - inset.Y)) do
+	-- InputObject.Position already uses the GUI inset coordinate system.
+	-- Subtracting the top bar again selects a row above the pointer.
+	for _, object in ipairs(pg:GetGuiObjectsAtPosition(position.X, position.Y)) do
 		if not visible(object, pg) then continue end
 		if object == board or object:IsDescendantOf(board) then
 			local target, row = resolveRow(object, pg)
@@ -1836,19 +1841,36 @@ local function mouseButton(input)
 end
 controller.Connect(Input.InputBegan, function(input, processed)
 	if closed or not mouseButton(input) or Input:GetFocusedTextBox() then return end
+	pending[input.UserInputType] = nil
 	local target, row = hit(input.Position)
-	if controller.CaptureSpectateClick then pcall(controller.CaptureSpectateClick, "DOWN", input, processed, target, row) end
+	if controller.CaptureSpectateClick then pcall(controller.CaptureSpectateClick, "DOWN", input, processed, target, row, input.Position) end
 	if target then
 		pending[input.UserInputType] = {Target = target, Row = row, Position = input.Position, At = os.clock()}
 		note("LEADERBOARD DOWN " .. target.Name .. " " .. tostring(input.UserInputType) .. " row=" .. row:GetFullName())
 	end
 end)
+local function pointerPosition()
+	-- GetMouseLocation is raw screen space, unlike InputObject.Position.
+	local mouse, inset = Input:GetMouseLocation(), GuiService:GetGuiInset()
+	return Vector3.new(mouse.X - inset.X, mouse.Y - inset.Y, 0)
+end
+controller.Connect(Input.InputChanged, function(input)
+	if closed or not next(pending) then return end
+	if input.UserInputType == Enum.UserInputType.MouseWheel then table.clear(pending); return end
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+	local position = pointerPosition()
+	for _, down in pairs(pending) do
+		if (position - down.Position).Magnitude > 8 then down.Dragged = true end
+	end
+end)
 controller.Connect(Input.InputEnded, function(input, processed)
 	if closed or not mouseButton(input) then return end
-	local target, row = hit(input.Position)
-	if controller.CaptureSpectateClick then pcall(controller.CaptureSpectateClick, "UP", input, processed, target, row) end
+	-- Mouse-button InputObjects can retain their original press position.
+	local position = pointerPosition()
+	local target, row = hit(position)
+	if controller.CaptureSpectateClick then pcall(controller.CaptureSpectateClick, "UP", input, processed, target, row, position) end
 	local down = pending[input.UserInputType]; pending[input.UserInputType] = nil
-	if not down or os.clock() - down.At > .75 or (input.Position - down.Position).Magnitude > 8 or Input:GetFocusedTextBox() then return end
+	if not down or down.Dragged or os.clock() - down.At > .75 or (position - down.Position).Magnitude > 8 or Input:GetFocusedTextBox() then return end
 	if target == down.Target and row == down.Row and target.Parent == Players then
 		note("LEADERBOARD CLICK " .. target.Name)
 		controller.ToggleSpectatePlayer(target, "Beyond Nen leaderboard")
@@ -1856,7 +1878,7 @@ controller.Connect(Input.InputEnded, function(input, processed)
 end)
 controller.Connect(Input.WindowFocusReleased, function() table.clear(pending) end)
 controller.RegisterCleanup(function() closed = true; table.clear(pending) end)
-note("LEADERBOARD READY v3 (left or right click)")
+note("LEADERBOARD READY v4 (corrected pointer coordinates; left or right click)")
 
 end)()
 ;(function()

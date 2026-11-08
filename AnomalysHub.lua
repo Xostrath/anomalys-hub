@@ -99,7 +99,7 @@ local state = {
 	EspSettings = {Name = true, Level = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
 	NpcEspEnabled = false,
 	NpcEspDistance = 2500,
-	NpcEspSettings = {Name = true, Distance = true, Box = true, Health = true,
+	NpcEspSettings = {Name = true, Distance = true, Box = true,
 		Quest = true, Enemy = true, Boss = true, Other = true, Unknown = true},
 	Noclip = false,
 	InfiniteJump = false,
@@ -249,7 +249,7 @@ local pages, tabButtons = {}, {}
 local pageMeta = {
 	Home = {"DASHBOARD", "Game-neutral tools and live session information"},
 	Players = {"PLAYERS", "Find a player and control your spectator camera"},
-	ESP = {"ESP", "Player and NPC overlays, organized separately"},
+	ESP = {"ESP", "Player and NPC overlays together, with independent controls"},
 	Movement = {"MOVEMENT", "Character movement and collision utilities"},
 	Servers = {"SERVER NAVIGATION", "Rejoin or move to another public server"},
 	Settings = {"SETTINGS", "Persistence, keybind, reload, and cleanup"},
@@ -365,27 +365,7 @@ local function optionGrid(parent, definitions, settings, firstY)
 	end
 end
 
-local espSwitcher = create("Frame", {LayoutOrder = -1, Size = UDim2.new(1, 0, 0, 38), BackgroundTransparency = 1}, pages.ESP)
-local espPages, espButtons = {}, {}
-for _, name in ipairs({"Players", "NPCs"}) do
-	local panel = create("Frame", {
-		Name = name .. "EspControls", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-		BackgroundTransparency = 1, Visible = name == "Players",
-	}, pages.ESP)
-	create("UIListLayout", {Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder}, panel)
-	espPages[name] = panel
-end
-for column, definition in ipairs({{"Players", "Player ESP"}, {"NPCs", "NPC ESP"}}) do
-	local name = definition[1]
-	espButtons[name] = fitColumn(button(espSwitcher, definition[2], 0, 0, 180, function()
-		for key, panel in pairs(espPages) do
-			panel.Visible = key == name
-			espButtons[key].BackgroundColor3 = key == name and colors.AccentSoft or colors.Surface
-		end
-		pages.ESP.CanvasPosition = Vector2.zero
-	end, name == "Players" and colors.AccentSoft or colors.Surface), column - 1, 0)
-end
-espButtons.NPCs.Visible = env.__AnomalyDetectedProfile == "BeyondNen"
+-- ESP controls share one scrolling page, with a separate card per actor type.
 
 local gameCard = card(pages.Home, "CURRENT EXPERIENCE", "This profile intentionally avoids game-specific remotes and data models.", 164)
 local gameNameLabel = create("TextLabel", {
@@ -467,7 +447,8 @@ end
 fitColumn(button(selectedCard, "Spectate Selected", 0, 0, 180, function() spectateSelected() end, colors.AccentSoft), 0, 124)
 fitColumn(button(selectedCard, "Stop View", 0, 0, 180, function() stopSpectating() end), 1, 124)
 
-local espCard = card(espPages.Players, "PLAYER ESP", "Enable player overlays and set how far they can be seen.", 146)
+local espCard = card(pages.ESP, "PLAYER ESP", "Enable player overlays and set how far they can be seen.", 146)
+espCard.LayoutOrder = 10
 create("TextLabel", {Position = UDim2.new(0.5, 4, 0, 62), Size = UDim2.new(0.5, -18, 0, 16), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "MAX DISTANCE (STUDS)", TextColor3 = colors.Muted, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left}, espCard)
 local espToggle = fitColumn(button(espCard, state.EspEnabled and "Player ESP: ON" or "Player ESP: OFF", 0, 0, 180, function(object)
@@ -692,12 +673,12 @@ end
 controller.UI = {
 	Gui = gui, Window = window, Pages = pages, TabButtons = tabButtons,
 	Colors = colors, Create = create, Card = card, Button = button, ValueBox = valueBox,
-	EspPages = espPages, FitColumn = fitColumn, OptionGrid = optionGrid,
+	PlayerEspCard = espCard, FitColumn = fitColumn, OptionGrid = optionGrid,
 }
 controller.State = state
 controller.Connect = connect
 
--- One health path for player and NPC ESP. Use the live humanoid's own maximum,
+-- Player ESP health uses the live humanoid's own maximum,
 -- without rounding, tweening, or borrowing health from a cached stats folder.
 function controller.BindEspHealth(bar, humanoid, isEnabled)
 	local active = true
@@ -1143,13 +1124,12 @@ function controller.ResolvePlayerEspData(target, character, humanoid)
 end
 
 local ui = controller.UI
-if type(ui) == "table" and ui.EspPages and ui.EspPages.Players then
-	local identityCard = ui.Card(ui.EspPages.Players, "NAMES & OUTLINES", "Choose the information shown above players and their body outline.", 164)
-	identityCard.LayoutOrder = 10
-	ui.OptionGrid(identityCard, {{"Name", "Name"}, {"Level", "Level"}, {"Distance", "Distance"}, {"Box", "Body box"}}, controller.State.EspSettings, 72)
-	local resourcesCard = ui.Card(ui.EspPages.Players, "RESOURCE BARS", "Bars sit outside the body box: health, energy, then stamina.", 164)
-	resourcesCard.LayoutOrder = 20
-	ui.OptionGrid(resourcesCard, {{"Health", "Health bar"}, {"Energy", "Energy bar"}, {"Stamina", "Stamina bar"}}, controller.State.EspSettings, 72)
+if type(ui) == "table" and ui.PlayerEspCard then
+	ui.PlayerEspCard.Size = UDim2.new(1, 0, 0, 310)
+	ui.OptionGrid(ui.PlayerEspCard, {
+		{"Name", "Name"}, {"Level", "Level"}, {"Distance", "Distance"}, {"Box", "Body box"},
+		{"Health", "Health bar"}, {"Energy", "Energy bar"}, {"Stamina", "Stamina bar"},
+	}, controller.State.EspSettings, 136)
 end
 
 local function captureEspState()
@@ -1594,7 +1574,7 @@ refreshSources(); save(); render()
 
 end)()
 ;(function()
--- Beyond Nen NPC ESP. Reads streamed humanoids only; sends no game requests.
+-- Beyond Nen NPC ESP. Reads loaded NPC models; sends no game requests.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -1684,7 +1664,6 @@ local roles = {
 local function removeEntry(model)
 	local entry = entries[model]
 	if not entry then return end
-	if entry.HealthBinding then entry.HealthBinding.Disconnect() end
 	entry.Gui:Destroy()
 	entry.BoxGui:Destroy()
 	entries[model] = nil
@@ -1700,8 +1679,7 @@ local function track(object)
 	if not model or not model:IsA("Model") or tracked[model] then return end
 	local humanoid = model:FindFirstChildOfClass("Humanoid")
 	local kind = classify(model, humanoid)
-	-- Known quest/service rigs can be static models without a Humanoid. Their
-	-- labels still work, but they must never get an invented health bar.
+	-- Known quest/service rigs can be static models without a Humanoid.
 	if humanoid or kind == "Quest" or kind == "Other" then tracked[model] = true end
 end
 
@@ -1769,31 +1747,18 @@ local function makeEntry(model, root)
 		TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
 		TextYAlignment = Enum.TextYAlignment.Bottom,
 	}, entry.Gui)
-	-- Match the player ESP: stable dimensions in studs, a white body box, and
-	-- health outside the box but inside the padded BillboardGui drawing canvas.
+	-- Stable dimensions in studs. Four pixels of padding protect the outline;
+	-- NPC overlays have no resource bars.
 	entry.BoxGui = create("BillboardGui", {
-		Name = "AnomalyBeyondNenNPCBox", Size = UDim2.new(width, 64, height, 8),
+		Name = "AnomalyBeyondNenNPCBox", Size = UDim2.new(width, 8, height, 8),
 		StudsOffsetWorldSpace = offset, AlwaysOnTop = true, LightInfluence = 0,
 		Adornee = root, ClipsDescendants = false,
 	}, ui.Gui)
 	local box = create("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.new(1, -64, 1, -8), BackgroundTransparency = 1, BorderSizePixel = 0,
+		Size = UDim2.new(1, -8, 1, -8), BackgroundTransparency = 1, BorderSizePixel = 0,
 	}, entry.BoxGui)
 	entry.Stroke = create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.4}, box)
-	entry.Health = create("Frame", {
-		Name = "Health", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -23, 0, 4),
-		Size = UDim2.new(0, 7, 1, -8), BackgroundColor3 = Color3.fromRGB(8, 8, 8),
-		BorderSizePixel = 0, ZIndex = 3,
-	}, entry.BoxGui)
-	create("UICorner", {CornerRadius = UDim.new(0, 3)}, entry.Health)
-	create("UIStroke", {Color = Color3.fromRGB(15, 15, 15), Thickness = 1}, entry.Health)
-	entry.Fill = create("Frame", {
-		Name = "Fill", AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1),
-		Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(239, 55, 62),
-		BorderSizePixel = 0, ZIndex = 4,
-	}, entry.Health)
-	create("UICorner", {CornerRadius = UDim.new(0, 3)}, entry.Fill)
 	return entry
 end
 
@@ -1819,13 +1784,6 @@ local function updateNpc(model, localRoot, characters)
 		removeEntry(model)
 		entry = makeEntry(model, root)
 		entry.Humanoid = humanoid
-		if humanoid then
-			entry.HealthBinding = controller.BindEspHealth({Background = entry.Health, Fill = entry.Fill}, humanoid, function()
-				return state.NpcEspEnabled and state.NpcEspSettings.Health
-			end)
-		else
-			entry.Health.Visible = false
-		end
 		entries[model] = entry
 	end
 	local settings, lines = state.NpcEspSettings, {}
@@ -1837,13 +1795,12 @@ local function updateNpc(model, localRoot, characters)
 	entry.Gui.Enabled = #lines > 0
 	entry.Gui.MaxDistance = state.NpcEspDistance
 	entry.BoxGui.MaxDistance = state.NpcEspDistance
-	entry.BoxGui.Enabled = settings.Box or (settings.Health and humanoid ~= nil)
+	entry.BoxGui.Enabled = settings.Box == true
 	entry.Stroke.Enabled = settings.Box == true
-	if entry.HealthBinding then entry.HealthBinding.Refresh() end
 end
 
-local npcPage = ui.EspPages.NPCs
-local npcCard = ui.Card(npcPage, "NPC ESP", "Enable NPC overlays and set how far they can be seen.", 146)
+local npcCard = ui.Card(ui.Pages.ESP, "NPC ESP", "Names, roles, distance, and outlines for NPCs. Control each category below.", 382)
+npcCard.LayoutOrder = 20
 ui.Create("TextLabel", {Position = UDim2.new(0.5, 4, 0, 62), Size = UDim2.new(0.5, -18, 0, 16), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "MAX DISTANCE (STUDS)", TextColor3 = colors.Muted, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left}, npcCard)
 ui.FitColumn(ui.Button(npcCard, state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF", 0, 0, 180, function(object)
@@ -1859,12 +1816,10 @@ ui.FitColumn(ui.ValueBox(npcCard, "NPC range (studs)", 0, 0, 180, state.NpcEspDi
 	box.Text = tostring(math.floor(state.NpcEspDistance))
 	controller.SaveConfig()
 end), 1, 86)
-local typesCard = ui.Card(npcPage, "NPC TYPES", "Green quests, red enemies, orange bosses, blue other NPCs, gray unclassified.", 206)
-typesCard.LayoutOrder = 10
-ui.OptionGrid(typesCard, {{"Quest", "Quest NPCs"}, {"Enemy", "Enemy NPCs"}, {"Boss", "Bosses"}, {"Other", "Other NPCs"}, {"Unknown", "Unclassified"}}, state.NpcEspSettings, 72)
-local displayCard = ui.Card(npcPage, "NAMES, HEALTH & OUTLINES", "Choose the details shown for each visible NPC.", 164)
-displayCard.LayoutOrder = 20
-ui.OptionGrid(displayCard, {{"Name", "NPC name / role"}, {"Distance", "Distance"}, {"Health", "Health bar"}, {"Box", "Body box"}}, state.NpcEspSettings, 72)
+ui.OptionGrid(npcCard, {{"Name", "NPC name / role"}, {"Distance", "Distance"}, {"Box", "Body box"}}, state.NpcEspSettings, 136)
+ui.Create("TextLabel", {Position = UDim2.fromOffset(14, 226), Size = UDim2.new(1, -28, 0, 16), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold, Text = "NPC TYPES", TextColor3 = colors.Accent, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left}, npcCard)
+ui.OptionGrid(npcCard, {{"Quest", "Quest NPCs"}, {"Enemy", "Enemy NPCs"}, {"Boss", "Bosses"}, {"Other", "Other NPCs"}, {"Unknown", "Unclassified"}}, state.NpcEspSettings, 250)
 
 local elapsed = 0
 controller.Connect(RunService.Heartbeat, function(delta)

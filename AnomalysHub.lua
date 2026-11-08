@@ -207,7 +207,7 @@ create("TextLabel", {
 }, sidebar)
 
 local tabBar = create("Frame", {
-	Position = UDim2.fromOffset(10, 76), Size = UDim2.new(1, -20, 0, 260), BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(10, 76), Size = UDim2.new(1, -20, 0, 300), BackgroundTransparency = 1,
 }, sidebar)
 create("UIListLayout", {Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder}, tabBar)
 
@@ -250,6 +250,7 @@ local pageMeta = {
 	Home = {"DASHBOARD", "Game-neutral tools and live session information"},
 	Players = {"PLAYERS", "Find a player and control your spectator camera"},
 	ESP = {"ESP", "Player and NPC overlays together, with independent controls"},
+	Auto = {"AUTO", "Automatic activities and setup controls"},
 	Movement = {"MOVEMENT", "Character movement and collision utilities"},
 	Servers = {"SERVER NAVIGATION", "Rejoin or move to another public server"},
 	Settings = {"SETTINGS", "Persistence, keybind, reload, and cleanup"},
@@ -266,6 +267,7 @@ local function makePage(name)
 	return page
 end
 for _, name in ipairs({"Home", "Players", "ESP", "Movement", "Servers", "Settings"}) do makePage(name) end
+if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
 
 local function selectTab(name)
 	if not pages[name] then return end
@@ -284,6 +286,7 @@ local function selectTab(name)
 end
 
 local tabNames = {{"Home", "[D]  Dashboard"}, {"Players", "[P]  Players"}, {"ESP", "[E]  ESP"}, {"Movement", "[M]  Movement"}, {"Servers", "[S]  Servers"}, {"Settings", "[=]  Settings"}}
+if pages.Auto then table.insert(tabNames, 4, {"Auto", "[A]  Auto"}) end
 for order, definition in ipairs(tabNames) do
 	local name, text = definition[1], definition[2]
 	local button = create("TextButton", {
@@ -1952,6 +1955,245 @@ controller.RegisterCleanup(function()
 	stopWatching()
 end)
 if state.NpcEspEnabled then startWatching() end
+
+end)()
+;(function()
+-- Beyond Nen fishing setup: passive recording only until a full catch is observed.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local player = Players.LocalPlayer
+local playerGui = player:FindFirstChildOfClass("PlayerGui")
+local ui = controller.UI
+local path = "AnomalyHub/universal/beyond_nen_fishing_capture.txt"
+local capture = {Active = false, Closed = false, Serial = 0, Lines = {}, Bytes = 0, Connections = {}, LastUI = {}}
+
+-- Persistent forwarding hooks are installed once. While stopped/unloaded their
+-- target map is empty and no UI, character or capture callback is retained.
+local probe = env.__AnomalyBeyondFishingProbe
+if type(probe) ~= "table" then
+	probe = {Targets = {}, Coverage = {}}
+	env.__AnomalyBeyondFishingProbe = probe
+end
+
+local function sample(value, depth, seen, budget)
+	depth, seen, budget = depth or 0, seen or {}, budget or {Left = 256}
+	budget.Left -= 1; if budget.Left < 0 then return "<node limit>" end
+	local kind = typeof(value)
+	if kind == "Instance" then return "<" .. value.ClassName .. ":" .. value:GetFullName() .. ">" end
+	if kind == "string" then return string.format("%q", value:sub(1, 400)) end
+	if kind ~= "table" then return tostring(value) end
+	if seen[value] then return "<cycle>" end
+	if depth >= 4 then return "<depth limit>" end
+	seen[value] = true
+	local fields, count = {}, 0
+	for key, item in pairs(value) do
+		if budget.Left <= 0 then table.insert(fields, "<node limit>"); break end
+		count += 1; if count > 24 then table.insert(fields, "<field limit>"); break end
+		table.insert(fields, sample(key, depth + 1, seen, budget) .. "=" .. sample(item, depth + 1, seen, budget))
+	end
+	seen[value] = nil
+	return "{" .. table.concat(fields, ",") .. "}"
+end
+
+local function log(text)
+	if #capture.Lines >= 2500 or capture.Bytes >= 300000 then capture.Limited = true; return end
+	local line = string.format("%.3fs\t%s", os.clock() - capture.Started, tostring(text):sub(1, 6000))
+	table.insert(capture.Lines, line); capture.Bytes += #line + 1
+end
+
+local function save(reason)
+	local report = "BEYOND NEN FISHING // PASSIVE v1\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
+		.. "\nNo inputs sent, requests replayed, scripts decompiled or game functions invoked.\n"
+		.. "Outgoing records appear after requests return; requestStart preserves their original time. Failed/pending requests may be absent.\n"
+		.. "UI sample interval=0.10s; tables limited to 4 levels/24 fields/256 nodes; GUI limited to 180 objects.\n"
+		.. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason
+		.. (capture.Limited and "\nREPORT LIMIT REACHED" or "")
+	capture.Report = report
+	if type(writefile) ~= "function" then return false end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	return pcall(writefile, path, report)
+end
+
+local function observe(remote, direction, args, serial, started)
+	if not capture.Active or capture.Closed or serial ~= capture.Serial then return end
+	local name = probe.Targets[remote]
+	if name then log(name .. " " .. direction .. " requestStart=" .. string.format("%.3f", started - capture.Started) .. " args=" .. sample(args)) end
+end
+
+local function discover()
+	local targets = {}
+	for _, object in ipairs(ReplicatedStorage:GetDescendants()) do
+		if object.Name ~= "FishingService" then continue end
+		local rf, re = object:FindFirstChild("RF"), object:FindFirstChild("RE")
+		local cast, reel = rf and rf:FindFirstChild("Cast"), rf and rf:FindFirstChild("Reel")
+		if not cast or not reel or not cast:IsA("RemoteFunction") or not reel:IsA("RemoteFunction") then continue end
+		targets[cast], targets[reel] = "Cast", "Reel"
+		for _, name in ipairs({"Bite", "Hold", "Result"}) do
+			local remote = re and re:FindFirstChild(name)
+			if remote and remote:IsA("RemoteEvent") then targets[remote] = name end
+		end
+		return targets, cast, re and re:FindFirstChild("Hold")
+	end
+	return targets
+end
+
+local function installHooks(cast, hold)
+	local hook = env.hookmetamethod or hookmetamethod
+	local method = env.getnamecallmethod or getnamecallmethod
+	local wrap = env.newcclosure or newcclosure or function(callback) return callback end
+	if not probe.NamecallInstalled and type(hook) == "function" and type(method) == "function" then
+		local original
+		local ok = pcall(function()
+			original = hook(game, "__namecall", wrap(function(self, ...)
+				if not probe.Callback or not probe.Targets[self] then return original(self, ...) end
+				local valid, callMethod = pcall(method)
+				if not valid or (callMethod ~= "InvokeServer" and callMethod ~= "FireServer") then return original(self, ...) end
+				local callback, serial, started, args = probe.Callback, probe.Serial, os.clock(), table.pack(...)
+				-- Do not call Instance methods before forwarding: Volt dispatch can be affected.
+				local returned = table.pack(original(self, ...))
+				pcall(callback, self, "OUT " .. callMethod, args, serial, started)
+				if callMethod == "InvokeServer" then pcall(callback, self, "RETURN namecall", returned, serial, started) end
+				return table.unpack(returned, 1, returned.n)
+			end))
+		end)
+		if ok then probe.NamecallInstalled = true; table.insert(probe.Coverage, "namecalls") end
+	end
+	local hookFunction = env.hookfunction or hookfunction
+	if type(hookFunction) ~= "function" then return end
+	local function direct(remote, property, flag)
+		if not remote or probe[flag] then return end
+		local original
+		local ok = pcall(function()
+			original = hookFunction(remote[property], wrap(function(self, ...)
+				if not probe.Callback or not probe.Targets[self] then return original(self, ...) end
+				local callback, serial, started, args = probe.Callback, probe.Serial, os.clock(), table.pack(...)
+				local returned = table.pack(original(self, ...))
+				pcall(callback, self, "OUT direct " .. property, args, serial, started)
+				if property == "InvokeServer" then pcall(callback, self, "RETURN direct", returned, serial, started) end
+				return table.unpack(returned, 1, returned.n)
+			end))
+		end)
+		if ok then probe[flag] = true; table.insert(probe.Coverage, "direct " .. property) end
+	end
+	direct(cast, "InvokeServer", "InvokeInstalled")
+	direct(hold, "FireServer", "FireInstalled")
+end
+
+local function sampleUI()
+	local current = {}
+	local fishing = playerGui and playerGui:FindFirstChild("Fishing")
+	if fishing then
+		local objects = {fishing}
+		for _, object in ipairs(fishing:GetDescendants()) do
+			if #objects >= 180 then current["UI LIMIT"] = "180 objects; remaining GUI omitted"; break end
+			table.insert(objects, object)
+		end
+		for _, object in ipairs(objects) do
+			local info = object.ClassName
+			if object:IsA("LayerCollector") then info ..= " enabled=" .. tostring(object.Enabled) end
+			if object:IsA("GuiObject") then
+				info ..= " visible=" .. tostring(object.Visible) .. " pos=" .. tostring(object.Position) .. " size=" .. tostring(object.Size)
+					.. " absPos=" .. tostring(object.AbsolutePosition) .. " absSize=" .. tostring(object.AbsoluteSize) .. " rotation=" .. tostring(object.Rotation)
+			end
+			if object:IsA("TextLabel") or object:IsA("TextButton") then info ..= " text=" .. sample(object.Text) end
+			if object:IsA("GuiObject") then info ..= " color=" .. tostring(object.BackgroundColor3) end
+			current[object:GetFullName()] = info
+		end
+	else current["Fishing GUI"] = "not loaded" end
+	local character = player.Character
+	if character then
+		for _, object in ipairs(character:GetChildren()) do
+			if object:IsA("Tool") then current["Equipped tool:" .. object.Name] = "enabled=" .. tostring(object.Enabled) end
+		end
+	end
+	for _, key in ipairs({"Fishing", "TitleFishCaught"}) do current["Player@" .. key] = tostring(player:GetAttribute(key)) end
+	for key, value in pairs(current) do if capture.LastUI[key] ~= value then log("STATE " .. key .. " " .. value) end end
+	for key in pairs(capture.LastUI) do if current[key] == nil then log("REMOVED " .. key) end end
+	capture.LastUI = current
+end
+
+local card = ui.Card(ui.Pages.Auto, "AUTO FISHING SETUP", "Record one complete catch so auto fishing can use this game's cast, bite and catch controls.", 218)
+local status = ui.Create("TextLabel", {
+	Position = UDim2.fromOffset(14, 124), Size = UDim2.new(1, -28, 0, 76), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Ready. Equip a rod, start recording, then fish normally through one catch.",
+	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, card)
+local recordButton
+local function stop(reason)
+	if not capture.Active then return end
+	pcall(sampleUI)
+	capture.Active = false
+	if probe.Callback == observe then probe.Callback = nil; probe.Targets = {} end
+	for _, connection in ipairs(capture.Connections) do connection:Disconnect() end
+	table.clear(capture.Connections)
+	local ok = save(reason)
+	status.Text = ok and "Recording saved. The catch is ready to review." or "File saving unavailable. Use Copy Recording."
+	recordButton.Text = "Record Fishing"
+end
+
+local function start()
+	if capture.Closed then return end
+	if capture.Active then stop("STOPPED"); return end
+	capture.Serial += 1
+	capture.Started, capture.LastSaved = os.clock(), os.clock()
+	capture.Lines, capture.Bytes, capture.Limited, capture.LastUI = {}, 0, false, {}
+	local targets, cast, hold = discover()
+	probe.Targets = targets
+	installHooks(cast, hold)
+	log("Coverage: " .. (#probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "incoming events and UI only; outgoing hooks unavailable"))
+	log("Some outgoing calls may be observed by both hook types; IN events are logged once.")
+	for remote, name in pairs(targets) do log("REMOTE " .. name .. " " .. remote:GetFullName()) end
+	capture.Active = true
+	probe.Serial, probe.Callback = capture.Serial, observe
+	for remote, name in pairs(targets) do
+		if remote:IsA("RemoteEvent") then
+			local serial = capture.Serial
+			table.insert(capture.Connections, remote.OnClientEvent:Connect(function(...)
+				if capture.Active and capture.Serial == serial then pcall(observe, remote, "IN event", table.pack(...), serial, os.clock()) end
+			end))
+		end
+	end
+	local function input(direction, value, processed)
+		if value.UserInputType == Enum.UserInputType.MouseMovement then return end
+		log(direction .. " " .. tostring(value.UserInputType) .. " " .. tostring(value.KeyCode) .. " processed=" .. tostring(processed))
+	end
+	table.insert(capture.Connections, UserInputService.InputBegan:Connect(function(value, processed) input("INPUT DOWN", value, processed) end))
+	table.insert(capture.Connections, UserInputService.InputEnded:Connect(function(value, processed) input("INPUT UP", value, processed) end))
+	pcall(sampleUI); save("RECORDING")
+	recordButton.Text = "Stop + Save"
+	status.Text = "Recording for up to 90 seconds. Cast, play the fishing minigame, then press Stop + Save after the result."
+	if not cast then log("FishingService was not found; GUI/input recording only. Start a fresh recording after the rod is equipped.") end
+end
+
+recordButton = ui.FitColumn(ui.Button(card, "Record Fishing", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
+ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()
+	if capture.Active then save("RECORDING") end
+	if capture.Report and type(setclipboard) == "function" then
+		local ok = pcall(setclipboard, capture.Report)
+		status.Text = ok and "Recording copied." or "Clipboard unavailable."
+	end
+end), 1, 72)
+
+local elapsed = 0
+controller.Connect(RunService.Heartbeat, function(delta)
+	if not capture.Active then return end
+	elapsed += delta
+	if elapsed >= 0.1 then elapsed = 0; pcall(sampleUI) end
+	if capture.Limited then stop("LIMIT_REACHED")
+	elseif os.clock() - capture.Started >= 90 then stop("COMPLETE")
+	elseif os.clock() - capture.LastSaved >= 5 then save("RECORDING"); capture.LastSaved = os.clock() end
+end)
+controller.RegisterCleanup(function()
+	stop("UNLOAD")
+	capture.Closed = true
+	if probe.Callback == observe then probe.Callback = nil; probe.Targets = {} end
+end)
+controller.CaptureBeyondNenFishing = start
 
 end)()
 end

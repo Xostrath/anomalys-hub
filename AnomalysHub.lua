@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v7. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v8. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3154,8 +3154,21 @@ local weaponProfiles = {
 		["96407208954530"] = {Phase = .70, Name = "M1-4"},
 		["70453902034107"] = {Phase = .42, Name = "air attack"},
 	}},
+	pitchfork = {Label = "Pitchfork", Animations = {
+		-- Separate Character.Weapon="Pitchfork" capture. ComboIndex identifies
+		-- five swings, including a different fourth hit from BigPitchfork.
+		-- Receipt phases seed these timings; automatic outcomes need testing.
+		["89044806752056"] = {Phase = .45, Name = "pitchfork M1-1"},
+		["139612134161012"] = {Phase = .46, Name = "pitchfork M1-2"},
+		["78313572240630"] = {Phase = .56, Name = "pitchfork M1-3"},
+		["86545722075718"] = {Phase = .54, Name = "pitchfork M1-4"},
+		["96407208954530"] = {Phase = .65, Name = "pitchfork M1-5"},
+		-- Four contacts persist within the same track, including after a parry.
+		-- Do not transfer this contact schedule to the other weapon profile.
+		["70453902034107"] = {Phases = {.25, .43, .62, 1.00}, Name = "pitchfork multi-hit"},
+	}},
 	sword = {Label = "Sword (recorded)", Reach = 12, MaxDistance = 15, Animations = {
-		-- User identified the 2026-11-08 player weapon as "achive sword".
+		-- User identified "achive sword"; later equipment data says Archive Sword.
 		-- Player.CombatStyle remained Fists. These distinct animation IDs and
 		-- health-drop phase samples identify this set, not the player's name.
 		-- Contact estimates only; none has an automatic parry confirmation yet.
@@ -3197,7 +3210,7 @@ for _, key in ipairs({"sword", "dagger"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v7", "Fists / BigPitchfork / Sword / Dagger. Additional dagger strike mapped; input-state diagnostics expanded.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v8", "Fists / Pitchfork / BigPitchfork / Sword / Dagger. Pitchfork combo and multi-hit attacks added.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3210,10 +3223,10 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v7 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v8 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nFists: 12 animations. BigPitchfork: 5. Sword: 9. Dagger: 8 (one with four recorded contacts). New dagger/sword automatic timings are under test. No actor-name filters."
+		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 8. Pitchfork and Dagger each have one four-contact move. New pitchfork/dagger/sword timings are under test. No actor-name filters."
 		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger IDs select their profile. Explicit conflicting Character.Weapon is never overridden. Sword reach 12 studs; other profiles retain 9."
 		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
 		.. "\nCOMBAT_STATE records raw local attributes at inputs, damage and rejections; their clock bases may differ. NO_OBSERVED_REQUEST means no hook observation before the deadline/stop, not proof that nothing reached the server."
@@ -3293,7 +3306,7 @@ local function weaponOf(rig)
 	end
 	local key = type(value) == "string" and value:lower():gsub("[%s_%-]", "") or "unknown"
 	if key == "fist" then key = "fists" end
-	if key == "achivesword" then key = "sword" end
+	if key == "achivesword" or key == "archivesword" then key = "sword" end
 	if key == "phantomgoonsdagger" then key = "dagger" end
 	return key, weaponProfiles[key], source
 end
@@ -3573,7 +3586,7 @@ local function step()
 			end
 		end
 	end
-	if not best then show("Watching mapped Fists / BigPitchfork / Sword / Dagger attacks"); return end
+	if not best then show("Watching mapped Fists / Pitchfork / BigPitchfork / Sword / Dagger attacks"); return end
 	best.Swing.Contact = best.Contact + 1
 	best.Swing.Used = best.Contact >= best.ContactCount
 	state.LastAttempt = {At = now, Self = model, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
@@ -3603,7 +3616,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,BigPitchfork,Sword,Dagger mapped=34 duration=90")
+	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger mappedWeaponAnimations=40 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

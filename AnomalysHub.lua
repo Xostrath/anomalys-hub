@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v10. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v11. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3201,10 +3201,11 @@ local weaponProfiles = {
 		-- those contacts within 9 studs as threats even after the wielder turns;
 		-- this is a conservative test rule, not a measured server hitbox radius.
 		["78084477149043"] = {Phases = {.30, .52, .87, 1.12, 1.50}, FollowupRadius = 9, Name = "dagger multi-hit"},
-		-- Seven observed contacts; v9 confirms automatic parries on this move.
+		-- v9 confirms automatic parries; v10 records an eighth contact at
+		-- phases 1.798/1.817 after the seventh, including after an earlier parry.
 		-- A health drop at distance 16.50 after a skip at projected 16.31 shows
 		-- the default melee range is insufficient. Broader bounds apply only here.
-		["81971337593137"] = {Phases = {.52, .70, .88, 1.06, 1.24, 1.42, 1.60}, Reach = 18, MaxDistance = 22, Name = "dagger repeated strike"},
+		["81971337593137"] = {Phases = {.52, .70, .88, 1.06, 1.24, 1.42, 1.60, 1.78}, Reach = 18, MaxDistance = 22, Name = "dagger repeated strike"},
 		-- Three damage samples at phases 1.354/1.367/1.421, speed 1.0, up to
 		-- 11.96 studs. Timing seed only: exact name and parryability unverified.
 		["17087924823"] = {Phase = 1.32, Reach = 13, MaxDistance = 16, Name = "dagger long-windup strike (test)"},
@@ -3220,7 +3221,7 @@ for _, key in ipairs({"sword", "dagger"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v10", "Fists / Pitchfork / BigPitchfork / Sword / Dagger. Repeated-strike range fixed; long-windup strike added for testing.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v11", "Fists / Pitchfork / BigPitchfork / Sword / Dagger. Repeated-strike final hit added; missed block inputs recorded.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3233,15 +3234,17 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v10 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v11 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 10. Pitchfork has a four-contact move; Dagger has five- and seven-contact moves. New timings remain under test. No actor-name filters."
+		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 10. Pitchfork has a four-contact move; Dagger has five- and eight-contact moves. New timings remain under test. No actor-name filters."
 		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger IDs select their profile. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Dagger repeated strike 18 and long-windup strike 13."
 		.. "\nDagger 78084477149043 follow-ups use current distance within 9 studs regardless of facing/projection; its first contact retains directional checks. This test rule is not a measured hitbox."
 		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
 		.. "\nCOMBAT_STATE records raw local attributes at inputs, damage and rejections; their clock bases may differ. NO_OBSERVED_REQUEST means no hook observation before the deadline/stop, not proof that nothing reached the server."
 		.. "\nDECISION requestDelay is local elapsed time from outgoing observation to response, not isolated network latency. Rejected requests are not replayed or retimestamped."
+		.. "\nBLOCK_EVENT observes only the configured block key outside text focus; input numbers correlate with a nearby automatic press, not proof of input origin. processed=true is the engine flag, not a confirmed rejection. SELF_ACTIONS records bounded local animation IDs/phases; no action is cancelled or replayed."
+		.. "\nDAMAGE_NEARBY includes up to 12 playing tracks of any priority/loop state, with totalTracks to expose the sampling limit. Unmapped/looping tracks remain diagnostic only."
 		.. "\nUnknown weapons and animation variants are logged and skipped; a Fists label alone does not establish every fist animation's timing."
 		.. "\nConfirmed counts require ParryResult with local Parrier, matching attacker and a recent test input. Accepted is only an input acknowledgment."
 		.. "\n" .. table.concat(state.Lines, "\n") .. "\nSTATUS=" .. tostring(reason)
@@ -3276,13 +3279,42 @@ local function combatSnapshot(context, model)
 		table.insert(values, key .. "=" .. tostring(model:GetAttribute(key)))
 	end
 	local ok, server = pcall(workspace.GetServerTimeNow, workspace)
-	note("COMBAT_STATE " .. context .. " server=" .. (ok and tostring(server) or "unavailable") .. " " .. table.concat(values, " "))
+	note("COMBAT_STATE " .. context .. " localClock=" .. tostring(os.clock()) .. " server=" .. (ok and tostring(server) or "unavailable") .. " " .. table.concat(values, " "))
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+	local tracks, inspected = {}, 0
+	if animator then
+		for index, track in ipairs(animator:GetPlayingAnimationTracks()) do
+			if index > 12 then break end
+			inspected += 1
+			if track.IsPlaying then
+				local id = track.Animation and tostring(track.Animation.AnimationId):match("%d+") or "unknown"
+				table.insert(tracks, string.format("%s:%.3f@%.3f/%s/loop=%s", id, track.TimePosition, track.Speed, tostring(track.Priority), tostring(track.Looped)))
+			end
+		end
+	end
+	note("SELF_ACTIONS " .. context .. " inspected=" .. inspected .. " tracks=" .. (#tracks > 0 and table.concat(tracks, ",") or "none")
+		.. " focusedText=" .. tostring(Input:GetFocusedTextBox() ~= nil) .. " menu=" .. tostring(GuiService.MenuIsOpen)
+		.. " hubVisible=" .. tostring(controller.UI.Gui and controller.UI.Gui.Enabled))
+end
+local function blockEvent(direction, input, processed)
+	if state.Closed or (not state.Enabled and not state.Held) or Input:GetFocusedTextBox() then return end
+	if input.KeyCode ~= state.Key then return end
+	local now, attempt = os.clock(), state.LastAttempt
+	local matching = attempt and attempt.Key == input.KeyCode and now - attempt.At >= 0 and now - attempt.At <= .4
+	if matching then
+		if direction == "DOWN" then attempt.EngineDownAt, attempt.EngineDownProcessed = now, processed == true
+		else attempt.EngineUpAt, attempt.EngineUpProcessed = now, processed == true end
+	end
+	note("BLOCK_EVENT " .. direction .. " key=" .. input.KeyCode.Name .. " input=" .. (matching and tostring(attempt.Serial) or "external")
+		.. " processed=" .. tostring(processed == true) .. " delay=" .. (matching and string.format("%.3f", now - attempt.At) or "n/a"))
 end
 local function auditRequests(now, reason)
 	for serial, attempt in pairs(state.PendingInputs or {}) do
 		if attempt.RequestId then state.PendingInputs[serial] = nil
 		elseif now - attempt.At >= .3 or reason then
-			note(string.format("NO_OBSERVED_REQUEST input=%d elapsed=%.3f reason=%s", serial, now - attempt.At, reason or "observation-deadline"))
+			note(string.format("NO_OBSERVED_REQUEST input=%d elapsed=%.3f reason=%s engineDown=%s downProcessed=%s engineUp=%s upProcessed=%s",
+				serial, now - attempt.At, reason or "observation-deadline", tostring(attempt.EngineDownAt ~= nil), tostring(attempt.EngineDownProcessed), tostring(attempt.EngineUpAt ~= nil), tostring(attempt.EngineUpProcessed)))
 			combatSnapshot("no-request input=" .. serial, attempt.Self)
 			state.PendingInputs[serial] = nil
 		end
@@ -3393,16 +3425,17 @@ local function damageSnapshot(localRoot)
 		if not distance or distance > 18 then continue end
 		local key = weaponOf(rig)
 		local tracks = {}
-		for index, track in ipairs(rig.Animator:GetPlayingAnimationTracks()) do
+		local playing = rig.Animator:GetPlayingAnimationTracks()
+		for index, track in ipairs(playing) do
 			if index > 12 then break end
-			if track.IsPlaying and not track.Looped and tostring(track.Priority):find("Action", 1, true) then
+			if track.IsPlaying then
 				local id = track.Animation and tostring(track.Animation.AnimationId):match("%d+") or "unknown"
-				table.insert(tracks, string.format("%s:%.3f@%.3f", id, track.TimePosition, track.Speed))
+				table.insert(tracks, string.format("%s:%.3f@%.3f/%s/loop=%s", id, track.TimePosition, track.Speed, tostring(track.Priority), tostring(track.Looped)))
 			end
 		end
 		local delta = localRoot.Position - root.Position
 		local facingDot = distance < 1 and 1 or root.CFrame.LookVector:Dot(delta.Unit)
-		note(string.format("DAMAGE_NEARBY actor=%s weapon=%s distance=%.2f tracks(id:phase@speed)=%s actorId=%d facing=%.3f", rig.Model.Name, key, distance, table.concat(tracks, ","), rig.Id, facingDot))
+		note(string.format("DAMAGE_NEARBY actor=%s weapon=%s distance=%.2f tracks(id:phase@speed/priority/loop)=%s actorId=%d facing=%.3f totalTracks=%d", rig.Model.Name, key, distance, table.concat(tracks, ","), rig.Id, facingDot, #playing))
 	end
 end
 local function watchTrack(rig, track)
@@ -3606,7 +3639,7 @@ local function step()
 	if not best then show("Watching mapped Fists / Pitchfork / BigPitchfork / Sword / Dagger attacks"); return end
 	best.Swing.Contact = best.Contact + 1
 	best.Swing.Used = best.Contact >= best.ContactCount
-	state.LastAttempt = {At = now, Self = model, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
+	state.LastAttempt = {At = now, Key = key, Self = model, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
 	state.PendingInputs[state.LastAttempt.Serial] = state.LastAttempt
 	state.Held = {Key = key, Until = now + .16}; state.Backoff = now + .25
 	combatSnapshot("input=" .. state.LastAttempt.Serial, model)
@@ -3650,6 +3683,8 @@ controller.Connect(RunService.Heartbeat, function()
 end)
 controller.Connect(Input.WindowFocusReleased, function() state.Focused = false; release() end)
 controller.Connect(Input.WindowFocused, function() state.Focused = true end)
+controller.Connect(Input.InputBegan, function(input, processed) blockEvent("DOWN", input, processed) end)
+controller.Connect(Input.InputEnded, function(input, processed) blockEvent("UP", input, processed) end)
 controller.Connect(player:GetAttributeChangedSignal("KeybindsJson"), function()
 	if state.Enabled then release(); state.Key = blockKey(); note("BLOCK KEY " .. state.Key.Name) end
 end)

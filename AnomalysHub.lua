@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v17. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v18. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3145,6 +3145,9 @@ local weaponProfiles = {
 		-- CritActive/CriticalOnCooldown and hit receipts identify this Fists
 		-- critical. Contact-phase seed only; automatic parry not yet confirmed.
 		["110890307194193"] = {Phase = .57, Name = "critical (test)"},
+		-- v16: three separate damage snapshots at .887/.904/.871, speed1,
+		-- distances3.76-6.60. Separate from ordinary combo and looping14241195451.
+		["17050689141"] = {Phase = .85, Name = "Fists long-windup strike (test)"},
 	}},
 	bigpitchfork = {Label = "BigPitchfork", Animations = {
 		-- Captured Character.Weapon="BigPitchfork". No actor-name checks.
@@ -3231,6 +3234,21 @@ local weaponProfiles = {
 		-- and its exact name need capture; keep ordinary strike timings separate.
 		["81319428626316"] = {Phases = {.42, .67, .99, 1.55, 2.62}, Name = "bat multi-hit skill (test)"},
 	}},
+	rifle = {Label = "Rifle (test)", Animations = {
+		-- Explicit Character.Weapon/Tool=Rifle in v16, not an NPC-name rule.
+		-- First contact seeds from damage snapshots. 771 also hit at .771;
+		-- its later active window is unresolved, so do not invent a second hit.
+		["77163562476084"] = {Phase = .28, Reach = 14, MaxDistance = 17, Name = "rifle strike A (test)"},
+		["115137437543369"] = {Phase = .25, Name = "rifle strike B (test)"},
+		["92023999352267"] = {Phase = .27, Name = "rifle strike C (test)"},
+		["82329687867433"] = {Phase = .32, Name = "rifle strike D (test)"},
+		["125449712999144"] = {Phase = .35, Name = "rifle strike E (test)"},
+		-- Repeated 3.998 damage at phases .433-1.517, distances3.65-34.10.
+		-- Most bursts begin around .43-.49 and recur ~.10 apart. These are
+		-- candidate contact windows, not a measured shot count/projectile speed.
+		-- Normal cooldown skips contacts; no claim every bullet can be parried.
+		["86446252027083"] = {Phases = {.42, .52, .62, .72, .82, .92, 1.02, 1.12, 1.22, 1.32, 1.42}, MinFollowupLead = .08, Reach = 35, MaxDistance = 38, Name = "rifle burst (test)"},
+	}},
 	sword = {Label = "Sword (recorded)", Reach = 12, MaxDistance = 15, Animations = {
 		-- User identified "achive sword"; later equipment data says Archive Sword.
 		-- Player.CombatStyle remained Fists. These distinct animation IDs and
@@ -3285,7 +3303,7 @@ for _, key in ipairs({"sword", "dagger", "bat"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v17", "Bear: skip late skill follow-ups and adjust the recorded side hit. Skill-related block restrictions remain under investigation.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v18", "Rifle attacks and a missing Fists strike added for testing. Previous Bear timing changes retained.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3298,10 +3316,12 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v17 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v18 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 8. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
+		.. "\nFists: 13 animations. Pitchfork: 6. BigPitchfork: 8. Rifle: 5 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
+		.. "\nRifle v16 had zero automatic inputs because it was unmapped. v18 adds trial strike timings and eleven burst contact windows, not an established shot count. Burst reach35/max38 and strike A reach14/max17 are separate from default melee bounds. Burst follow-ups need .08s lead and respect game cooldown. Projectile speed/distance delay and automatic success remain unverified."
+		.. "\nFists17050689141 uses a new .85 phase seed from three damage samples. Looping14241195451 remains unmapped: repeating damage alone does not establish its parry windows."
 		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger/bat IDs select their profile per swing. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Bat 11; Fox Bear 13 (strike A15, extended20, rapid19, ranged45, additional28); Dagger repeated strike18 and long-windup13. Facing minima: Fox Bear strike A -.4/additional skill-.8, BigPitchfork multi-hit0, other directional attacks .15."
 		.. "\nBear rapid/extended skills require at least .08s before a follow-up contact; otherwise skip it and consider later contacts without bypassing cooldown. This experimental cutoff does not promise escape from hitstun. First contacts and other weapon timings retain their previous rules."
 		.. "\nBigPitchfork v15:16 confirmed parries/18 inputs; missing attacks and later multi-hit contacts accounted for most damage. New timings are test seeds, and the third multi-hit phase is inferred from a matched result between direct phase samples."
@@ -3722,7 +3742,7 @@ local function step()
 			end
 		end
 	end
-	if not best then gate("ready"); show("Watching mapped Fists / Pitchfork / BigPitchfork / Sword / Dagger / Bat / Fox Bear attacks"); return end
+	if not best then gate("ready"); show("Watching mapped Fists / Pitchfork / BigPitchfork / Rifle / Sword / Dagger / Bat / Fox Bear attacks"); return end
 	local recovery = openingPunchRecovery(model)
 	if recovery then
 		if state.Gate ~= "local-first-punch-recovery" then
@@ -3760,7 +3780,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger,Bat,FoxBear mappedWeaponAnimations=60 duration=90")
+	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,Sword,Dagger,Bat,FoxBear mappedWeaponAnimations=67 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

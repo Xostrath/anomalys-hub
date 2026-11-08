@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v16. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v17. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3195,20 +3195,26 @@ local weaponProfiles = {
 		-- 1.567/1.588, distances 11.42/16.62; later contacts agree with v10.
 		-- Contact seeds are not proof every pulse can be parried: normal input
 		-- backoff and game cooldowns still apply and skip expired contacts.
-		["85729441475501"] = {Phases = {1.55, 1.67, 1.78, 1.89, 2.01, 2.13, 2.24, 2.36}, Reach = 19, MaxDistance = 22, Name = "Fox Bear rapid skill (test)"},
+		-- v15 confirms the first contact. Follow-ups attempted with .022/.060s
+		-- remaining were rejected FreshHitStun; skip such near-impact windows.
+		-- .08s is a test cutoff, not a proven server/input boundary.
+		["85729441475501"] = {Phases = {1.55, 1.67, 1.78, 1.89, 2.01, 2.13, 2.24, 2.36}, MinFollowupLead = .08, Reach = 19, MaxDistance = 22, Name = "Fox Bear rapid skill (test)"},
 		-- v12 records five contacts at 1.442/1.896/2.246/2.821/3.712, up to
 		-- 13.15 studs. v10 corroborates 1.871/3.708 and elapsed first/fourth
 		-- contacts, but exact move names and automatic outcomes remain unknown.
 		-- v13 follow-up damage at16.88/18.73 studs corroborates the range miss;
 		-- the old projected15/current18 bounds excluded these contacts.
-		["109000405251112"] = {Phases = {1.42, 1.86, 2.22, 2.79, 3.68}, Reach = 20, MaxDistance = 23, Name = "Fox Bear extended skill (test)"},
+		-- Accepted follow-ups at .023/.006s remaining had no matched parry,
+		-- then cooldown blocked later contacts. Preserve those later windows.
+		["109000405251112"] = {Phases = {1.42, 1.86, 2.22, 2.79, 3.68}, MinFollowupLead = .08, Reach = 20, MaxDistance = 23, Name = "Fox Bear extended skill (test)"},
 		-- Two v12 runs show 44.85 damage at phases 2.021/2.000/2.004 from
 		-- 8.46/34.73/43.05 studs. Separate range/timing seed; the exact skill,
 		-- targeting shape and whether it can be parried remain unverified.
 		["139886760981001"] = {Phase = 1.98, Reach = 45, MaxDistance = 48, Name = "Fox Bear ranged skill (test)"},
-		-- Three health drops at2.637/2.654/2.654, up to26.47 studs. Exact
-		-- skill and parryability unknown; facing checks may still miss its side hits.
-		["97452490480378"] = {Phase = 2.60, Reach = 28, MaxDistance = 32, Name = "Fox Bear additional skill (test)"},
+		-- Repeated side hits include facing -.645/-.708 at9.93/10.22 studs,
+		-- after a skip at-.693. Broaden only this skill's trial facing bound.
+		-- Exact skill shape and parryability remain unknown.
+		["97452490480378"] = {Phase = 2.60, Reach = 28, MaxDistance = 32, MinFacing = -.8, Name = "Fox Bear additional skill (test)"},
 	}},
 	bat = {Label = "Jager's Bat (recorded)", Reach = 11, MaxDistance = 14, Animations = {
 		-- Two v12 runs show Tool.WeaponName="Jager's Bat" while the player's
@@ -3279,7 +3285,7 @@ for _, key in ipairs({"sword", "dagger", "bat"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v16", "BigPitchfork: missing attacks and multi-hit contacts added; two late strike timings adjusted. Other weapon profiles retained.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v17", "Bear: skip late skill follow-ups and adjust the recorded side hit. Skill-related block restrictions remain under investigation.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3292,11 +3298,12 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v16 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v17 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
 		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 8. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
-		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger/bat IDs select their profile per swing. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Bat 11; Fox Bear 13 (strike A15, extended20, rapid19, ranged45, additional28); Dagger repeated strike18 and long-windup13. Facing minima: Fox Bear strike A -.4, BigPitchfork multi-hit0, other directional attacks .15."
+		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger/bat IDs select their profile per swing. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Bat 11; Fox Bear 13 (strike A15, extended20, rapid19, ranged45, additional28); Dagger repeated strike18 and long-windup13. Facing minima: Fox Bear strike A -.4/additional skill-.8, BigPitchfork multi-hit0, other directional attacks .15."
+		.. "\nBear rapid/extended skills require at least .08s before a follow-up contact; otherwise skip it and consider later contacts without bypassing cooldown. This experimental cutoff does not promise escape from hitstun. First contacts and other weapon timings retain their previous rules."
 		.. "\nBigPitchfork v15:16 confirmed parries/18 inputs; missing attacks and later multi-hit contacts accounted for most damage. New timings are test seeds, and the third multi-hit phase is inferred from a matched result between direct phase samples."
 		.. "\nLOCAL_RECOVERY: experimental defer for own active first-Fists animation72916536471630 below phase.32. v13 missing requests occur at.089-.280; an observed request occurs at.331. This is not a proven game lock boundary. No action is cancelled; waiting does not consume the incoming contact, and expired contacts are skipped normally."
 		.. "\nBat timings are initial seeds from v12 health-drop samples. Its multi-hit skill may contain additional contacts; no complete-move coverage or automatic success is assumed."
@@ -3687,8 +3694,11 @@ local function step()
 			local phase, speed = track.TimePosition, track.Speed
 			local contact = swing.Contact or 1
 			local hitPhase = contactPhase(profile, contact)
-			while hitPhase and (hitPhase - phase) / speed < -.025 do
-				note(string.format("SKIP actorId=%d weapon=%s animation=%s contact=%d reason=late phase=%.3f speed=%.3f eta=%.3f", rig.Id, weaponKey, swing.Asset, contact, phase, speed, (hitPhase - phase) / speed))
+			while hitPhase do
+				local eta = (hitPhase - phase) / speed
+				local minimum = contact > 1 and profile.MinFollowupLead or -.025
+				if eta >= minimum then break end
+				note(string.format("SKIP actorId=%d weapon=%s animation=%s contact=%d reason=%s phase=%.3f speed=%.3f eta=%.3f minimum=%.3f", rig.Id, weaponKey, swing.Asset, contact, eta < -.025 and "late" or "insufficient-lead", phase, speed, eta, minimum))
 				contact += 1; hitPhase = contactPhase(profile, contact)
 			end
 			swing.Contact = contact

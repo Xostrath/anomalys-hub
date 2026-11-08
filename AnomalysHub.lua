@@ -4,6 +4,795 @@ do
 	env.GohanHubEnvironment = "public"
 	env.__GohanHubLoaderUrl = "https://raw.githubusercontent.com/Xostrath/anomalys-hub/main/AnomalysHub.lua"
 end
+local function anomalyHasGohanFingerprint()
+	local rs=game:GetService('ReplicatedStorage')
+	local r=rs:FindFirstChild('Remotes')
+	return r~=nil and r:FindFirstChild('ServerRemote')~=nil and r:FindFirstChild('ClientRemote')~=nil and r:FindFirstChild('StatRetrieveRemote')~=nil
+end
+local function anomalyHasBeyondNenFingerprint()
+	local env=(getgenv and getgenv()) or shared
+	local signature=env.__AnomalyBeyondNenRemotePaths
+	if type(signature)~='table' or #signature<2 then return false end
+	local root=game:GetService('ReplicatedStorage')
+	for _,path in ipairs(signature) do
+		if type(path)~='table' then return false end
+		local node=root
+		for _,name in ipairs(path) do node=node and node:FindFirstChild(name) end
+		if not node or (not node:IsA('RemoteEvent') and not node:IsA('RemoteFunction')) then return false end
+	end
+	return true
+end
+local anomalyProfile=(anomalyHasGohanFingerprint() or game.PlaceId==89366025586253) and 'Gohan' or (anomalyHasBeyondNenFingerprint() and 'BeyondNen' or 'Universal')
+local anomalyEnvironment=(getgenv and getgenv()) or shared
+anomalyEnvironment.__AnomalyDetectedProfile=anomalyProfile
+if anomalyProfile == 'BeyondNen' then
+	warn('[Anomaly] Beyond Nen fingerprint detected; adapter scaffold is active while its features are being mapped.')
+end
+if anomalyProfile ~= 'Gohan' then
+(function()
+-- Anomaly Universal profile
+-- Game-neutral utilities only. Game-specific automation belongs in a profile adapter.
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local MarketplaceService = game:GetService("MarketplaceService")
+local VirtualUser = game:GetService("VirtualUser")
+local Stats = game:GetService("Stats")
+
+local player = Players.LocalPlayer
+while not player do
+	Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+	player = Players.LocalPlayer
+end
+local playerGui = player:WaitForChild("PlayerGui")
+local env = (getgenv and getgenv()) or shared
+
+local previous = env.__AnomalyUniversalController
+if type(previous) == "table" and type(previous.Unload) == "function" then
+	pcall(previous.Unload)
+end
+
+local connections = {}
+local unloaded = false
+local function connect(signal, callback)
+	local connection = signal:Connect(callback)
+	table.insert(connections, connection)
+	return connection
+end
+
+local stale = playerGui:FindFirstChild("AnomalyUniversal")
+if stale then stale:Destroy() end
+
+local colors = {
+	Background = Color3.fromRGB(40, 35, 50),
+	Surface = Color3.fromRGB(48, 40, 59),
+	Raised = Color3.fromRGB(62, 53, 77),
+	Stroke = Color3.fromRGB(90, 78, 107),
+	Text = Color3.fromRGB(250, 246, 255),
+	Muted = Color3.fromRGB(203, 191, 218),
+	Accent = Color3.fromRGB(218, 197, 255),
+	AccentSoft = Color3.fromRGB(103, 80, 127),
+	Success = Color3.fromRGB(134, 230, 173),
+	Danger = Color3.fromRGB(213, 78, 91),
+	Warning = Color3.fromRGB(255, 209, 133),
+}
+
+local function create(className, properties, parent)
+	local object = Instance.new(className)
+	for key, value in pairs(properties or {}) do object[key] = value end
+	object.Parent = parent
+	return object
+end
+
+local state = {
+	Visible = true,
+	CurrentTab = "Home",
+	SelectedPlayer = nil,
+	SpectateTarget = nil,
+	EspEnabled = false,
+	EspDistance = 2500,
+	Noclip = false,
+	InfiniteJump = false,
+	SpeedEnabled = false,
+	WalkSpeed = 16,
+	JumpPower = 50,
+	AntiAfk = true,
+	LastJumpAt = 0,
+	EspEntries = {},
+	Collision = {},
+	ChatLog = {},
+	ConfigPath = "AnomalyHub/universal/" .. tostring(game.GameId) .. ".json",
+}
+
+local function ensureConfigFolder()
+	if type(makefolder) ~= "function" then return false end
+	pcall(makefolder, "AnomalyHub")
+	pcall(makefolder, "AnomalyHub/universal")
+	return true
+end
+
+local function loadConfig()
+	if type(isfile) ~= "function" or type(readfile) ~= "function" or not isfile(state.ConfigPath) then return end
+	local ok, decoded = pcall(function() return HttpService:JSONDecode(readfile(state.ConfigPath)) end)
+	if not ok or type(decoded) ~= "table" then return end
+	state.EspEnabled = decoded.EspEnabled == true
+	state.EspDistance = math.clamp(tonumber(decoded.EspDistance) or 2500, 100, 10000)
+	state.InfiniteJump = decoded.InfiniteJump == true
+	state.SpeedEnabled = decoded.SpeedEnabled == true
+	state.WalkSpeed = math.clamp(tonumber(decoded.WalkSpeed) or 16, 8, 250)
+	state.JumpPower = math.clamp(tonumber(decoded.JumpPower) or 50, 25, 250)
+	state.AntiAfk = decoded.AntiAfk ~= false
+end
+
+local function saveConfig()
+	if unloaded or type(writefile) ~= "function" or not ensureConfigFolder() then return false end
+	local data = {
+		Version = 1,
+		EspEnabled = state.EspEnabled,
+		EspDistance = state.EspDistance,
+		InfiniteJump = state.InfiniteJump,
+		SpeedEnabled = state.SpeedEnabled,
+		WalkSpeed = state.WalkSpeed,
+		JumpPower = state.JumpPower,
+		AntiAfk = state.AntiAfk,
+	}
+	return pcall(writefile, state.ConfigPath, HttpService:JSONEncode(data))
+end
+loadConfig()
+
+local gui = create("ScreenGui", {
+	Name = "AnomalyUniversal", ResetOnSpawn = false, IgnoreGuiInset = true,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 50,
+}, playerGui)
+
+local shadow = create("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 8, 0.5, 10),
+	Size = UDim2.fromOffset(780, 600), BackgroundColor3 = Color3.new(),
+	BackgroundTransparency = 0.42, BorderSizePixel = 0,
+}, gui)
+create("UICorner", {CornerRadius = UDim.new(0, 10)}, shadow)
+
+local window = create("Frame", {
+	Name = "Window", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(780, 600), BackgroundColor3 = colors.Background,
+	BorderSizePixel = 0, ClipsDescendants = true, Active = true,
+}, gui)
+create("UICorner", {CornerRadius = UDim.new(0, 10)}, window)
+create("UIStroke", {Color = colors.AccentSoft, Thickness = 2, Transparency = 0.12}, window)
+
+local sidebar = create("Frame", {
+	Name = "Sidebar", Size = UDim2.new(0, 168, 1, 0), BackgroundColor3 = colors.Surface,
+	BorderSizePixel = 0,
+}, window)
+create("Frame", {Position = UDim2.new(1, -1, 0, 0), Size = UDim2.new(0, 1, 1, 0), BackgroundColor3 = colors.Stroke, BorderSizePixel = 0}, sidebar)
+create("TextLabel", {
+	Position = UDim2.fromOffset(18, 16), Size = UDim2.new(1, -36, 0, 22), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold, Text = "ANOMALY", TextColor3 = colors.Text, TextSize = 16,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, sidebar)
+create("TextLabel", {
+	Position = UDim2.fromOffset(18, 39), Size = UDim2.new(1, -36, 0, 16), BackgroundTransparency = 1,
+	Font = Enum.Font.Code, Text = "UNIVERSAL PROFILE", TextColor3 = colors.Accent, TextSize = 9,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, sidebar)
+
+local tabBar = create("Frame", {
+	Position = UDim2.fromOffset(10, 76), Size = UDim2.new(1, -20, 0, 260), BackgroundTransparency = 1,
+}, sidebar)
+create("UIListLayout", {Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder}, tabBar)
+
+create("TextLabel", {
+	Position = UDim2.new(0, 18, 1, -56), Size = UDim2.new(1, -36, 0, 14), BackgroundTransparency = 1,
+	Font = Enum.Font.Code, Text = "ACTIVE PILOT", TextColor3 = colors.Muted, TextSize = 8,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, sidebar)
+create("TextLabel", {
+	Position = UDim2.new(0, 18, 1, -39), Size = UDim2.new(1, -36, 0, 20), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold, Text = player.DisplayName, TextColor3 = colors.Text, TextSize = 11,
+	TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = Enum.TextXAlignment.Left,
+}, sidebar)
+
+local topBar = create("Frame", {
+	Position = UDim2.fromOffset(168, 0), Size = UDim2.new(1, -168, 0, 72),
+	BackgroundColor3 = colors.Surface, BorderSizePixel = 0, Active = true,
+}, window)
+local titleLabel = create("TextLabel", {
+	Position = UDim2.fromOffset(18, 12), Size = UDim2.new(1, -220, 0, 22), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold, Text = "DASHBOARD", TextColor3 = colors.Text, TextSize = 15,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, topBar)
+local subtitleLabel = create("TextLabel", {
+	Position = UDim2.fromOffset(18, 37), Size = UDim2.new(1, -220, 0, 18), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Game-neutral tools and live session information", TextColor3 = colors.Muted,
+	TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
+}, topBar)
+local profileLabel = create("TextLabel", {
+	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = "UNIVERSAL // ACTIVE\n" .. tostring(game.PlaceId),
+	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
+}, topBar)
+
+local content = create("Frame", {
+	Position = UDim2.fromOffset(168, 72), Size = UDim2.new(1, -168, 1, -72), BackgroundTransparency = 1,
+}, window)
+local pages, tabButtons = {}, {}
+local pageMeta = {
+	Home = {"DASHBOARD", "Game-neutral tools and live session information"},
+	Players = {"PLAYERS", "Player list, spectate controls, and universal ESP"},
+	Movement = {"MOVEMENT", "Character movement and collision utilities"},
+	Servers = {"SERVER NAVIGATION", "Rejoin or move to another public server"},
+	Settings = {"SETTINGS", "Persistence, keybind, reload, and cleanup"},
+}
+local function makePage(name)
+	local page = create("ScrollingFrame", {
+		Name = name .. "Page", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+		Visible = false, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+		ScrollBarThickness = 4, ScrollBarImageColor3 = colors.Accent,
+	}, content)
+	create("UIPadding", {PaddingTop = UDim.new(0, 16), PaddingBottom = UDim.new(0, 16), PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 16)}, page)
+	create("UIListLayout", {Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder}, page)
+	pages[name] = page
+	return page
+end
+for _, name in ipairs({"Home", "Players", "Movement", "Servers", "Settings"}) do makePage(name) end
+
+local function selectTab(name)
+	if not pages[name] then return end
+	state.CurrentTab = name
+	for pageName, page in pairs(pages) do
+		local selected = pageName == name
+		page.Visible = selected
+		local button = tabButtons[pageName]
+		if button then
+			button.BackgroundColor3 = selected and colors.Raised or colors.Surface
+			button.TextColor3 = selected and colors.Accent or colors.Muted
+		end
+	end
+	titleLabel.Text = pageMeta[name][1]
+	subtitleLabel.Text = pageMeta[name][2]
+end
+
+local tabNames = {{"Home", "[D]  Dashboard"}, {"Players", "[P]  Players"}, {"Movement", "[M]  Movement"}, {"Servers", "[S]  Servers"}, {"Settings", "[=]  Settings"}}
+for order, definition in ipairs(tabNames) do
+	local name, text = definition[1], definition[2]
+	local button = create("TextButton", {
+		Name = name, LayoutOrder = order, Size = UDim2.new(1, 0, 0, 36), AutoButtonColor = false,
+		BackgroundColor3 = colors.Surface, BorderSizePixel = 0, Font = Enum.Font.GothamSemibold,
+		Text = text, TextColor3 = colors.Muted, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
+	}, tabBar)
+	create("UICorner", {CornerRadius = UDim.new(0, 5)}, button)
+	create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.4}, button)
+	create("UIPadding", {PaddingLeft = UDim.new(0, 13)}, button)
+	tabButtons[name] = button
+	connect(button.Activated, function() selectTab(name) end)
+end
+
+local function card(page, title, hint, height)
+	local frame = create("Frame", {
+		Size = UDim2.new(1, 0, 0, height), BackgroundColor3 = colors.Raised, BorderSizePixel = 0,
+	}, page)
+	create("UICorner", {CornerRadius = UDim.new(0, 9)}, frame)
+	create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.3}, frame)
+	create("Frame", {Position = UDim2.fromOffset(0, 10), Size = UDim2.fromOffset(3, 24), BackgroundColor3 = colors.Accent, BorderSizePixel = 0}, frame)
+	create("TextLabel", {
+		Position = UDim2.fromOffset(14, 10), Size = UDim2.new(1, -28, 0, 18), BackgroundTransparency = 1,
+		Font = Enum.Font.GothamSemibold, Text = title, TextColor3 = colors.Text, TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, frame)
+	if hint then
+		create("TextLabel", {
+			Position = UDim2.fromOffset(14, 31), Size = UDim2.new(1, -28, 0, 30), BackgroundTransparency = 1,
+			Font = Enum.Font.Gotham, Text = hint, TextColor3 = colors.Muted, TextSize = 9, TextWrapped = true,
+			TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+		}, frame)
+	end
+	return frame
+end
+
+local function button(parent, text, x, y, width, callback, color)
+	local object = create("TextButton", {
+		Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(width, 34), AutoButtonColor = false,
+		BackgroundColor3 = color or colors.Surface, BorderSizePixel = 0, Font = Enum.Font.GothamSemibold,
+		Text = text, TextColor3 = colors.Text, TextSize = 10,
+	}, parent)
+	create("UICorner", {CornerRadius = UDim.new(0, 7)}, object)
+	create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.35}, object)
+	if callback then connect(object.Activated, function() callback(object) end) end
+	return object
+end
+
+local function valueBox(parent, placeholder, x, y, width, initial, callback)
+	local box = create("TextBox", {
+		Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(width, 34), BackgroundColor3 = colors.Surface,
+		BorderSizePixel = 0, Font = Enum.Font.Code, Text = tostring(initial), PlaceholderText = placeholder,
+		TextColor3 = colors.Text, PlaceholderColor3 = colors.Muted, TextSize = 10, ClearTextOnFocus = false,
+	}, parent)
+	create("UICorner", {CornerRadius = UDim.new(0, 7)}, box)
+	create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.35}, box)
+	connect(box.FocusLost, function() callback(box) end)
+	return box
+end
+
+local gameCard = card(pages.Home, "CURRENT EXPERIENCE", "This profile intentionally avoids game-specific remotes and data models.", 164)
+local gameNameLabel = create("TextLabel", {
+	Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 25), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold, Text = "Loading experience name...", TextColor3 = colors.Accent, TextSize = 14,
+	TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+}, gameCard)
+local sessionLabel = create("TextLabel", {
+	Position = UDim2.fromOffset(14, 101), Size = UDim2.new(1, -28, 0, 48), BackgroundTransparency = 1,
+	Font = Enum.Font.Code, Text = "", TextColor3 = colors.Text, TextSize = 10,
+	TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+}, gameCard)
+
+local safetyCard = card(pages.Home, "PROFILE BOUNDARY", "Universal tools are available here. A future game adapter can add features without changing this core.", 116)
+local adapterLabel = create("TextLabel", {
+	Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 24), BackgroundTransparency = 1,
+	Font = Enum.Font.Code, Text = "ACTIVE ADAPTER  //  " .. string.upper(tostring(env.__AnomalyDetectedProfile or "Universal")), TextColor3 = colors.Success, TextSize = 10,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, safetyCard)
+
+task.spawn(function()
+	local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, game.PlaceId)
+	if not unloaded and ok and type(info) == "table" and type(info.Name) == "string" then gameNameLabel.Text = info.Name end
+end)
+
+local playerCard = card(pages.Players, "PLAYER DIRECTORY", "Select a player, then spectate them. Select the same player again or press Stop to return.", 326)
+local playerList = create("ScrollingFrame", {
+	Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 176), BackgroundColor3 = colors.Surface,
+	BorderSizePixel = 0, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	ScrollBarThickness = 4, ScrollBarImageColor3 = colors.Accent,
+}, playerCard)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, playerList)
+create("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, playerList)
+create("UIPadding", {PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4), PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4)}, playerList)
+local selectedLabel = create("TextLabel", {
+	Position = UDim2.fromOffset(14, 254), Size = UDim2.new(1, -28, 0, 22), BackgroundTransparency = 1,
+	Font = Enum.Font.Code, Text = "Selected: none", TextColor3 = colors.Muted, TextSize = 10,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, playerCard)
+
+local function stopSpectating()
+	state.SpectateTarget = nil
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if workspace.CurrentCamera and humanoid then workspace.CurrentCamera.CameraSubject = humanoid end
+end
+
+local function spectateSelected()
+	local target = state.SelectedPlayer
+	if not target or target == player then stopSpectating(); return end
+	if state.SpectateTarget == target then stopSpectating(); return end
+	local humanoid = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 or not workspace.CurrentCamera then return end
+	state.SpectateTarget = target
+	workspace.CurrentCamera.CameraSubject = humanoid
+end
+
+button(playerCard, "Spectate / Stop", 14, 280, 180, function() spectateSelected() end, colors.AccentSoft)
+button(playerCard, "Refresh Players", 204, 280, 180, function() if state.RefreshPlayers then state.RefreshPlayers() end end)
+
+local espCard = card(pages.Players, "UNIVERSAL PLAYER ESP", "Shows display name, health, and distance without depending on game-specific stats.", 126)
+local espToggle = button(espCard, state.EspEnabled and "Player ESP: ON" or "Player ESP: OFF", 14, 72, 180, function(object)
+	state.EspEnabled = not state.EspEnabled
+	object.Text = state.EspEnabled and "Player ESP: ON" or "Player ESP: OFF"
+	object.BackgroundColor3 = state.EspEnabled and colors.AccentSoft or colors.Surface
+	saveConfig()
+end, state.EspEnabled and colors.AccentSoft or colors.Surface)
+valueBox(espCard, "ESP range", 204, 72, 180, state.EspDistance, function(box)
+	state.EspDistance = math.clamp(tonumber(box.Text) or state.EspDistance, 100, 10000)
+	box.Text = tostring(math.floor(state.EspDistance))
+	saveConfig()
+end)
+
+local movementCard = card(pages.Movement, "CHARACTER MOVEMENT", "These settings use standard Roblox character properties; some games may override them.", 190)
+local noclipToggle = button(movementCard, "Noclip: OFF", 14, 72, 180, function(object)
+	state.Noclip = not state.Noclip
+	object.Text = state.Noclip and "Noclip: ON" or "Noclip: OFF"
+	object.BackgroundColor3 = state.Noclip and colors.AccentSoft or colors.Surface
+end)
+local jumpToggle = button(movementCard, state.InfiniteJump and "Infinite Jump: ON" or "Infinite Jump: OFF", 204, 72, 180, function(object)
+	state.InfiniteJump = not state.InfiniteJump
+	object.Text = state.InfiniteJump and "Infinite Jump: ON" or "Infinite Jump: OFF"
+	object.BackgroundColor3 = state.InfiniteJump and colors.AccentSoft or colors.Surface
+	saveConfig()
+end, state.InfiniteJump and colors.AccentSoft or colors.Surface)
+local speedToggle = button(movementCard, state.SpeedEnabled and "Speed Override: ON" or "Speed Override: OFF", 14, 116, 180, function(object)
+	state.SpeedEnabled = not state.SpeedEnabled
+	object.Text = state.SpeedEnabled and "Speed Override: ON" or "Speed Override: OFF"
+	object.BackgroundColor3 = state.SpeedEnabled and colors.AccentSoft or colors.Surface
+	saveConfig()
+end, state.SpeedEnabled and colors.AccentSoft or colors.Surface)
+valueBox(movementCard, "Walk speed", 204, 116, 86, state.WalkSpeed, function(box)
+	state.WalkSpeed = math.clamp(tonumber(box.Text) or state.WalkSpeed, 8, 250)
+	box.Text = tostring(math.floor(state.WalkSpeed)); saveConfig()
+end)
+valueBox(movementCard, "Jump", 298, 116, 86, state.JumpPower, function(box)
+	state.JumpPower = math.clamp(tonumber(box.Text) or state.JumpPower, 25, 250)
+	box.Text = tostring(math.floor(state.JumpPower)); saveConfig()
+end)
+
+local serverCard = card(pages.Servers, "PUBLIC SERVER ROUTES", "Rejoin this instance or ask Roblox for another public server in this place.", 172)
+local serverStatus = create("TextLabel", {
+	Position = UDim2.fromOffset(14, 120), Size = UDim2.new(1, -28, 0, 34), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Ready", TextColor3 = colors.Muted, TextSize = 9,
+	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+}, serverCard)
+
+local function queueReload()
+	local queue = env.queue_on_teleport or env.queueonteleport or env.syn and env.syn.queue_on_teleport
+	local url = env.__GohanHubLoaderUrl
+	if type(queue) ~= "function" or type(url) ~= "string" or url == "" then return false end
+	local quoted = string.format("%q", url)
+	return pcall(queue, "task.wait(10);loadstring(game:HttpGet(" .. quoted .. "))()")
+end
+
+local function fetchServers()
+	local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100", game.PlaceId)
+	local ok, body = pcall(function() return game:HttpGet(url) end)
+	if not ok then return nil, tostring(body) end
+	local decodeOk, page = pcall(HttpService.JSONDecode, HttpService, body)
+	if not decodeOk or type(page) ~= "table" then return nil, "Invalid server response" end
+	return page.data
+end
+
+local serverBusy = false
+local function hopServer(lowest)
+	if serverBusy then return end
+	serverBusy = true
+	serverStatus.Text = "Finding an available server..."
+	task.spawn(function()
+		local rows, err = fetchServers()
+		if unloaded then return end
+		if type(rows) ~= "table" then
+			serverStatus.Text = "Server lookup failed: " .. tostring(err)
+			serverStatus.TextColor3 = colors.Warning
+			serverBusy = false
+			return
+		end
+		local candidates = {}
+		for _, row in ipairs(rows) do
+			if type(row) == "table" and type(row.id) == "string" and row.id ~= game.JobId and (tonumber(row.playing) or 0) < (tonumber(row.maxPlayers) or 0) then
+				table.insert(candidates, row)
+			end
+		end
+		if #candidates == 0 then
+			serverStatus.Text = "No other open server was returned."
+			serverStatus.TextColor3 = colors.Warning
+			serverBusy = false
+			return
+		end
+		local target = lowest and candidates[1] or candidates[math.random(1, #candidates)]
+		if lowest then
+			for _, row in ipairs(candidates) do if (row.playing or math.huge) < (target.playing or math.huge) then target = row end end
+		end
+		queueReload()
+		serverStatus.Text = "Joining " .. tostring(target.playing or "?") .. "/" .. tostring(target.maxPlayers or "?") .. " players..."
+		local teleported = pcall(TeleportService.TeleportToPlaceInstance, TeleportService, game.PlaceId, target.id, player)
+		if not teleported then serverStatus.Text = "Teleport request failed."; serverStatus.TextColor3 = colors.Warning end
+		serverBusy = false
+	end)
+end
+
+button(serverCard, "Rejoin", 14, 72, 118, function()
+	queueReload(); serverStatus.Text = "Rejoining current server..."
+	pcall(TeleportService.TeleportToPlaceInstance, TeleportService, game.PlaceId, game.JobId, player)
+end)
+button(serverCard, "Random", 142, 72, 118, function() hopServer(false) end)
+button(serverCard, "Lowest Population", 270, 72, 160, function() hopServer(true) end)
+
+local configCard = card(pages.Settings, "UNIVERSAL CONFIG", "Settings are saved separately for each Roblox universe.", 126)
+local configStatus = create("TextLabel", {
+	Position = UDim2.fromOffset(204, 78), Size = UDim2.new(1, -218, 0, 28), BackgroundTransparency = 1,
+	Font = Enum.Font.Code, Text = state.ConfigPath, TextColor3 = colors.Muted, TextSize = 8,
+	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, configCard)
+button(configCard, "Save Config", 14, 72, 180, function()
+	local saved = saveConfig()
+	configStatus.Text = saved and "Saved: " .. state.ConfigPath or "Executor file access unavailable"
+	configStatus.TextColor3 = saved and colors.Success or colors.Warning
+end, colors.AccentSoft)
+
+local fingerprintCard = card(pages.Settings, "GAME ADAPTER DISCOVERY", "Exports client-visible remote names and paths so a new game can receive its own exact profile detector.", 148)
+local fingerprintStatus = create("TextLabel", {
+	Position = UDim2.fromOffset(204, 75), Size = UDim2.new(1, -218, 0, 56), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Read-only: no remote is fired or invoked.", TextColor3 = colors.Muted,
+	TextSize = 9, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+}, fingerprintCard)
+
+local function captureRemoteFingerprint()
+	local rows = {}
+	for _, object in ipairs(game:GetDescendants()) do
+		if object:IsA("RemoteEvent") or object:IsA("RemoteFunction") or object:IsA("UnreliableRemoteEvent") then
+			local ok, fullName = pcall(object.GetFullName, object)
+			if ok then table.insert(rows, object.ClassName .. "\t" .. fullName) end
+		end
+	end
+	table.sort(rows)
+	local report = table.concat({
+		"ANOMALY GAME ADAPTER FINGERPRINT // READ ONLY v1",
+		"place=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId),
+		"profile=" .. tostring(env.__AnomalyDetectedProfile or "Universal"),
+		"No remotes were fired or invoked.",
+		"count=" .. tostring(#rows),
+		"",
+		table.concat(rows, "\n"),
+	}, "\n")
+	local path = "AnomalyHub/universal/remote_fingerprint_" .. tostring(game.GameId) .. ".txt"
+	local saved = false
+	if type(writefile) == "function" and ensureConfigFolder() then saved = pcall(writefile, path, report) end
+	if type(setclipboard) == "function" then pcall(setclipboard, report) end
+	fingerprintStatus.Text = string.format("Captured %d client-visible remotes.%s", #rows, saved and (" Saved to " .. path) or " Copied when clipboard access is available.")
+	fingerprintStatus.TextColor3 = colors.Success
+	return report
+end
+button(fingerprintCard, "Capture Fingerprint", 14, 76, 180, function() captureRemoteFingerprint() end, colors.AccentSoft)
+
+local behaviorCard = card(pages.Settings, "SESSION CONTROLS", "RightShift shows or hides the window. Reload fetches the current public build.", 172)
+local antiAfkToggle = button(behaviorCard, state.AntiAfk and "Anti-AFK: ON" or "Anti-AFK: OFF", 14, 72, 180, function(object)
+	state.AntiAfk = not state.AntiAfk
+	object.Text = state.AntiAfk and "Anti-AFK: ON" or "Anti-AFK: OFF"
+	object.BackgroundColor3 = state.AntiAfk and colors.AccentSoft or colors.Surface
+	saveConfig()
+end, state.AntiAfk and colors.AccentSoft or colors.Surface)
+
+local controller = {Profile = tostring(env.__AnomalyDetectedProfile or "Universal"), Version = "1.0"}
+
+local function unload()
+	if unloaded then return end
+	saveConfig()
+	unloaded = true
+	stopSpectating()
+	for part, canCollide in pairs(state.Collision) do if part and part.Parent then pcall(function() part.CanCollide = canCollide end) end end
+	for _, entry in pairs(state.EspEntries) do
+		if entry.Gui then entry.Gui:Destroy() end
+		if entry.Highlight then entry.Highlight:Destroy() end
+	end
+	for _, connection in ipairs(connections) do pcall(function() connection:Disconnect() end) end
+	if gui then gui:Destroy() end
+	if env.__AnomalyUniversalController == controller then env.__AnomalyUniversalController = nil end
+end
+
+function controller.Unload() unload() end
+function controller.SetVisible(visible)
+	state.Visible = visible == true
+	gui.Enabled = state.Visible
+	return state.Visible
+end
+function controller.ToggleVisible() return controller.SetVisible(not state.Visible) end
+function controller.GetProfile() return controller.Profile, game.GameId, game.PlaceId end
+function controller.CaptureRemoteFingerprint() return captureRemoteFingerprint() end
+controller.UI = {
+	Gui = gui, Window = window, Pages = pages, TabButtons = tabButtons,
+	Colors = colors, Create = create, Card = card, Button = button, ValueBox = valueBox,
+}
+controller.State = state
+controller.Connect = connect
+function controller.Reload()
+	local source = env.__GohanHubSource
+	if type(source) ~= "string" then
+		local url = env.__GohanHubLoaderUrl
+		if type(url) == "string" and url ~= "" then
+			local ok, result = pcall(function() return game:HttpGet(url) end)
+			if ok then source = result end
+		end
+	end
+	if type(source) ~= "string" then return false, "No loader source is available" end
+	local compiled, err = loadstring(source, "AnomalyUniversal_reload")
+	if not compiled then return false, err end
+	unload()
+	task.defer(compiled)
+	return true
+end
+env.__AnomalyUniversalController = controller
+
+button(behaviorCard, "Reload Hub", 204, 72, 180, function(object)
+	object.Text = "Reloading..."
+	local ok = controller.Reload()
+	if not ok and not unloaded then object.Text = "Reload unavailable" end
+end, Color3.fromRGB(55, 145, 91))
+button(behaviorCard, "Unload", 14, 116, 180, function() unload() end, colors.Danger)
+create("TextLabel", {
+	Position = UDim2.fromOffset(204, 120), Size = UDim2.new(1, -218, 0, 26), BackgroundTransparency = 1,
+	Font = Enum.Font.Code, Text = "Visibility key: RightShift", TextColor3 = colors.Muted, TextSize = 9,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, behaviorCard)
+
+function state.RefreshPlayers()
+	for _, child in ipairs(playerList:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
+	local list = Players:GetPlayers()
+	table.sort(list, function(a, b) return string.lower(a.DisplayName) < string.lower(b.DisplayName) end)
+	for order, target in ipairs(list) do
+		local text = target.DisplayName
+		if target.Name ~= target.DisplayName then text ..= "  (@" .. target.Name .. ")" end
+		local row = create("TextButton", {
+			LayoutOrder = order, Size = UDim2.new(1, -8, 0, 28), AutoButtonColor = false,
+			BackgroundColor3 = target == state.SelectedPlayer and colors.AccentSoft or colors.Raised,
+			BorderSizePixel = 0, Font = Enum.Font.Gotham, Text = text, TextColor3 = colors.Text,
+			TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
+		}, playerList)
+		create("UICorner", {CornerRadius = UDim.new(0, 5)}, row)
+		create("UIPadding", {PaddingLeft = UDim.new(0, 10)}, row)
+		connect(row.Activated, function()
+			if state.SelectedPlayer == target then
+				state.SelectedPlayer = nil
+				selectedLabel.Text = "Selected: none"
+				if state.SpectateTarget == target then stopSpectating() end
+			else
+				state.SelectedPlayer = target
+				selectedLabel.Text = "Selected: " .. target.DisplayName
+			end
+			state.RefreshPlayers()
+		end)
+	end
+end
+state.RefreshPlayers()
+connect(Players.PlayerAdded, state.RefreshPlayers)
+connect(Players.PlayerRemoving, function(leaving)
+	if state.SelectedPlayer == leaving then state.SelectedPlayer = nil end
+	if state.SpectateTarget == leaving then stopSpectating() end
+	state.RefreshPlayers()
+end)
+
+local function removeEsp(target)
+	local entry = state.EspEntries[target]
+	if not entry then return end
+	if entry.Gui then entry.Gui:Destroy() end
+	if entry.Highlight then entry.Highlight:Destroy() end
+	state.EspEntries[target] = nil
+end
+
+local function updateEsp(target, localRoot)
+	if target == player then return end
+	local character = target.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and (character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head"))
+	if not state.EspEnabled or not humanoid or not root or humanoid.Health <= 0 or not localRoot then removeEsp(target); return end
+	local distance = (root.Position - localRoot.Position).Magnitude
+	if distance > state.EspDistance then removeEsp(target); return end
+	local entry = state.EspEntries[target]
+	if not entry or entry.Character ~= character then
+		removeEsp(target)
+		entry = {Character = character}
+		entry.Gui = create("BillboardGui", {
+			Name = "AnomalyUniversalESP", Size = UDim2.fromOffset(230, 54), StudsOffsetWorldSpace = Vector3.new(0, 3.6, 0),
+			AlwaysOnTop = true, LightInfluence = 0, MaxDistance = state.EspDistance, Adornee = root,
+		}, gui)
+		entry.Label = create("TextLabel", {
+			Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
+			TextColor3 = colors.Text, TextStrokeColor3 = Color3.new(), TextStrokeTransparency = 0.2,
+			TextSize = 12, TextWrapped = true,
+		}, entry.Gui)
+		entry.Highlight = create("Highlight", {
+			Name = "AnomalyUniversalHighlight", Adornee = character, FillColor = colors.AccentSoft,
+			FillTransparency = 0.82, OutlineColor = colors.Accent, OutlineTransparency = 0.12,
+			DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+		}, gui)
+		state.EspEntries[target] = entry
+	end
+	entry.Gui.MaxDistance = state.EspDistance
+	entry.Label.Text = string.format("%s\nHP %d/%d  //  %d studs", target.DisplayName,
+		math.max(0, math.floor(humanoid.Health + 0.5)), math.max(0, math.floor(humanoid.MaxHealth + 0.5)), math.floor(distance + 0.5))
+end
+
+local elapsed = 0
+connect(RunService.Heartbeat, function(delta)
+	if unloaded then return end
+	elapsed += delta
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if state.SpeedEnabled and humanoid then
+		humanoid.WalkSpeed = state.WalkSpeed
+		if humanoid.UseJumpPower then humanoid.JumpPower = state.JumpPower else humanoid.JumpHeight = math.max(7.2, state.JumpPower / 7) end
+	end
+	if elapsed >= 0.15 then
+		elapsed = 0
+		for _, target in ipairs(Players:GetPlayers()) do updateEsp(target, root) end
+		for target in pairs(state.EspEntries) do if not target.Parent then removeEsp(target) end end
+		local ping = "Unavailable"
+		local network = Stats:FindFirstChild("Network")
+		local items = network and network:FindFirstChild("ServerStatsItem")
+		local dataPing = items and items:FindFirstChild("Data Ping")
+		if dataPing then
+			local ok, value = pcall(function() return dataPing:GetValueString() end)
+			if ok then ping = value end
+		end
+		sessionLabel.Text = string.format("PLACE  %s\nUNIVERSE  %s\nPLAYERS  %d/%d    PING  %s", tostring(game.PlaceId), tostring(game.GameId), #Players:GetPlayers(), Players.MaxPlayers, ping)
+	end
+end)
+
+connect(RunService.Stepped, function()
+	if not state.Noclip then return end
+	local character = player.Character
+	if not character then return end
+	for _, descendant in ipairs(character:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			if state.Collision[descendant] == nil then state.Collision[descendant] = descendant.CanCollide end
+			descendant.CanCollide = false
+		end
+	end
+end)
+
+connect(UserInputService.JumpRequest, function()
+	if not state.InfiniteJump or os.clock() - state.LastJumpAt < 1 then return end
+	state.LastJumpAt = os.clock()
+	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	if humanoid then humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end
+end)
+
+connect(UserInputService.InputBegan, function(input, processed)
+	if processed or UserInputService:GetFocusedTextBox() then return end
+	if input.KeyCode == Enum.KeyCode.RightShift then controller.ToggleVisible() end
+end)
+
+connect(player.Idled, function()
+	if not state.AntiAfk then return end
+	pcall(function()
+		VirtualUser:CaptureController()
+		VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+		task.wait(0.1)
+		VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+	end)
+end)
+
+local dragging, dragStart, startPosition = false, nil, nil
+connect(topBar.InputBegan, function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging, dragStart, startPosition = true, input.Position, window.Position
+	end
+end)
+connect(UserInputService.InputChanged, function(input)
+	if not dragging or (input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch) then return end
+	local delta = input.Position - dragStart
+	window.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
+	shadow.Position = UDim2.new(window.Position.X.Scale, window.Position.X.Offset + 8, window.Position.Y.Scale, window.Position.Y.Offset + 10)
+end)
+connect(UserInputService.InputEnded, function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+end)
+
+-- Keep a bounded local chat history for future adapters without exposing a separate tab.
+local function bindChat(target)
+	connect(target.Chatted, function(message)
+		table.insert(state.ChatLog, {At = os.time(), UserId = target.UserId, Name = target.DisplayName, Text = tostring(message)})
+		while #state.ChatLog > 100 do table.remove(state.ChatLog, 1) end
+	end)
+end
+for _, target in ipairs(Players:GetPlayers()) do bindChat(target) end
+connect(Players.PlayerAdded, bindChat)
+
+selectTab("Home")
+print("[Anomaly] Universal profile loaded", game.GameId, game.PlaceId)
+
+end)()
+if anomalyProfile == 'BeyondNen' then
+(function()
+-- Beyond Nen profile adapter
+-- The shared universal profile is initialized before this file. Game-specific
+-- controls will be added here after the remote fingerprint is confirmed.
+
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" then
+	warn("[Anomaly] Beyond Nen adapter could not find the universal core.")
+	return
+end
+
+controller.Profile = "BeyondNen"
+controller.AdapterStatus = "Fingerprint matched; feature mapping pending"
+
+print("[Anomaly] Beyond Nen adapter loaded")
+
+end)()
+end
+return
+end
 if ((getgenv and getgenv()) or shared).AnomalyServerCapture == true then
 ((getgenv and getgenv()) or shared).AnomalyServerCapture = nil
 (function()

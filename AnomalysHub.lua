@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v5. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v6. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3170,11 +3170,31 @@ local weaponProfiles = {
 		["129749360298776"] = {Phase = .40, Name = "sword multi-hit A (test)"},
 		["97566113528473"] = {Phase = .42, Name = "sword multi-hit B (test)"},
 	}},
+	dagger = {Label = "Dagger", Animations = {
+		-- Character.Weapon and equipped Tool both identify Phantom Goons Dagger.
+		-- ComboIndex confirms 1-5; seeds combine hit and manual-parry receipts.
+		["119352136287386"] = {Phase = .50, Name = "dagger M1-1"},
+		["99627503377437"] = {Phase = .31, Name = "dagger M1-2"},
+		["95750611460664"] = {Phase = .27, Name = "dagger M1-3"},
+		["101558279775309"] = {Phase = .33, Name = "dagger M1-4"},
+		["128432742916508"] = {Phase = .42, Name = "dagger M1-5"},
+		["92183486518214"] = {Phase = .46, Name = "dagger extra strike"},
+		-- Later hits persist after a confirmed first parry in the capture.
+		-- Each contact is attempted at most once; cooldowns still gate inputs.
+		["78084477149043"] = {Phases = {.30, .87, 1.12, 1.50}, Name = "dagger multi-hit"},
+	}},
 }
 local knownAnimations = {}
 for _, weapon in pairs(weaponProfiles) do for id in pairs(weapon.Animations) do knownAnimations[id] = true end end
+local recordedVariants = {}
+for _, key in ipairs({"sword", "dagger"}) do
+	for id in pairs(weaponProfiles[key].Animations) do
+		-- An ambiguous animation must not pick a weapon family arbitrarily.
+		recordedVariants[id] = recordedVariants[id] == nil and key or false
+	end
+end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v5", "Fists / BigPitchfork / Sword. Nine recorded sword attacks are ready for a timing test.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v6", "Fists / BigPitchfork / Sword / Dagger. Dagger combo and multi-hit timing ready for testing.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3187,11 +3207,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v5 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v6 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nFists: 12 timings. BigPitchfork: 5. Recorded Sword: 9 experimental timings. Character.Weapon takes precedence over Player.CombatStyle. No actor-name filters."
-		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword animation IDs select the Sword profile. Explicit conflicting Character.Weapon is never overridden. Sword reach 12 studs; existing profiles retain 9."
+		.. "\nFists: 12 animations. BigPitchfork: 5. Sword: 9. Dagger: 7 (one with four recorded contacts). New dagger/sword automatic timings are under test. No actor-name filters."
+		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger IDs select their profile. Explicit conflicting Character.Weapon is never overridden. Sword reach 12 studs; other profiles retain 9."
 		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
 		.. "\nUnknown weapons and animation variants are logged and skipped; a Fists label alone does not establish every fist animation's timing."
 		.. "\nConfirmed counts require ParryResult with local Parrier, matching attacker and a recent test input. Accepted is only an input acknowledgment."
@@ -3249,17 +3269,23 @@ local function weaponOf(rig)
 	local key = type(value) == "string" and value:lower():gsub("[%s_%-]", "") or "unknown"
 	if key == "fist" then key = "fists" end
 	if key == "achivesword" then key = "sword" end
+	if key == "phantomgoonsdagger" then key = "dagger" end
 	return key, weaponProfiles[key], source
 end
 local function attackOf(rig, id)
 	local key, weapon, source = weaponOf(rig)
-	-- The recorded sword player still advertises the generic Fists style.
-	-- Infer this one verified animation family per swing, without caching it
+	-- Players can still advertise the generic Fists style while armed.
+	-- Infer only an exact recorded animation family per swing, without caching it
 	-- across weapon swaps or borrowing timings from any other weapon.
-	if rig.Owner and source == "Player.CombatStyle" and key == "fists" and weaponProfiles.sword.Animations[id] then
-		key, weapon, source = "sword", weaponProfiles.sword, "recorded-animation/Player.CombatStyle=Fists"
+	local variant = recordedVariants[id]
+	if rig.Owner and source == "Player.CombatStyle" and key == "fists" and variant then
+		key, weapon, source = variant, weaponProfiles[variant], "recorded-animation/Player.CombatStyle=Fists"
 	end
 	return key, weapon, weapon and weapon.Animations[id], source
+end
+local function contactPhase(profile, index)
+	if profile.Phases then return profile.Phases[index] end
+	return index == 1 and profile.Phase or nil
 end
 local function weaponMetadata(rig)
 	if os.clock() < (rig.NextMetadata or 0) then return end
@@ -3494,12 +3520,15 @@ local function step()
 			local weaponKey, weapon, profile = attackOf(rig, swing.Asset)
 			if not profile then continue end
 			local phase, speed = track.TimePosition, track.Speed
-			local remaining = (profile.Phase - phase) / speed
-			if remaining < -.025 then
-				swing.Used = true
-				note(string.format("SKIP actorId=%d weapon=%s animation=%s reason=late phase=%.3f speed=%.3f eta=%.3f", rig.Id, weaponKey, swing.Asset, phase, speed, remaining))
-				continue
+			local contact = swing.Contact or 1
+			local hitPhase = contactPhase(profile, contact)
+			while hitPhase and (hitPhase - phase) / speed < -.025 do
+				note(string.format("SKIP actorId=%d weapon=%s animation=%s contact=%d reason=late phase=%.3f speed=%.3f eta=%.3f", rig.Id, weaponKey, swing.Asset, contact, phase, speed, (hitPhase - phase) / speed))
+				contact += 1; hitPhase = contactPhase(profile, contact)
 			end
+			swing.Contact = contact
+			if not hitPhase then swing.Used = true; continue end
+			local remaining = (hitPhase - phase) / speed
 			if remaining > state.Lead then continue end
 			local delta = localRoot.Position - root.Position
 			local distance = delta.Magnitude
@@ -3509,22 +3538,23 @@ local function step()
 			local facingDot = distance < 1 and 1 or root.CFrame.LookVector:Dot(delta.Unit)
 			local facing = facingDot >= .15
 			if distance <= (weapon.MaxDistance or 12) and projected.Magnitude <= (weapon.Reach or 9) and math.abs(delta.Y) <= 8 and facing then
-				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance} end
-			elseif not swing.GeometryLogged then
-				swing.GeometryLogged = true
-				note(string.format("SKIP actorId=%d weapon=%s animation=%s reason=geometry phase=%.3f eta=%.3f distance=%.2f projected=%.2f vertical=%.2f facing=%.3f", rig.Id, weaponKey, swing.Asset, phase, remaining, distance, projected.Magnitude, delta.Y, facingDot))
+				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1} end
+			elseif swing.GeometryContact ~= contact then
+				swing.GeometryContact = contact
+				note(string.format("SKIP actorId=%d weapon=%s animation=%s contact=%d reason=geometry phase=%.3f eta=%.3f distance=%.2f projected=%.2f vertical=%.2f facing=%.3f", rig.Id, weaponKey, swing.Asset, contact, phase, remaining, distance, projected.Magnitude, delta.Y, facingDot))
 			end
 		end
 	end
-	if not best then show("Watching mapped Fists / BigPitchfork / Sword attacks"); return end
-	best.Swing.Used = true
+	if not best then show("Watching mapped Fists / BigPitchfork / Sword / Dagger attacks"); return end
+	best.Swing.Contact = best.Contact + 1
+	best.Swing.Used = best.Contact >= best.ContactCount
 	state.LastAttempt = {At = now, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
 	state.Held = {Key = key, Until = now + .16}; state.Backoff = now + .25
 	local ok = pcall(function() manager:SendKeyEvent(true, key, false, game) end)
 	if not ok then stop("Block input unavailable"); return end
 	state.Presses += 1
-	note(string.format("KEY DOWN %s actor=%s weapon=%s animation=%s phase=%.3f speed=%.3f eta=%.3f distance=%.2f lead=%.3f actorId=%d",
-		key.Name, best.Model.Name, best.Weapon, best.Swing.Asset, best.Track.TimePosition, best.Track.Speed, best.Remaining, best.Distance, state.Lead, best.ActorId))
+	note(string.format("KEY DOWN %s actor=%s weapon=%s animation=%s phase=%.3f speed=%.3f eta=%.3f distance=%.2f lead=%.3f actorId=%d contact=%d/%d",
+		key.Name, best.Model.Name, best.Weapon, best.Swing.Asset, best.Track.TimePosition, best.Track.Speed, best.Remaining, best.Distance, state.Lead, best.ActorId, best.Contact, best.ContactCount))
 	show("Block tap: " .. best.Label)
 end
 local function start()
@@ -3543,7 +3573,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,BigPitchfork,Sword mapped=26 duration=90")
+	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,BigPitchfork,Sword,Dagger mapped=33 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

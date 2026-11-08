@@ -394,13 +394,47 @@ task.spawn(function()
 	if not unloaded and ok and type(info) == "table" and type(info.Name) == "string" then gameNameLabel.Text = info.Name end
 end)
 
-local playerCard = card(pages.Players, "PLAYER DIRECTORY", "Click a player to spectate. Click them again or your own name to return.", 354)
-local playerSearch = valueBox(playerCard, "Search players...", 14, 72, 180, "", function() end)
+local playerCard = card(pages.Players, "SPECTATE v4", "Choose a player with the arrows or open the list. Right-drag to orbit; scroll to zoom.", 202)
+local spectateBar = create("Frame", {
+	Name = "SpectateControls", Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 36),
+	BackgroundColor3 = colors.Surface, BorderSizePixel = 0,
+}, playerCard)
+create("UICorner", {CornerRadius = UDim.new(0, 7)}, spectateBar)
+create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = .2}, spectateBar)
+local targetPicker = button(spectateBar, "", 0, 0, 180, function() state.SetPlayerListOpen(not state.PlayerListOpen) end)
+targetPicker.Size = UDim2.new(1, -218, 1, 0)
+local targetLabel = create("TextLabel", {
+	Position = UDim2.fromOffset(8, 0), Size = UDim2.new(1, -82, 1, 0), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold, Text = "Choose player v", TextColor3 = colors.Text, TextSize = 10,
+	TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+}, targetPicker)
+local targetLevel = create("TextLabel", {
+	Position = UDim2.new(1, -74, 0, 0), Size = UDim2.new(0, 66, 1, 0), BackgroundTransparency = 1,
+	Font = Enum.Font.Code, Text = "", TextColor3 = colors.Accent, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right,
+}, targetPicker)
+local spectatePrevious = button(spectateBar, "<", 0, 0, 28, function() state.CycleSpectate(-1) end)
+spectatePrevious.Position, spectatePrevious.Size = UDim2.new(1, -210, 0, 5), UDim2.fromOffset(28, 26)
+local spectateNext = button(spectateBar, ">", 0, 0, 28, function() state.CycleSpectate(1) end)
+spectateNext.Position, spectateNext.Size = UDim2.new(1, -176, 0, 5), UDim2.fromOffset(28, 26)
+local spectateToggle = button(spectateBar, "SPECTATE", 0, 0, 136, function() state.ToggleSpectate() end, colors.AccentSoft)
+spectateToggle.Position, spectateToggle.Size = UDim2.new(1, -142, 0, 5), UDim2.fromOffset(136, 26)
+local selectedLabel = create("TextLabel", {
+	Position = UDim2.fromOffset(14, 111), Size = UDim2.new(1, -28, 0, 32), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Viewing your character", TextColor3 = colors.Muted, TextSize = 10,
+	TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
+}, playerCard)
+local spectateRecordButton = fitColumn(button(playerCard, "Record Spectate", 0, 0, 180, nil, colors.AccentSoft), 0, 154)
+local spectateRecordStatus = create("TextLabel", {
+	Position = UDim2.new(.5, 4, 0, 151), Size = UDim2.new(.5, -18, 0, 42), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Record nearby, distant, and leaderboard selections.", TextColor3 = colors.Muted, TextSize = 9,
+	TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
+}, playerCard)
+local playerSearch = valueBox(playerCard, "Search players...", 14, 202, 180, "", function() end)
 playerSearch.Size = UDim2.new(1, -138, 0, 34)
-local refreshPlayersButton = button(playerCard, "Refresh", 0, 72, 98, function() if state.RefreshPlayers then state.RefreshPlayers() end end)
-refreshPlayersButton.Position = UDim2.new(1, -112, 0, 72)
+local refreshPlayersButton = button(playerCard, "Refresh", 0, 202, 98, function() if state.RefreshPlayers then state.RefreshPlayers() end end)
+refreshPlayersButton.Position = UDim2.new(1, -112, 0, 202)
 local playerList = create("ScrollingFrame", {
-	Position = UDim2.fromOffset(14, 116), Size = UDim2.new(1, -28, 0, 192), BackgroundColor3 = colors.Surface,
+	Position = UDim2.fromOffset(14, 244), Size = UDim2.new(1, -28, 0, 166), BackgroundColor3 = colors.Surface,
 	BorderSizePixel = 0, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
 	ScrollBarThickness = 4, ScrollBarImageColor3 = colors.Accent,
 }, playerCard)
@@ -408,21 +442,26 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, playerList)
 create("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, playerList)
 create("UIPadding", {PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4), PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4)}, playerList)
 local playerCountLabel = create("TextLabel", {
-	Position = UDim2.fromOffset(14, 318), Size = UDim2.new(1, -28, 0, 22), BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(14, 416), Size = UDim2.new(1, -28, 0, 22), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "", TextColor3 = colors.Muted, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
 }, playerCard)
-local selectedCard = card(pages.Players, "SPECTATE v3", "Click a name to watch. Hold right mouse to orbit; scroll to zoom. Stop View returns.", 172)
-local selectedLabel = create("TextLabel", {
-	Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 42), BackgroundTransparency = 1,
-	Font = Enum.Font.GothamSemibold, Text = "No player selected", TextColor3 = colors.Text, TextSize = 11,
-	TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
-}, selectedCard)
+function state.SetPlayerListOpen(open)
+	state.PlayerListOpen = open == true
+	playerCard.Size = UDim2.new(1, 0, 0, state.PlayerListOpen and 450 or 202)
+	for _, object in ipairs({playerSearch, refreshPlayersButton, playerList, playerCountLabel}) do object.Visible = state.PlayerListOpen end
+end
+state.SetPlayerListOpen(false)
 
 local function refreshSpectateStatus()
 	local selected = state.SelectedPlayer
 	local viewing = state.SpectateTarget
-	selectedLabel.Text = (selected and ("Selected: " .. selected.DisplayName) or "No player selected")
-		.. "\n" .. (state.SpectateError or (viewing and ((state.SpectateWaiting and "Waiting for character: " or "Viewing: ") .. viewing.DisplayName)
+	local level = selected and tonumber(selected:GetAttribute("Level"))
+	targetLabel.Text = selected and (selected.DisplayName .. " v") or "Choose player v"
+	targetLevel.Text = level and level == level and level >= 0 and level < math.huge and ("LV. " .. math.floor(level)) or ""
+	spectateToggle.Text = viewing and "STOP SPECTATING" or "SPECTATE"
+	spectateToggle.BackgroundColor3 = viewing and colors.Danger or colors.AccentSoft
+	selectedLabel.Text = (selected and ("@" .. selected.Name .. "  |  ") or "")
+		.. (state.SpectateError or (viewing and ((state.SpectateWaiting and "Waiting for character: " or "Viewing: ") .. viewing.DisplayName)
 			or (state.SpectateReturning and "Waiting for your character" or "Viewing your character"))
 		)
 end
@@ -440,8 +479,22 @@ local function spectateSelected()
 	refreshSpectateStatus()
 end
 
-fitColumn(button(selectedCard, "Spectate Selected", 0, 0, 180, function() spectateSelected() end, colors.AccentSoft), 0, 124)
-fitColumn(button(selectedCard, "Stop View", 0, 0, 180, function() stopSpectating() end), 1, 124)
+function state.CycleSpectate(step)
+	local list = {}
+	for _, target in ipairs(Players:GetPlayers()) do if target ~= player and target.Parent == Players then table.insert(list, target) end end
+	table.sort(list, function(a, b) return string.lower(a.Name) < string.lower(b.Name) end)
+	if #list == 0 then state.SelectedPlayer = nil; stopSpectating(); return end
+	local index = table.find(list, state.SelectedPlayer) or (step > 0 and 0 or 1)
+	state.SelectedPlayer = list[((index - 1 + step) % #list) + 1]
+	if state.SpectateTarget then spectateSelected() else refreshSpectateStatus() end
+	if state.RefreshPlayers then state.RefreshPlayers() end
+end
+function state.ToggleSpectate()
+	if state.SpectateTarget then stopSpectating(); return end
+	if not state.SelectedPlayer or state.SelectedPlayer == player then state.CycleSpectate(1) end
+	spectateSelected()
+end
+-- END SPECTATE CONTROLS
 
 local espCard = card(pages.ESP, "PLAYER ESP", "Enable player overlays and set how far they can be seen.", 146)
 espCard.LayoutOrder = 10
@@ -670,6 +723,7 @@ controller.UI = {
 	Gui = gui, Window = window, Pages = pages, TabButtons = tabButtons,
 	Colors = colors, Create = create, Card = card, Button = button, ValueBox = valueBox,
 	PlayerEspCard = espCard, FitColumn = fitColumn, OptionGrid = optionGrid,
+	SpectateRecordButton = spectateRecordButton, SpectateRecordStatus = spectateRecordStatus,
 }
 controller.State = state
 controller.Connect = connect
@@ -783,6 +837,7 @@ function state.RefreshPlayers(leaving)
 				spectateSelected()
 			end
 			refreshSpectateStatus()
+			state.SetPlayerListOpen(false)
 			state.RefreshPlayers()
 		end))
 	end
@@ -791,6 +846,7 @@ function state.RefreshPlayers(leaving)
 			Font = Enum.Font.Gotham, Text = "No players match your search.", TextColor3 = colors.Muted, TextSize = 11}, playerList)
 	end
 	playerCountLabel.Text = string.format("%d of %d players  |  Click a name to spectate", shown, total)
+	refreshSpectateStatus()
 end
 state.RefreshPlayers()
 connect(playerSearch:GetPropertyChangedSignal("Text"), function() state.RefreshPlayers() end)
@@ -1034,6 +1090,7 @@ local saved, savedMouse, lastCamera, lastFrame, lastCharacter
 local yaw, pitch, distance = 0, math.rad(18), 14
 local lines, dirty, sampleAt, saveAt = {}, false, 0, 0
 local function note(text)
+	if controller.RecordSpectateEvent then controller.RecordSpectateEvent(text) end
 	if #lines >= 120 then table.remove(lines, 1) end
 	table.insert(lines, string.format("%.3f %s", os.clock(), text))
 	dirty = true
@@ -1208,6 +1265,209 @@ controller.RegisterCleanup(function()
 	if state.Spectator == spectator then state.Spectator = nil end
 end)
 note("READY v3"); save()
+
+end)()
+;(function()
+-- Explicit, local-only capture of spectate clicks and character availability.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" then return end
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local GuiService = game:GetService("GuiService")
+local Input = game:GetService("UserInputService")
+local player, ui, state = Players.LocalPlayer, controller.UI, controller.State
+local button, status = ui.SpectateRecordButton, ui.SpectateRecordStatus
+local path = "AnomalyHub/universal/spectate_capture.txt"
+local capture = {Active = false, Closed = false, Lines = {}, Bytes = 0, Roster = {}, Seen = {}, Last = {}}
+local function read(object, key)
+	if not object then return nil end
+	local ok, value = pcall(function() return object[key] end)
+	if ok then return value end
+	return nil
+end
+local function describe(object)
+	if not object then return "nil" end
+	local ok, result = pcall(function() return object.ClassName .. ":" .. object:GetFullName() end)
+	return ok and result or "unavailable"
+end
+local function position(root)
+	if not root or not root:IsA("BasePart") then return "unknown" end
+	local p = root.Position
+	return string.format("(%.1f,%.1f,%.1f)", p.X, p.Y, p.Z)
+end
+local function log(message)
+	if not capture.Active then return end
+	local line = string.format("%.3f %s", os.clock() - capture.Started, tostring(message):sub(1, 5000))
+	if #capture.Lines >= 3000 or capture.Bytes + #line + 1 > 750000 then capture.Limited = true; return end
+	table.insert(capture.Lines, line); capture.Bytes += #line + 1
+end
+local function save(reason)
+	capture.Report = "ANOMALY SPECTATE CAPTURE v1 // PASSIVE\nplace=" .. tostring(game.PlaceId)
+		.. "\nCaptures local character availability, current camera, scoped leaderboard UI, and mouse clicks."
+		.. "\nNo inputs, teleports, streaming requests, remote calls, decompilation, or chat/typed text capture."
+		.. "\nUnknown positions stay unknown; LAST_SEEN positions are historical and do not establish a current location."
+		.. "\nLimits: 180 seconds, 3000 lines, 750KB; leaderboard 200 objects; click hit lists 8 objects."
+		.. "\n" .. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason
+		.. (capture.Limited and "\nCAPTURE LIMIT REACHED" or "")
+	if type(writefile) ~= "function" then return false end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	return pcall(writefile, path, capture.Report)
+end
+local function modelState(model)
+	local humanoid = model and model:FindFirstChildOfClass("Humanoid")
+	local root = model and (model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head"))
+	local inWorld = model ~= nil and model:IsDescendantOf(workspace)
+	local usable = inWorld and humanoid ~= nil and humanoid.Health > 0 and root ~= nil and root:IsA("BasePart")
+	local detail = "model=" .. describe(model) .. " inWorld=" .. tostring(inWorld)
+		.. " humanoid=" .. describe(humanoid) .. " hp=" .. tostring(humanoid and humanoid.Health)
+		.. " root=" .. describe(root) .. " usable=" .. tostring(usable) .. " position=" .. position(root)
+	return detail, usable, root
+end
+local function targetSnapshot(target, full)
+	if not target then return end
+	local character = target.Character
+	local detail, usable, root = modelState(character)
+	local signature = describe(character) .. ":" .. tostring(usable) .. ":" .. describe(root)
+	if capture.Roster[target] ~= signature then
+		capture.Roster[target] = signature
+		log("AVAILABILITY @" .. target.Name .. " " .. detail)
+	end
+	if usable then capture.Seen[target] = {At = os.clock(), Position = position(root)} end
+	if not full then return end
+	log("TARGET @" .. target.Name .. " " .. detail)
+	local localCharacter = player.Character
+	local localRoot = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
+	if usable and localRoot and localRoot:IsA("BasePart") then
+		log(string.format("DISTANCE @%s %.1f studs", target.Name, (root.Position - localRoot.Position).Magnitude))
+	elseif capture.Seen[target] then
+		log(string.format("LAST_SEEN @%s age=%.1fs position=%s (historical)", target.Name, os.clock() - capture.Seen[target].At, capture.Seen[target].Position))
+	end
+	local models = workspace:FindFirstChild("Humanoids")
+	local named = controller.Profile == "BeyondNen" and models and models:FindFirstChild(target.Name)
+	if named and named ~= character then log("EXACT_NAME_CANDIDATE @" .. target.Name .. " " .. modelState(named)) end
+	for _, object in ipairs(character and {target, character} or {target}) do
+		local fields = {}
+		local ok, attributes = pcall(object.GetAttributes, object)
+		if ok then
+			local count = 0
+			for key, value in pairs(attributes) do
+				local lower = string.lower(key)
+				if typeof(value) == "Vector3" or typeof(value) == "CFrame" or lower:find("position", 1, true)
+					or lower:find("location", 1, true) or lower:find("stream", 1, true) then
+					table.insert(fields, key .. "=" .. tostring(value):sub(1, 180)); count += 1
+					if count >= 24 then table.insert(fields, "<attribute limit>"); break end
+				end
+			end
+		end
+		local attributesText = describe(object) .. " " .. table.concat(fields, " | ")
+		if capture.Last[object] ~= attributesText then capture.Last[object] = attributesText; log("LOCATION_ATTRIBUTES " .. attributesText) end
+	end
+	if character and capture.Last.Character ~= character then
+		capture.Last.Character = character
+		local children = character:GetChildren()
+		for i = 1, math.min(#children, 40) do log("CHARACTER_CHILD " .. describe(children[i])) end
+		if #children > 40 then log("CHARACTER_CHILD LIMIT 40") end
+		log("MODEL_STREAMING mode=" .. tostring(read(character, "ModelStreamingMode")) .. " primaryPart=" .. describe(read(character, "PrimaryPart")))
+	end
+end
+local function snapshotUI(reason)
+	local pg = player:FindFirstChildOfClass("PlayerGui")
+	local board = pg and pg:FindFirstChild("Leaderboard")
+	log("LEADERBOARD_SNAPSHOT " .. reason .. " root=" .. describe(board))
+	if not board then return end
+	log("LEADERBOARD_ROOT enabled=" .. tostring(read(board, "Enabled")) .. " ignoreInset=" .. tostring(read(board, "IgnoreGuiInset")))
+	local list = board:FindFirstChild("PlayerList")
+	if not list then log("LEADERBOARD PlayerList missing"); return end
+	local queue, cursor = {list}, 1
+	while cursor <= #queue and cursor <= 200 do
+		local object = queue[cursor]; cursor += 1
+		local text = describe(object)
+		if object:IsA("GuiObject") then
+			text ..= " visible=" .. tostring(object.Visible) .. " active=" .. tostring(object.Active)
+				.. " pos=" .. tostring(object.AbsolutePosition) .. " size=" .. tostring(object.AbsoluteSize) .. " z=" .. tostring(object.ZIndex)
+		end
+		if object:IsA("TextLabel") or object:IsA("TextButton") then text ..= " text=" .. string.format("%q", object.Text:sub(1, 180)) end
+		log("GUI " .. text)
+		for _, child in ipairs(object:GetChildren()) do
+			if #queue >= 200 then capture.UiLimited = true; break end
+			table.insert(queue, child)
+		end
+	end
+	if capture.UiLimited then log("LEADERBOARD UI LIMIT 200") end
+end
+local function sample()
+	local camera = workspace.CurrentCamera
+	local selected, target = state.SelectedPlayer, state.SpectateTarget
+	log("STATE selected=" .. (selected and selected.Name or "nil") .. " viewing=" .. (target and target.Name or "nil")
+		.. " waiting=" .. tostring(state.SpectateWaiting) .. " cameraType=" .. tostring(read(camera, "CameraType"))
+		.. " subject=" .. describe(read(camera, "CameraSubject")) .. " frame=" .. tostring(read(camera, "CFrame")))
+	targetSnapshot(target or selected, true)
+	if os.clock() >= (capture.NextRoster or 0) then
+		capture.NextRoster = os.clock() + 2
+		for _, current in ipairs(Players:GetPlayers()) do targetSnapshot(current, false) end
+		for current in pairs(capture.Roster) do
+			if current.Parent ~= Players then log("PLAYER_LEFT " .. current.Name); capture.Roster[current] = nil; capture.Seen[current] = nil end
+		end
+	end
+end
+local function stop(reason)
+	if not capture.Active then return end
+	log("STOP " .. tostring(reason)); snapshotUI("stop")
+	capture.Active = false
+	local saved = save(reason or "user")
+	button.Text, button.BackgroundColor3 = "Record Spectate", ui.Colors.AccentSoft
+	status.Text = saved and ("Saved recording" .. (capture.Limited and " (limit reached)" or "") .. ". Tell me done.") or "Could not save recording: file access unavailable."
+	status.TextColor3 = saved and ui.Colors.Success or ui.Colors.Warning
+end
+local function start()
+	if capture.Closed or controller.IsUnloaded() then return end
+	if type(writefile) ~= "function" then status.Text = "Recording needs executor file access."; return end
+	capture.Active, capture.Started, capture.NextSample, capture.NextSave, capture.NextRoster = true, os.clock(), 0, 0, 0
+	capture.Lines, capture.Bytes, capture.Roster, capture.Seen, capture.Last, capture.Limited, capture.UiLimited = {}, 0, {}, {}, {}, false, false
+	log("START profile=" .. tostring(controller.Profile))
+	for _, key in ipairs({"StreamingEnabled", "StreamingMinRadius", "StreamingTargetRadius", "ModelStreamingBehavior", "StreamOutBehavior"}) do
+		log("WORKSPACE " .. key .. "=" .. tostring(read(workspace, key)))
+	end
+	log("REPLICATION_FOCUS " .. describe(read(player, "ReplicationFocus")))
+	snapshotUI("start"); sample()
+	if not save("recording") then stop("save failed"); return end
+	button.Text, button.BackgroundColor3 = "Stop + Save", ui.Colors.Danger
+	status.Text, status.TextColor3 = "Recording. Try nearby, distant, and leaderboard selections. Auto-saves after 3 minutes.", ui.Colors.Success
+end
+controller.RecordSpectateEvent = function(message) log("EVENT " .. message) end
+controller.IsSpectateRecording = function() return capture.Active end
+controller.CaptureSpectateClick = function(phase, input, processed, target, row)
+	if not capture.Active or Input:GetFocusedTextBox() then return end
+	local pg = player:FindFirstChildOfClass("PlayerGui")
+	local inset = GuiService:GetGuiInset()
+	log("MOUSE " .. phase .. " button=" .. tostring(input.UserInputType) .. " screen=" .. tostring(input.Position)
+		.. " inset=" .. tostring(inset) .. " processed=" .. tostring(processed) .. " resolved=" .. (target and target.Name or "nil") .. " row=" .. describe(row))
+	if not pg then return end
+	for _, query in ipairs({{Name = "GUI", X = input.Position.X - inset.X, Y = input.Position.Y - inset.Y},
+		{Name = "RAW_DIAGNOSTIC", X = input.Position.X, Y = input.Position.Y}}) do
+		local hits = pg:GetGuiObjectsAtPosition(query.X, query.Y)
+		log("HITS " .. query.Name .. " count=" .. #hits)
+		for i = 1, math.min(#hits, 8) do
+			local object = hits[i]
+			-- Paths/geometry only: never copy arbitrary text from chat or input boxes.
+			log("HIT " .. query.Name .. " " .. i .. " " .. describe(object) .. " pos=" .. tostring(object.AbsolutePosition)
+				.. " size=" .. tostring(object.AbsoluteSize) .. " active=" .. tostring(object.Active) .. " visible=" .. tostring(object.Visible))
+		end
+	end
+end
+controller.Connect(button.Activated, function() if capture.Active then stop("user") else start() end end)
+controller.Connect(RunService.Heartbeat, function()
+	if not capture.Active then return end
+	if capture.Limited or os.clock() - capture.Started >= 180 then stop(capture.Limited and "limit" or "180 seconds"); return end
+	if os.clock() >= capture.NextSample then
+		capture.NextSample = os.clock() + .5
+		local ok, err = pcall(sample)
+		if not ok then log("SAMPLE ERROR " .. tostring(err)); stop("sample error"); return end
+	end
+	if os.clock() >= capture.NextSave then capture.NextSave = os.clock() + 2; save("recording") end
+end)
+controller.RegisterCleanup(function() stop("unload"); capture.Closed = true end)
 
 end)()
 if anomalyProfile == 'BeyondNen' then
@@ -1469,19 +1729,21 @@ end
 local function mouseButton(input)
 	return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2
 end
-controller.Connect(Input.InputBegan, function(input)
+controller.Connect(Input.InputBegan, function(input, processed)
 	if closed or not mouseButton(input) or Input:GetFocusedTextBox() then return end
 	local target, row = hit(input.Position)
+	if controller.CaptureSpectateClick then pcall(controller.CaptureSpectateClick, "DOWN", input, processed, target, row) end
 	if target then
 		pending[input.UserInputType] = {Target = target, Row = row, Position = input.Position, At = os.clock()}
 		note("LEADERBOARD DOWN " .. target.Name .. " " .. tostring(input.UserInputType) .. " row=" .. row:GetFullName())
 	end
 end)
-controller.Connect(Input.InputEnded, function(input)
+controller.Connect(Input.InputEnded, function(input, processed)
 	if closed or not mouseButton(input) then return end
+	local target, row = hit(input.Position)
+	if controller.CaptureSpectateClick then pcall(controller.CaptureSpectateClick, "UP", input, processed, target, row) end
 	local down = pending[input.UserInputType]; pending[input.UserInputType] = nil
 	if not down or os.clock() - down.At > .75 or (input.Position - down.Position).Magnitude > 8 or Input:GetFocusedTextBox() then return end
-	local target, row = hit(input.Position)
 	if target == down.Target and row == down.Row and target.Parent == Players then
 		note("LEADERBOARD CLICK " .. target.Name)
 		controller.ToggleSpectatePlayer(target, "Beyond Nen leaderboard")

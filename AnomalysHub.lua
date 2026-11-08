@@ -436,7 +436,9 @@ local function queueReload()
 	local url = env.__GohanHubLoaderUrl
 	if type(queue) ~= "function" or type(url) ~= "string" or url == "" then return false end
 	local quoted = string.format("%q", url)
-	return pcall(queue, "task.wait(10);loadstring(game:HttpGet(" .. quoted .. "))()")
+	local queued = "task.wait(10);local u=" .. quoted
+		.. ";local s=u:find('?',1,true) and '&' or '?';loadstring(game:HttpGet(u..s..'anomaly_reload='..tostring(os.time())))()"
+	return pcall(queue, queued)
 end
 
 local function fetchServers()
@@ -582,13 +584,16 @@ controller.UI = {
 controller.State = state
 controller.Connect = connect
 function controller.Reload()
-	local source = env.__GohanHubSource
-	if type(source) ~= "string" then
-		local url = env.__GohanHubLoaderUrl
-		if type(url) == "string" and url ~= "" then
-			local ok, result = pcall(function() return game:HttpGet(url) end)
-			if ok then source = result end
-		end
+	local source = nil
+	local url = env.__GohanHubLoaderUrl
+	if type(url) == "string" and url ~= "" then
+		url = url:gsub("#.*$", "")
+		local separator = url:find("?", 1, true) and "&" or "?"
+		local freshUrl = url .. separator .. "anomaly_reload=" .. HttpService:GenerateGUID(false)
+		local ok, result = pcall(function() return game:HttpGet(freshUrl) end)
+		if ok then source = result end
+	elseif env.GohanHubEnvironment == "local" then
+		source = env.__GohanHubSource
 	end
 	if type(source) ~= "string" then return false, "No loader source is available" end
 	local compiled, err = loadstring(source, "AnomalyUniversal_reload")
@@ -18947,7 +18952,10 @@ function qolState.ServerNavigation.QueueSelfForTeleport()
 	-- Runs in the destination only; never sleeps during injection or queuing.
 	local reloadDelay = "if not game:IsLoaded() then game.Loaded:Wait() end;task.wait(10);"
 	if queueFunction and type(loaderUrl) == "string" and string.match(loaderUrl, "^https://") then
-		local ok = pcall(queueFunction, reloadDelay .. "loadstring(game:HttpGet(" .. string.format("%q", loaderUrl) .. "))()")
+		local quotedUrl = string.format("%q", loaderUrl)
+		local queuedLoader = reloadDelay .. "local u=" .. quotedUrl
+			.. ";local s=u:find('?',1,true) and '&' or '?';loadstring(game:HttpGet(u..s..'anomaly_reload='..tostring(os.time())))()"
+		local ok = pcall(queueFunction, queuedLoader)
 		if ok then qolState.ServerNavigation.TeleportQueueArmed = true end
 		if ok then
 			return true

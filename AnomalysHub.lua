@@ -96,6 +96,7 @@ local state = {
 	SpectateTarget = nil,
 	EspEnabled = false,
 	EspDistance = 2500,
+	EspSettings = {Name = true, Lineage = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
 	Noclip = false,
 	InfiniteJump = false,
 	SpeedEnabled = false,
@@ -122,6 +123,11 @@ local function loadConfig()
 	if not ok or type(decoded) ~= "table" then return end
 	state.EspEnabled = decoded.EspEnabled == true
 	state.EspDistance = math.clamp(tonumber(decoded.EspDistance) or 2500, 100, 10000)
+	if type(decoded.EspSettings) == "table" then
+		for key in pairs(state.EspSettings) do
+			if type(decoded.EspSettings[key]) == "boolean" then state.EspSettings[key] = decoded.EspSettings[key] end
+		end
+	end
 	state.InfiniteJump = decoded.InfiniteJump == true
 	state.SpeedEnabled = decoded.SpeedEnabled == true
 	state.WalkSpeed = math.clamp(tonumber(decoded.WalkSpeed) or 16, 8, 250)
@@ -135,6 +141,7 @@ local function saveConfig()
 		Version = 1,
 		EspEnabled = state.EspEnabled,
 		EspDistance = state.EspDistance,
+		EspSettings = table.clone(state.EspSettings),
 		InfiniteJump = state.InfiniteJump,
 		SpeedEnabled = state.SpeedEnabled,
 		WalkSpeed = state.WalkSpeed,
@@ -551,7 +558,7 @@ local function unload()
 	for part, canCollide in pairs(state.Collision) do if part and part.Parent then pcall(function() part.CanCollide = canCollide end) end end
 	for _, entry in pairs(state.EspEntries) do
 		if entry.Gui then entry.Gui:Destroy() end
-		if entry.Highlight then entry.Highlight:Destroy() end
+		if entry.BoxGui then entry.BoxGui:Destroy() end
 	end
 	for _, connection in ipairs(connections) do pcall(function() connection:Disconnect() end) end
 	if gui then gui:Destroy() end
@@ -567,6 +574,7 @@ end
 function controller.ToggleVisible() return controller.SetVisible(not state.Visible) end
 function controller.GetProfile() return controller.Profile, game.GameId, game.PlaceId end
 function controller.CaptureRemoteFingerprint() return captureRemoteFingerprint() end
+function controller.SaveConfig() return saveConfig() end
 controller.UI = {
 	Gui = gui, Window = window, Pages = pages, TabButtons = tabButtons,
 	Colors = colors, Create = create, Card = card, Button = button, ValueBox = valueBox,
@@ -643,7 +651,7 @@ local function removeEsp(target)
 	local entry = state.EspEntries[target]
 	if not entry then return end
 	if entry.Gui then entry.Gui:Destroy() end
-	if entry.Highlight then entry.Highlight:Destroy() end
+	if entry.BoxGui then entry.BoxGui:Destroy() end
 	state.EspEntries[target] = nil
 end
 
@@ -660,39 +668,41 @@ local function updateEsp(target, localRoot)
 		removeEsp(target)
 		entry = {Character = character}
 		entry.Gui = create("BillboardGui", {
-			Name = "AnomalyUniversalESP", Size = UDim2.fromOffset(250, 98), StudsOffsetWorldSpace = Vector3.new(0, 4.4, 0),
+			Name = "AnomalyUniversalESP", Size = UDim2.fromOffset(240, 68), StudsOffsetWorldSpace = Vector3.new(0, 4.2, 0),
 			AlwaysOnTop = true, LightInfluence = 0, MaxDistance = state.EspDistance, Adornee = root,
 		}, gui)
 		entry.Label = create("TextLabel", {
-			Position = UDim2.fromOffset(5, 0), Size = UDim2.new(1, -10, 0, 38), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
+			Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
 			TextColor3 = colors.Text, TextStrokeColor3 = Color3.new(), TextStrokeTransparency = 0.2,
 			TextSize = 11, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Bottom,
 		}, entry.Gui)
-		local function makeResourceBar(name, y, fillColor)
+		entry.BoxGui = create("BillboardGui", {
+			Name = "AnomalyUniversalESPBox", Size = UDim2.fromOffset(396, 132), StudsOffsetWorldSpace = Vector3.new(0, 1.4, 0),
+			AlwaysOnTop = true, LightInfluence = 0, MaxDistance = state.EspDistance, Adornee = root, ClipsDescendants = false,
+		}, gui)
+		entry.BoxFrame = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(76, 132),
+			BackgroundTransparency = 1, BorderSizePixel = 0,
+		}, entry.BoxGui)
+		entry.BoxStroke = create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.4, Transparency = 0}, entry.BoxFrame)
+		local function makeResourceBar(name, rightOffset, fillColor)
 			local background = create("Frame", {
-				Name = name, Position = UDim2.fromOffset(10, y), Size = UDim2.fromOffset(230, 13),
-				BackgroundColor3 = Color3.fromRGB(20, 17, 25), BackgroundTransparency = 0.12, BorderSizePixel = 0,
-			}, entry.Gui)
+				Name = name, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, rightOffset, 0, 3),
+				Size = UDim2.new(0, 7, 1, -6), BackgroundColor3 = Color3.fromRGB(8, 8, 8),
+				BackgroundTransparency = 0.02, BorderSizePixel = 0, ZIndex = 3,
+			}, entry.BoxFrame)
 			create("UICorner", {CornerRadius = UDim.new(0, 3)}, background)
+			create("UIStroke", {Color = Color3.fromRGB(15, 15, 15), Thickness = 1, Transparency = 0}, background)
 			local fill = create("Frame", {
-				Name = "Fill", Size = UDim2.fromScale(1, 1), BackgroundColor3 = fillColor, BorderSizePixel = 0,
+				Name = "Fill", AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1),
+				Size = UDim2.fromScale(1, 1), BackgroundColor3 = fillColor, BorderSizePixel = 0, ZIndex = 4,
 			}, background)
 			create("UICorner", {CornerRadius = UDim.new(0, 3)}, fill)
-			local text = create("TextLabel", {
-				Name = "Value", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.Code,
-				Text = name:upper(), TextColor3 = Color3.new(1, 1, 1), TextStrokeColor3 = Color3.new(),
-				TextStrokeTransparency = 0.15, TextSize = 9, ZIndex = 3,
-			}, background)
-			return {Background = background, Fill = fill, Text = text}
+			return {Background = background, Fill = fill}
 		end
-		entry.Health = makeResourceBar("Health", 42, Color3.fromRGB(239, 73, 89))
-		entry.Energy = makeResourceBar("Energy", 59, Color3.fromRGB(65, 151, 255))
-		entry.Stamina = makeResourceBar("Stamina", 76, Color3.fromRGB(255, 205, 75))
-		entry.Highlight = create("Highlight", {
-			Name = "AnomalyUniversalHighlight", Adornee = character, FillColor = colors.AccentSoft,
-			FillTransparency = 0.82, OutlineColor = colors.Accent, OutlineTransparency = 0.12,
-			DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
-		}, gui)
+		entry.Health = makeResourceBar("Health", -21, Color3.fromRGB(239, 55, 62))
+		entry.Energy = makeResourceBar("Energy", -12, Color3.fromRGB(48, 145, 255))
+		entry.Stamina = makeResourceBar("Stamina", -3, Color3.fromRGB(255, 205, 75))
 		state.EspEntries[target] = entry
 	end
 	local extra = nil
@@ -700,25 +710,31 @@ local function updateEsp(target, localRoot)
 		local ok, result = pcall(controller.ResolvePlayerEspData, target, character, humanoid)
 		if ok and type(result) == "table" then extra = result end
 	end
-	local function updateResourceBar(bar, name, current, maximum, alwaysVisible)
+	local function updateResourceBar(bar, current, maximum, enabled)
 		current, maximum = tonumber(current), tonumber(maximum)
 		local visible = current ~= nil and maximum ~= nil and maximum > 0
-		bar.Background.Visible = visible or alwaysVisible == true
+		bar.Background.Visible = enabled == true
 		if not visible then
-			bar.Fill.Size = UDim2.fromScale(0, 1)
-			bar.Text.Text = name:upper() .. "  --"
+			bar.Fill.Size = UDim2.fromScale(1, 0)
 			return
 		end
-		bar.Fill.Size = UDim2.fromScale(math.clamp(current / maximum, 0, 1), 1)
-		bar.Text.Text = string.format("%s  %d/%d", name:upper(), math.max(0, math.floor(current + 0.5)), math.max(0, math.floor(maximum + 0.5)))
+		bar.Fill.Size = UDim2.fromScale(1, math.clamp(current / maximum, 0, 1))
 	end
 	entry.Gui.MaxDistance = state.EspDistance
-	local clan = extra and tostring(extra.Clan or "") or ""
-	entry.Label.Text = clan ~= "" and string.format("%s  //  CLAN: %s\n%d STUDS", target.DisplayName, clan, math.floor(distance + 0.5))
-		or string.format("%s\n%d STUDS", target.DisplayName, math.floor(distance + 0.5))
-	updateResourceBar(entry.Health, "Health", humanoid.Health, humanoid.MaxHealth, true)
-	updateResourceBar(entry.Energy, "Energy", extra and extra.Energy, extra and extra.MaxEnergy, false)
-	updateResourceBar(entry.Stamina, "Stamina", extra and extra.Stamina, extra and extra.MaxStamina, false)
+	entry.BoxGui.MaxDistance = state.EspDistance
+	local settings = state.EspSettings
+	local lines = {}
+	if settings.Name then table.insert(lines, target.DisplayName) end
+	local lineage = extra and tostring(extra.Lineage or extra.Clan or "Unknown") or "Unknown"
+	if settings.Lineage then table.insert(lines, "LINEAGE // " .. lineage) end
+	if settings.Distance then table.insert(lines, string.format("%d STUDS", math.floor(distance + 0.5))) end
+	entry.Label.Text = table.concat(lines, "\n")
+	entry.Gui.Enabled = #lines > 0
+	entry.BoxStroke.Enabled = settings.Box == true
+	entry.BoxGui.Enabled = settings.Box or settings.Health or settings.Energy or settings.Stamina
+	updateResourceBar(entry.Health, humanoid.Health, humanoid.MaxHealth, settings.Health)
+	updateResourceBar(entry.Energy, extra and extra.Energy, extra and extra.MaxEnergy, settings.Energy)
+	updateResourceBar(entry.Stamina, extra and extra.Stamina, extra and extra.MaxStamina, settings.Stamina)
 end
 
 local elapsed = 0
@@ -834,7 +850,6 @@ controller.GameIdentity = {
 }
 
 local Players = game:GetService("Players")
-local HttpService = game:GetService("HttpService")
 local cache = setmetatable({}, {__mode = "k"})
 
 local function normalize(name)
@@ -901,7 +916,7 @@ function controller.ResolvePlayerEspData(target, character, humanoid)
 	end
 	local sources = entry.Sources
 	return {
-		Clan = readAlias(sources, clanAliases) or "Unknown",
+		Lineage = readAlias(sources, clanAliases) or "Unknown",
 		Energy = readAlias(sources, energyAliases),
 		MaxEnergy = readAlias(sources, maxEnergyAliases),
 		Stamina = readAlias(sources, staminaAliases),
@@ -916,6 +931,27 @@ if type(ui) == "table" and ui.Gui then
 			object.Text = "BEYOND NEN PLAYER ESP"
 			break
 		end
+	end
+end
+
+if type(ui) == "table" and ui.Pages and ui.Pages.Players and type(ui.Card) == "function" and type(ui.Button) == "function" then
+	local optionsCard = ui.Card(ui.Pages.Players, "BEYOND NEN ESP OPTIONS", "Choose exactly which identity fields, body outline, and resource bars are visible.", 236)
+	local labels = {
+		Name = "Name", Lineage = "Lineage", Distance = "Distance", Box = "Body box",
+		Health = "Health bar", Energy = "Energy bar", Stamina = "Stamina bar",
+	}
+	local order = {"Name", "Lineage", "Distance", "Box", "Health", "Energy", "Stamina"}
+	for index, key in ipairs(order) do
+		local column = (index - 1) % 2
+		local row = math.floor((index - 1) / 2)
+		local enabled = controller.State.EspSettings[key] == true
+		ui.Button(optionsCard, labels[key] .. ": " .. (enabled and "ON" or "OFF"), 14 + column * 190, 72 + row * 40, 180, function(object)
+			local nextValue = controller.State.EspSettings[key] ~= true
+			controller.State.EspSettings[key] = nextValue
+			object.Text = labels[key] .. ": " .. (nextValue and "ON" or "OFF")
+			object.BackgroundColor3 = nextValue and ui.Colors.AccentSoft or ui.Colors.Surface
+			if type(controller.SaveConfig) == "function" then controller.SaveConfig() end
+		end, enabled and ui.Colors.AccentSoft or ui.Colors.Surface)
 	end
 end
 
@@ -971,7 +1007,7 @@ end
 controller.CaptureBeyondNenEspState = captureEspState
 
 if type(ui) == "table" and ui.Pages and ui.Pages.Players and type(ui.Card) == "function" and type(ui.Button) == "function" then
-	local discoveryCard = ui.Card(ui.Pages.Players, "BEYOND NEN ESP DISCOVERY", "If clan, energy, or stamina is missing, capture the passive client state and send the saved report.", 126)
+	local discoveryCard = ui.Card(ui.Pages.Players, "BEYOND NEN ESP DISCOVERY", "If lineage, energy, or stamina is missing, capture the passive client state and send the saved report.", 126)
 	local status = ui.Create("TextLabel", {
 		Position = UDim2.fromOffset(204, 73), Size = UDim2.new(1, -218, 0, 40), BackgroundTransparency = 1,
 		Font = Enum.Font.Gotham, Text = "No remotes are fired.", TextColor3 = ui.Colors.Muted, TextSize = 9,

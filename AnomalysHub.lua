@@ -2807,7 +2807,7 @@ controller.BeyondNenMeditationProgress = progress
 
 end)()
 ;(function()
--- Auto Meditation v2: live minigames and two-minute technique-limit checks.
+-- Auto Meditation v3: correct screen/GUI coordinates for training-menu clicks.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -2831,7 +2831,7 @@ end
 local function save()
 	if not state.Started or type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	pcall(writefile, path, "BEYOND NEN AUTO MEDITATION v2 // TRAINING ROTATION\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n"))
+	pcall(writefile, path, "BEYOND NEN AUTO MEDITATION v3 // TRAINING ROTATION\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n"))
 end
 local function show(message)
 	local text = message .. "\nConfirmed hits: " .. state.Hits .. " | Misses: " .. state.Misses
@@ -2856,7 +2856,7 @@ local function snapshotUI(section, pg)
 		if count > 300 then break end
 	end
 	state.UIReports[section] = table.concat(lines, "\n")
-	local reports = {"BEYOND NEN AUTO MEDITATION v2 // SCOPED UI"}
+	local reports = {"BEYOND NEN AUTO MEDITATION v3 // SCOPED UI"}
 	for _, text in pairs(state.UIReports) do table.insert(reports, text) end
 	pcall(writefile, "AnomalyHub/universal/beyond_nen_automeditation_ui.txt", table.concat(reports, "\n\n"))
 end
@@ -2903,7 +2903,9 @@ local function gui()
 	return meditation, training and meditation.Enabled and training.Visible, pg
 end
 local function obstructed(pg, x, y, target)
-	for _, object in ipairs(pg and pg:GetGuiObjectsAtPosition(x, y) or {}) do
+	-- Hit-testing uses GUI coordinates; virtual mouse input uses screen coordinates.
+	local inset = GuiService:GetGuiInset()
+	for _, object in ipairs(pg and pg:GetGuiObjectsAtPosition(x - inset.X, y - inset.Y) or {}) do
 		if target and (object == target or object:IsDescendantOf(target)) then return false end
 		if (object.Active or object:IsA("GuiButton") or object:IsA("TextBox"))
 			and not (target and target:IsDescendantOf(object)) then return true end
@@ -2912,14 +2914,16 @@ local function obstructed(pg, x, y, target)
 end
 local function clickButton(button, pg)
 	if state.Held or not button or not progress.Visible(button) then return false end
-	local screen = button:FindFirstAncestorWhichIsA("ScreenGui")
-	local inset = screen and screen.IgnoreGuiInset and Vector2.new(0, 0) or GuiService:GetGuiInset()
+	-- AbsolutePosition stays in CoreUISafeInsets coordinates even when the
+	-- ScreenGui ignores the inset. Always add it when sending a screen click.
+	local inset = GuiService:GetGuiInset()
 	local x = button.AbsolutePosition.X + button.AbsoluteSize.X * 0.5 + inset.X
 	local y = button.AbsolutePosition.Y + button.AbsoluteSize.Y * 0.5 + inset.Y
 	if button.AbsoluteSize.X <= 0 or button.AbsoluteSize.Y <= 0 or obstructed(pg, x, y, button) then
 		show("Move or hide the hub so the training menu can be clicked."); return false
 	end
 	if not pressMouse(x, y, 0.05) then stop("Training-menu mouse input unavailable."); return false end
+	note(string.format("MENU CLICK %s x=%.1f y=%.1f inset=%.1f,%.1f", button:GetFullName(), x, y, inset.X, inset.Y))
 	return true
 end
 local function syncTechnique()
@@ -3089,7 +3093,7 @@ local function observe(name, direction, args, requestStart)
 	end
 end
 
-local card = ui.Card(ui.Pages.Auto, "AUTO MEDITATION // v2", "Checks technique limits every 2 minutes and switches when capped. Keep the game controls clear, or hide the hub with Right Alt.", 218)
+local card = ui.Card(ui.Pages.Auto, "AUTO MEDITATION // v3", "Checks technique limits every 2 minutes and switches when capped. Keep the game controls clear, or hide the hub with Right Alt.", 218)
 card.LayoutOrder = 20
 status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
@@ -3201,7 +3205,7 @@ local function step()
 		-- Wait for the live approach ring to meet the target. The recorded
 		-- prompt settles at Window and the successful click returned just after it.
 		if age < pending.Window * 0.8 or ratio > 1.01 or age > pending.Window + 0.12 then return end
-		local inset = meditation.IgnoreGuiInset and Vector2.new(0, 0) or GuiService:GetGuiInset()
+		local inset = GuiService:GetGuiInset()
 		local x = circle.AbsolutePosition.X + circle.AbsoluteSize.X * 0.5 + inset.X
 		local y = circle.AbsolutePosition.Y + circle.AbsoluteSize.Y * 0.5 + inset.Y
 		if obstructed(pg, x, y, circle) then show("Move or hide the hub so the circle can be clicked."); return end

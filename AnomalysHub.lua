@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v18. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v19. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3247,7 +3247,11 @@ local weaponProfiles = {
 		-- Most bursts begin around .43-.49 and recur ~.10 apart. These are
 		-- candidate contact windows, not a measured shot count/projectile speed.
 		-- Normal cooldown skips contacts; no claim every bullet can be parried.
-		["86446252027083"] = {Phases = {.42, .52, .62, .72, .82, .92, 1.02, 1.12, 1.22, 1.32, 1.42}, MinFollowupLead = .08, Reach = 35, MaxDistance = 38, Name = "rifle burst (test)"},
+		-- v18 confirms first/later parries, but release/cooldown gaps allow
+		-- bullets to hit before the next tap (nine FreshHitStun responses).
+		-- Trial: wait briefly for a result; only a matched parry extends guard
+		-- through this burst, with a hard time cap and normal lifecycle release.
+		["86446252027083"] = {Phases = {.42, .52, .62, .72, .82, .92, 1.02, 1.12, 1.22, 1.32, 1.42}, MinFollowupLead = .08, GuardThroughPhase = 1.65, Reach = 35, MaxDistance = 38, Name = "rifle burst (test)"},
 	}},
 	sword = {Label = "Sword (recorded)", Reach = 12, MaxDistance = 15, Animations = {
 		-- User identified "achive sword"; later equipment data says Archive Sword.
@@ -3303,7 +3307,7 @@ for _, key in ipairs({"sword", "dagger", "bat"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v18", "Rifle attacks and a missing Fists strike added for testing. Previous Bear timing changes retained.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v19", "Rifle burst trial: keep guarding after a confirmed parry until the burst ends. Other attacks retain their tap timing.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3316,11 +3320,12 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v18 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v19 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
 		.. "\nFists: 13 animations. Pitchfork: 6. BigPitchfork: 8. Rifle: 5 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
-		.. "\nRifle v16 had zero automatic inputs because it was unmapped. v18 adds trial strike timings and eleven burst contact windows, not an established shot count. Burst reach35/max38 and strike A reach14/max17 are separate from default melee bounds. Burst follow-ups need .08s lead and respect game cooldown. Projectile speed/distance delay and automatic success remain unverified."
+		.. "\nRifle v16 had zero automatic inputs because it was unmapped. v18 added trial strike timings and eleven burst contact windows, not an established shot count. Burst reach35/max38 and strike A reach14/max17 are separate from default melee bounds. Burst follow-ups need .08s lead and respect game cooldown. Projectile speed/distance delay and full attack coverage remain unverified."
+		.. "\nRifle v18 confirmed6 close-attack and3 burst parries. v19 burst-only guard trial: initial F hold up to.30s; a matched ParryResult extends it through phase1.65, capped at2s total. Accepted alone never extends guard. Rejection, stopped/reused/paused track, target loss, focus/menu/chat/death/travel/unload release normally. Sustained block is not counted as another parry; whether it protects later bullets needs in-game testing."
 		.. "\nFists17050689141 uses a new .85 phase seed from three damage samples. Looping14241195451 remains unmapped: repeating damage alone does not establish its parry windows."
 		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger/bat IDs select their profile per swing. Explicit conflicting Character.Weapon is never overridden. Default reach 9 studs; Sword 12; Bat 11; Fox Bear 13 (strike A15, extended20, rapid19, ranged45, additional28); Dagger repeated strike18 and long-windup13. Facing minima: Fox Bear strike A -.4/additional skill-.8, BigPitchfork multi-hit0, other directional attacks .15."
 		.. "\nBear rapid/extended skills require at least .08s before a follow-up contact; otherwise skip it and consider later contacts without bypassing cooldown. This experimental cutoff does not promise escape from hitstun. First contacts and other weapon timings retain their previous rules."
@@ -3332,6 +3337,7 @@ local function save(reason)
 		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
 		.. "\nCOMBAT_STATE records raw local attributes at inputs, damage and rejections; their clock bases may differ. NO_OBSERVED_REQUEST means no hook observation before the deadline/stop, not proof that nothing reached the server."
 		.. "\nDECISION requestDelay is local elapsed time from outgoing observation to response, not isolated network latency. Rejected requests are not replayed or retimestamped."
+		.. "\nREQUEST includes the game's outgoing block timestamp, observed GetServerTimeNow and their difference when available. This is clock evidence for InvalidTimestamp responses, not a server validity check; request arguments remain unchanged."
 		.. "\nBLOCK_EVENT observes only the configured block key outside text focus; input numbers correlate with a nearby automatic press, not proof of input origin. processed=true is the engine flag, not a confirmed rejection. SELF_ACTIONS records bounded local animation IDs/phases; no action is cancelled or replayed."
 		.. "\nDAMAGE_NEARBY includes the bounded watched rigs within 60 studs and up to 12 playing tracks each, of any priority/loop state, with totalTracks to expose the sampling limit. Proximity is not proof of damage attribution. Unmapped/looping tracks remain diagnostic only."
 		.. "\nUnknown weapons and animation variants are logged and skipped; a Fists label alone does not establish every fist animation's timing."
@@ -3413,7 +3419,12 @@ local function release()
 	if not state.Held then return true end
 	local key = state.Held.Key
 	local ok = pcall(function() manager:SendKeyEvent(false, key, false, game) end)
-	if ok then state.Held = nil; note("KEY UP " .. key.Name) end
+	if ok then
+		if state.Held.GuardThroughPhase then
+			note("BURST_GUARD release input=" .. state.Held.Attempt.Serial .. " confirmed=" .. tostring(state.Held.GuardConfirmed == true))
+		end
+		state.Held = nil; note("KEY UP " .. key.Name)
+	end
 	return ok
 end
 local function clearRigs()
@@ -3611,7 +3622,11 @@ local function feedback(name, direction, args, started)
 			local attempt = state.LastAttempt
 			if attempt and not attempt.RequestId and now - attempt.At <= .3 then
 				attempt.RequestId, attempt.RequestAt = args[3], started; state.Attempts[args[3]] = attempt
-				note("REQUEST input=" .. attempt.Serial .. " id=" .. tostring(args[3]))
+				local sent = type(args[2]) == "number" and args[2] or nil
+				local clockOk, server = pcall(workspace.GetServerTimeNow, workspace)
+				local age = sent and clockOk and type(server) == "number" and server - sent or nil
+				note("REQUEST input=" .. attempt.Serial .. " id=" .. tostring(args[3]) .. " sentTime=" .. tostring(sent)
+					.. " observedServer=" .. (clockOk and tostring(server) or "unavailable") .. " age=" .. (age and string.format("%.6f", age) or "unavailable"))
 			end
 		elseif direction == "IN event" and args[1] == "ParryDecision" then
 			local attempt = state.Attempts[args[2]]
@@ -3622,6 +3637,7 @@ local function feedback(name, direction, args, started)
 			if args[3] == "Rejected" then
 				state.Rejected += 1
 				combatSnapshot("rejected input=" .. attempt.Serial .. " reason=" .. tostring(args[4]), player.Character)
+				if state.Held and state.Held.Attempt == attempt and state.Held.GuardThroughPhase then release() end
 				local delay = args[4] == "Cooldown" and tonumber(args[5]) or .12
 				state.Backoff = math.max(state.Backoff, now + math.clamp(delay or .15, .08, 2))
 			end
@@ -3634,6 +3650,11 @@ local function feedback(name, direction, args, started)
 		local attempt = state.LastAttempt
 		if attempt and attempt.Model == data.Attacker and now - attempt.At <= .8 then
 			state.Parries += 1
+			local held = state.Held
+			if held and held.Attempt == attempt and held.GuardThroughPhase and not held.GuardConfirmed then
+				held.GuardConfirmed = true
+				note("BURST_GUARD confirmed input=" .. attempt.Serial .. " untilPhase=" .. held.GuardThroughPhase)
+			end
 			note("PARRY_RESULT id=" .. tostring(id) .. " actor=" .. data.Attacker.Name .. " after=" .. string.format("%.3f", now - attempt.At)
 				.. " cancelMove=" .. tostring(data.CancelMove))
 		else note("UNMATCHED_PARRY_RESULT id=" .. tostring(id)) end
@@ -3655,6 +3676,16 @@ local function openingPunchRecovery(model)
 end
 local function step()
 	local now = os.clock()
+	local held = state.Held
+	if held and held.GuardThroughPhase then
+		local rig = state.Rigs[held.Model]
+		if not alive(held.Model) or not rig or rig.Tracks[held.Track] ~= held.Swing
+			or not held.Track.IsPlaying or held.Track.Looped or held.Track.Speed <= 0 or now >= held.GuardDeadline then
+			held.Until = now
+		elseif held.GuardConfirmed then
+			held.Until = math.min(held.GuardDeadline, now + math.max(0, (held.GuardThroughPhase - held.Track.TimePosition) / held.Track.Speed))
+		end
+	end
 	if state.Held and (now >= state.Held.Until or not state.Enabled) and not release() then
 		stop("Block-key release failed"); return
 	end
@@ -3692,7 +3723,7 @@ local function step()
 	if state.Held then
 		gate("auto-key-held")
 		local weapon = weaponProfiles[state.LastAttempt.Weapon]
-		show("Block tap: " .. (weapon and weapon.Label or "Unknown weapon")); return
+		show(state.Held.GuardConfirmed and "Guarding the remaining Rifle burst (test)" or ("Block tap: " .. (weapon and weapon.Label or "Unknown weapon"))); return
 	end
 	if Input:IsKeyDown(key) or model:GetAttribute("HoldingBlock") == true then
 		gate(Input:IsKeyDown(key) and "physical-key-held" or "game-block-held"); show("Manual/game block active; waiting for release"); return
@@ -3735,7 +3766,7 @@ local function step()
 			local geometryOk = distance <= (profile.MaxDistance or weapon.MaxDistance or 12) and projected.Magnitude <= (profile.Reach or weapon.Reach or 9) and facingDot >= (profile.MinFacing or .15)
 			if radialFollowup then geometryOk = distance <= radialFollowup end
 			if geometryOk and math.abs(delta.Y) <= 8 then
-				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1} end
+				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1, GuardThroughPhase = profile.GuardThroughPhase} end
 			elseif swing.GeometryContact ~= contact then
 				swing.GeometryContact = contact
 				note(string.format("SKIP actorId=%d weapon=%s animation=%s contact=%d reason=geometry phase=%.3f eta=%.3f distance=%.2f projected=%.2f vertical=%.2f facing=%.3f mode=%s", rig.Id, weaponKey, swing.Asset, contact, phase, remaining, distance, projected.Magnitude, delta.Y, facingDot, radialFollowup and "nearby-followup" or "directional"))
@@ -3755,7 +3786,9 @@ local function step()
 	best.Swing.Used = best.Contact >= best.ContactCount
 	state.LastAttempt = {At = now, Key = key, Self = model, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
 	state.PendingInputs[state.LastAttempt.Serial] = state.LastAttempt
-	state.Held = {Key = key, Until = now + .16}; state.Backoff = now + .25
+	state.Held = {Key = key, Until = now + (best.GuardThroughPhase and .30 or .16), Attempt = state.LastAttempt,
+		Track = best.Track, Swing = best.Swing, Model = best.Model, GuardThroughPhase = best.GuardThroughPhase, GuardDeadline = now + 2}
+	state.Backoff = now + .25
 	combatSnapshot("input=" .. state.LastAttempt.Serial, model)
 	local ok = pcall(function() manager:SendKeyEvent(true, key, false, game) end)
 	if not ok then stop("Block input unavailable"); return end

@@ -660,14 +660,34 @@ local function updateEsp(target, localRoot)
 		removeEsp(target)
 		entry = {Character = character}
 		entry.Gui = create("BillboardGui", {
-			Name = "AnomalyUniversalESP", Size = UDim2.fromOffset(230, 54), StudsOffsetWorldSpace = Vector3.new(0, 3.6, 0),
+			Name = "AnomalyUniversalESP", Size = UDim2.fromOffset(250, 98), StudsOffsetWorldSpace = Vector3.new(0, 4.4, 0),
 			AlwaysOnTop = true, LightInfluence = 0, MaxDistance = state.EspDistance, Adornee = root,
 		}, gui)
 		entry.Label = create("TextLabel", {
-			Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
+			Position = UDim2.fromOffset(5, 0), Size = UDim2.new(1, -10, 0, 38), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
 			TextColor3 = colors.Text, TextStrokeColor3 = Color3.new(), TextStrokeTransparency = 0.2,
-			TextSize = 12, TextWrapped = true,
+			TextSize = 11, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Bottom,
 		}, entry.Gui)
+		local function makeResourceBar(name, y, fillColor)
+			local background = create("Frame", {
+				Name = name, Position = UDim2.fromOffset(10, y), Size = UDim2.fromOffset(230, 13),
+				BackgroundColor3 = Color3.fromRGB(20, 17, 25), BackgroundTransparency = 0.12, BorderSizePixel = 0,
+			}, entry.Gui)
+			create("UICorner", {CornerRadius = UDim.new(0, 3)}, background)
+			local fill = create("Frame", {
+				Name = "Fill", Size = UDim2.fromScale(1, 1), BackgroundColor3 = fillColor, BorderSizePixel = 0,
+			}, background)
+			create("UICorner", {CornerRadius = UDim.new(0, 3)}, fill)
+			local text = create("TextLabel", {
+				Name = "Value", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.Code,
+				Text = name:upper(), TextColor3 = Color3.new(1, 1, 1), TextStrokeColor3 = Color3.new(),
+				TextStrokeTransparency = 0.15, TextSize = 9, ZIndex = 3,
+			}, background)
+			return {Background = background, Fill = fill, Text = text}
+		end
+		entry.Health = makeResourceBar("Health", 42, Color3.fromRGB(239, 73, 89))
+		entry.Energy = makeResourceBar("Energy", 59, Color3.fromRGB(65, 151, 255))
+		entry.Stamina = makeResourceBar("Stamina", 76, Color3.fromRGB(255, 205, 75))
 		entry.Highlight = create("Highlight", {
 			Name = "AnomalyUniversalHighlight", Adornee = character, FillColor = colors.AccentSoft,
 			FillTransparency = 0.82, OutlineColor = colors.Accent, OutlineTransparency = 0.12,
@@ -675,9 +695,30 @@ local function updateEsp(target, localRoot)
 		}, gui)
 		state.EspEntries[target] = entry
 	end
+	local extra = nil
+	if type(controller.ResolvePlayerEspData) == "function" then
+		local ok, result = pcall(controller.ResolvePlayerEspData, target, character, humanoid)
+		if ok and type(result) == "table" then extra = result end
+	end
+	local function updateResourceBar(bar, name, current, maximum, alwaysVisible)
+		current, maximum = tonumber(current), tonumber(maximum)
+		local visible = current ~= nil and maximum ~= nil and maximum > 0
+		bar.Background.Visible = visible or alwaysVisible == true
+		if not visible then
+			bar.Fill.Size = UDim2.fromScale(0, 1)
+			bar.Text.Text = name:upper() .. "  --"
+			return
+		end
+		bar.Fill.Size = UDim2.fromScale(math.clamp(current / maximum, 0, 1), 1)
+		bar.Text.Text = string.format("%s  %d/%d", name:upper(), math.max(0, math.floor(current + 0.5)), math.max(0, math.floor(maximum + 0.5)))
+	end
 	entry.Gui.MaxDistance = state.EspDistance
-	entry.Label.Text = string.format("%s\nHP %d/%d  //  %d studs", target.DisplayName,
-		math.max(0, math.floor(humanoid.Health + 0.5)), math.max(0, math.floor(humanoid.MaxHealth + 0.5)), math.floor(distance + 0.5))
+	local clan = extra and tostring(extra.Clan or "") or ""
+	entry.Label.Text = clan ~= "" and string.format("%s  //  CLAN: %s\n%d STUDS", target.DisplayName, clan, math.floor(distance + 0.5))
+		or string.format("%s\n%d STUDS", target.DisplayName, math.floor(distance + 0.5))
+	updateResourceBar(entry.Health, "Health", humanoid.Health, humanoid.MaxHealth, true)
+	updateResourceBar(entry.Energy, "Energy", extra and extra.Energy, extra and extra.MaxEnergy, false)
+	updateResourceBar(entry.Stamina, "Stamina", extra and extra.Stamina, extra and extra.MaxStamina, false)
 end
 
 local elapsed = 0
@@ -791,6 +832,157 @@ controller.GameIdentity = {
 	ObservedPlaceId = 78073853031462,
 	FingerprintVersion = 1,
 }
+
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local cache = setmetatable({}, {__mode = "k"})
+
+local function normalize(name)
+	return string.lower(tostring(name)):gsub("[^%w]", "")
+end
+
+local function indexSources(target, character, humanoid)
+	local sources = {}
+	local function addObject(object)
+		if not object then return end
+		if object:IsA("ValueBase") then
+			local key = normalize(object.Name)
+			if sources[key] == nil then sources[key] = {Kind = "Value", Object = object} end
+		end
+		local ok, attributes = pcall(object.GetAttributes, object)
+		if ok then
+			for name in pairs(attributes) do
+				local key = normalize(name)
+				if sources[key] == nil then sources[key] = {Kind = "Attribute", Object = object, Name = name} end
+			end
+		end
+	end
+	addObject(target)
+	addObject(character)
+	addObject(humanoid)
+	for _, root in ipairs({target, character}) do
+		if root then
+			for _, object in ipairs(root:GetDescendants()) do addObject(object) end
+		end
+	end
+	return sources
+end
+
+local function readSource(source)
+	if not source or not source.Object or not source.Object.Parent then return nil end
+	if source.Kind == "Value" then
+		local ok, value = pcall(function() return source.Object.Value end)
+		return ok and value or nil
+	end
+	local ok, value = pcall(source.Object.GetAttribute, source.Object, source.Name)
+	return ok and value or nil
+end
+
+local function readAlias(sources, aliases)
+	for _, alias in ipairs(aliases) do
+		local value = readSource(sources[normalize(alias)])
+		if value ~= nil and value ~= "" then return value end
+	end
+	return nil
+end
+
+local clanAliases = {"Clan", "ClanName", "Family", "FamilyName"}
+local energyAliases = {"Energy", "CurrentEnergy", "Nen", "CurrentNen", "Aura", "CurrentAura"}
+local maxEnergyAliases = {"MaxEnergy", "EnergyMax", "MaximumEnergy", "MaxNen", "NenMax", "MaxAura", "AuraMax"}
+local staminaAliases = {"Stamina", "CurrentStamina", "Endurance", "CurrentEndurance"}
+local maxStaminaAliases = {"MaxStamina", "StaminaMax", "MaximumStamina", "MaxEndurance", "EnduranceMax"}
+
+function controller.ResolvePlayerEspData(target, character, humanoid)
+	local now = os.clock()
+	local entry = cache[target]
+	if not entry or entry.Character ~= character or now - entry.IndexedAt >= 2 then
+		entry = {Character = character, IndexedAt = now, Sources = indexSources(target, character, humanoid)}
+		cache[target] = entry
+	end
+	local sources = entry.Sources
+	return {
+		Clan = readAlias(sources, clanAliases) or "Unknown",
+		Energy = readAlias(sources, energyAliases),
+		MaxEnergy = readAlias(sources, maxEnergyAliases),
+		Stamina = readAlias(sources, staminaAliases),
+		MaxStamina = readAlias(sources, maxStaminaAliases),
+	}
+end
+
+local ui = controller.UI
+if type(ui) == "table" and ui.Gui then
+	for _, object in ipairs(ui.Gui:GetDescendants()) do
+		if object:IsA("TextLabel") and object.Text == "UNIVERSAL PLAYER ESP" then
+			object.Text = "BEYOND NEN PLAYER ESP"
+			break
+		end
+	end
+end
+
+local function captureEspState()
+	local lines = {
+		"BEYOND NEN ESP STATE // PASSIVE v1",
+		"place=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId),
+		"No remotes were fired or invoked.",
+	}
+	local keywords = {"clan", "family", "energy", "stamina", "endurance", "aura", "nen"}
+	local function relevant(text)
+		text = string.lower(tostring(text))
+		for _, keyword in ipairs(keywords) do if string.find(text, keyword, 1, true) then return true end end
+		return false
+	end
+	local function inspectRoot(root, label)
+		if not root then return end
+		table.insert(lines, "\n[" .. label .. "] " .. root:GetFullName())
+		local objects = {root}
+		for _, object in ipairs(root:GetDescendants()) do table.insert(objects, object) end
+		for _, object in ipairs(objects) do
+			local ok, attributes = pcall(object.GetAttributes, object)
+			if ok then
+				for name, value in pairs(attributes) do
+					if relevant(name) or relevant(object.Name) then
+						table.insert(lines, string.format("ATTR\t%s\t%s=%s", object:GetFullName(), tostring(name), tostring(value)))
+					end
+				end
+			end
+			if object:IsA("ValueBase") and relevant(object.Name) then
+				local valueOk, value = pcall(function() return object.Value end)
+				if valueOk then table.insert(lines, string.format("VALUE\t%s\t%s", object:GetFullName(), tostring(value))) end
+			end
+		end
+	end
+	for _, target in ipairs(Players:GetPlayers()) do
+		inspectRoot(target, "PLAYER " .. target.Name)
+		inspectRoot(target.Character, "CHARACTER " .. target.Name)
+	end
+	local localPlayer = Players.LocalPlayer
+	inspectRoot(localPlayer and localPlayer:FindFirstChildOfClass("PlayerGui"), "LOCAL PLAYER GUI")
+	local report = table.concat(lines, "\n")
+	local path = "AnomalyHub/universal/beyond_nen_esp_state.txt"
+	local saved = false
+	if type(writefile) == "function" then
+		pcall(makefolder, "AnomalyHub")
+		pcall(makefolder, "AnomalyHub/universal")
+		saved = pcall(writefile, path, report)
+	end
+	if type(setclipboard) == "function" then pcall(setclipboard, report) end
+	return report, saved, path
+end
+controller.CaptureBeyondNenEspState = captureEspState
+
+if type(ui) == "table" and ui.Pages and ui.Pages.Players and type(ui.Card) == "function" and type(ui.Button) == "function" then
+	local discoveryCard = ui.Card(ui.Pages.Players, "BEYOND NEN ESP DISCOVERY", "If clan, energy, or stamina is missing, capture the passive client state and send the saved report.", 126)
+	local status = ui.Create("TextLabel", {
+		Position = UDim2.fromOffset(204, 73), Size = UDim2.new(1, -218, 0, 40), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, Text = "No remotes are fired.", TextColor3 = ui.Colors.Muted, TextSize = 9,
+		TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+	}, discoveryCard)
+	ui.Button(discoveryCard, "Capture ESP State", 14, 72, 180, function()
+		local _, saved, path = captureEspState()
+		status.Text = saved and ("Saved: " .. path) or "Copied when clipboard access is available."
+		status.TextColor3 = saved and ui.Colors.Success or ui.Colors.Warning
+	end, ui.Colors.AccentSoft)
+end
 
 print("[Anomaly] Beyond Nen adapter loaded")
 

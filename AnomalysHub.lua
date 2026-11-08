@@ -248,7 +248,8 @@ local content = create("Frame", {
 local pages, tabButtons = {}, {}
 local pageMeta = {
 	Home = {"DASHBOARD", "Game-neutral tools and live session information"},
-	Players = {"PLAYERS", "Player list, spectate controls, and universal ESP"},
+	Players = {"PLAYERS", "Find a player and control your spectator camera"},
+	ESP = {"ESP", "Player and NPC overlays, organized separately"},
 	Movement = {"MOVEMENT", "Character movement and collision utilities"},
 	Servers = {"SERVER NAVIGATION", "Rejoin or move to another public server"},
 	Settings = {"SETTINGS", "Persistence, keybind, reload, and cleanup"},
@@ -264,7 +265,7 @@ local function makePage(name)
 	pages[name] = page
 	return page
 end
-for _, name in ipairs({"Home", "Players", "Movement", "Servers", "Settings"}) do makePage(name) end
+for _, name in ipairs({"Home", "Players", "ESP", "Movement", "Servers", "Settings"}) do makePage(name) end
 
 local function selectTab(name)
 	if not pages[name] then return end
@@ -282,7 +283,7 @@ local function selectTab(name)
 	subtitleLabel.Text = pageMeta[name][2]
 end
 
-local tabNames = {{"Home", "[D]  Dashboard"}, {"Players", "[P]  Players"}, {"Movement", "[M]  Movement"}, {"Servers", "[S]  Servers"}, {"Settings", "[=]  Settings"}}
+local tabNames = {{"Home", "[D]  Dashboard"}, {"Players", "[P]  Players"}, {"ESP", "[E]  ESP"}, {"Movement", "[M]  Movement"}, {"Servers", "[S]  Servers"}, {"Settings", "[=]  Settings"}}
 for order, definition in ipairs(tabNames) do
 	local name, text = definition[1], definition[2]
 	local button = create("TextButton", {
@@ -343,6 +344,49 @@ local function valueBox(parent, placeholder, x, y, width, initial, callback)
 	return box
 end
 
+local function fitColumn(object, column, y)
+	object.Position = UDim2.new(column * 0.5, column == 0 and 14 or 4, 0, y)
+	object.Size = UDim2.new(0.5, -18, 0, 34)
+	return object
+end
+
+local function optionGrid(parent, definitions, settings, firstY)
+	for index, definition in ipairs(definitions) do
+		local key, label = definition[1], definition[2]
+		local enabled = settings[key] == true
+		local control = button(parent, label .. ": " .. (enabled and "ON" or "OFF"), 0, 0, 180, function(object)
+			local nextValue = settings[key] ~= true
+			settings[key] = nextValue
+			object.Text = label .. ": " .. (nextValue and "ON" or "OFF")
+			object.BackgroundColor3 = nextValue and colors.AccentSoft or colors.Surface
+			saveConfig()
+		end, enabled and colors.AccentSoft or colors.Surface)
+		fitColumn(control, (index - 1) % 2, firstY + math.floor((index - 1) / 2) * 42)
+	end
+end
+
+local espSwitcher = create("Frame", {LayoutOrder = -1, Size = UDim2.new(1, 0, 0, 38), BackgroundTransparency = 1}, pages.ESP)
+local espPages, espButtons = {}, {}
+for _, name in ipairs({"Players", "NPCs"}) do
+	local panel = create("Frame", {
+		Name = name .. "EspControls", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1, Visible = name == "Players",
+	}, pages.ESP)
+	create("UIListLayout", {Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder}, panel)
+	espPages[name] = panel
+end
+for column, definition in ipairs({{"Players", "Player ESP"}, {"NPCs", "NPC ESP"}}) do
+	local name = definition[1]
+	espButtons[name] = fitColumn(button(espSwitcher, definition[2], 0, 0, 180, function()
+		for key, panel in pairs(espPages) do
+			panel.Visible = key == name
+			espButtons[key].BackgroundColor3 = key == name and colors.AccentSoft or colors.Surface
+		end
+		pages.ESP.CanvasPosition = Vector2.zero
+	end, name == "Players" and colors.AccentSoft or colors.Surface), column - 1, 0)
+end
+espButtons.NPCs.Visible = env.__AnomalyDetectedProfile == "BeyondNen"
+
 local gameCard = card(pages.Home, "CURRENT EXPERIENCE", "This profile intentionally avoids game-specific remotes and data models.", 164)
 local gameNameLabel = create("TextLabel", {
 	Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 25), BackgroundTransparency = 1,
@@ -367,53 +411,76 @@ task.spawn(function()
 	if not unloaded and ok and type(info) == "table" and type(info.Name) == "string" then gameNameLabel.Text = info.Name end
 end)
 
-local playerCard = card(pages.Players, "PLAYER DIRECTORY", "Select a player, then spectate them. Select the same player again or press Stop to return.", 326)
+local playerCard = card(pages.Players, "PLAYER DIRECTORY", "Search by display name or username, then select a player below.", 354)
+local playerSearch = valueBox(playerCard, "Search players...", 14, 72, 180, "", function() end)
+playerSearch.Size = UDim2.new(1, -138, 0, 34)
+local refreshPlayersButton = button(playerCard, "Refresh", 0, 72, 98, function() if state.RefreshPlayers then state.RefreshPlayers() end end)
+refreshPlayersButton.Position = UDim2.new(1, -112, 0, 72)
 local playerList = create("ScrollingFrame", {
-	Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 176), BackgroundColor3 = colors.Surface,
+	Position = UDim2.fromOffset(14, 116), Size = UDim2.new(1, -28, 0, 192), BackgroundColor3 = colors.Surface,
 	BorderSizePixel = 0, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
 	ScrollBarThickness = 4, ScrollBarImageColor3 = colors.Accent,
 }, playerCard)
 create("UICorner", {CornerRadius = UDim.new(0, 7)}, playerList)
 create("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, playerList)
 create("UIPadding", {PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4), PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4)}, playerList)
-local selectedLabel = create("TextLabel", {
-	Position = UDim2.fromOffset(14, 254), Size = UDim2.new(1, -28, 0, 22), BackgroundTransparency = 1,
-	Font = Enum.Font.Code, Text = "Selected: none", TextColor3 = colors.Muted, TextSize = 10,
-	TextXAlignment = Enum.TextXAlignment.Left,
+local playerCountLabel = create("TextLabel", {
+	Position = UDim2.fromOffset(14, 318), Size = UDim2.new(1, -28, 0, 22), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "", TextColor3 = colors.Muted, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
 }, playerCard)
+local selectedCard = card(pages.Players, "SPECTATE", "Select a player above. Stop View returns the camera to your character.", 172)
+local selectedLabel = create("TextLabel", {
+	Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 42), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold, Text = "No player selected", TextColor3 = colors.Text, TextSize = 11,
+	TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
+}, selectedCard)
+
+local function refreshSpectateStatus()
+	local selected = state.SelectedPlayer
+	local viewing = state.SpectateTarget
+	selectedLabel.Text = (selected and ("Selected: " .. selected.DisplayName) or "No player selected")
+		.. "\n" .. (viewing and ("Viewing: " .. viewing.DisplayName) or "Viewing your character")
+end
 
 local function stopSpectating()
 	state.SpectateTarget = nil
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	if workspace.CurrentCamera and humanoid then workspace.CurrentCamera.CameraSubject = humanoid end
+	refreshSpectateStatus()
 end
 
 local function spectateSelected()
 	local target = state.SelectedPlayer
 	if not target or target == player then stopSpectating(); return end
-	if state.SpectateTarget == target then stopSpectating(); return end
+	if state.SpectateTarget == target then refreshSpectateStatus(); return end
 	local humanoid = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
-	if not humanoid or humanoid.Health <= 0 or not workspace.CurrentCamera then return end
+	if not humanoid or humanoid.Health <= 0 or not workspace.CurrentCamera then
+		selectedLabel.Text = "Selected: " .. target.DisplayName .. "\nCharacter unavailable. Try again when they spawn."
+		return
+	end
 	state.SpectateTarget = target
 	workspace.CurrentCamera.CameraSubject = humanoid
+	refreshSpectateStatus()
 end
 
-button(playerCard, "Spectate / Stop", 14, 280, 180, function() spectateSelected() end, colors.AccentSoft)
-button(playerCard, "Refresh Players", 204, 280, 180, function() if state.RefreshPlayers then state.RefreshPlayers() end end)
+fitColumn(button(selectedCard, "Spectate Selected", 0, 0, 180, function() spectateSelected() end, colors.AccentSoft), 0, 124)
+fitColumn(button(selectedCard, "Stop View", 0, 0, 180, function() stopSpectating() end), 1, 124)
 
-local espCard = card(pages.Players, "UNIVERSAL PLAYER ESP", "Shows display name, health, and distance without depending on game-specific stats.", 126)
-local espToggle = button(espCard, state.EspEnabled and "Player ESP: ON" or "Player ESP: OFF", 14, 72, 180, function(object)
+local espCard = card(espPages.Players, "PLAYER ESP", "Enable player overlays and set how far they can be seen.", 146)
+create("TextLabel", {Position = UDim2.new(0.5, 4, 0, 62), Size = UDim2.new(0.5, -18, 0, 16), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "MAX DISTANCE (STUDS)", TextColor3 = colors.Muted, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left}, espCard)
+local espToggle = fitColumn(button(espCard, state.EspEnabled and "Player ESP: ON" or "Player ESP: OFF", 0, 0, 180, function(object)
 	state.EspEnabled = not state.EspEnabled
 	object.Text = state.EspEnabled and "Player ESP: ON" or "Player ESP: OFF"
 	object.BackgroundColor3 = state.EspEnabled and colors.AccentSoft or colors.Surface
 	saveConfig()
-end, state.EspEnabled and colors.AccentSoft or colors.Surface)
-valueBox(espCard, "ESP range", 204, 72, 180, state.EspDistance, function(box)
+end, state.EspEnabled and colors.AccentSoft or colors.Surface), 0, 86)
+fitColumn(valueBox(espCard, "ESP range", 0, 0, 180, state.EspDistance, function(box)
 	state.EspDistance = math.clamp(tonumber(box.Text) or state.EspDistance, 100, 10000)
 	box.Text = tostring(math.floor(state.EspDistance))
 	saveConfig()
-end)
+end), 1, 86)
 
 local movementCard = card(pages.Movement, "CHARACTER MOVEMENT", "These settings use standard Roblox character properties; some games may override them.", 190)
 local noclipToggle = button(movementCard, "Noclip: OFF", 14, 72, 180, function(object)
@@ -625,6 +692,7 @@ end
 controller.UI = {
 	Gui = gui, Window = window, Pages = pages, TabButtons = tabButtons,
 	Colors = colors, Create = create, Card = card, Button = button, ValueBox = valueBox,
+	EspPages = espPages, FitColumn = fitColumn, OptionGrid = optionGrid,
 }
 controller.State = state
 controller.Connect = connect
@@ -686,40 +754,70 @@ create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, behaviorCard)
 
-function state.RefreshPlayers()
-	for _, child in ipairs(playerList:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
+local playerRowConnections = {}
+local function clearPlayerRows()
+	for _, connection in ipairs(playerRowConnections) do connection:Disconnect() end
+	table.clear(playerRowConnections)
+	for _, child in ipairs(playerList:GetChildren()) do
+		if child:IsA("TextButton") or child.Name == "EmptyResults" then child:Destroy() end
+	end
+end
+controller.RegisterCleanup(clearPlayerRows)
+
+function state.RefreshPlayers(leaving)
+	clearPlayerRows()
 	local list = Players:GetPlayers()
 	table.sort(list, function(a, b) return string.lower(a.DisplayName) < string.lower(b.DisplayName) end)
+	local query = string.lower(playerSearch.Text):match("^%s*(.-)%s*$")
+	local shown, total = 0, 0
 	for order, target in ipairs(list) do
-		local text = target.DisplayName
-		if target.Name ~= target.DisplayName then text ..= "  (@" .. target.Name .. ")" end
+		if target == leaving then continue end
+		total += 1
+		if query ~= "" and not string.find(string.lower(target.DisplayName), query, 1, true)
+			and not string.find(string.lower(target.Name), query, 1, true) then continue end
+		shown += 1
 		local row = create("TextButton", {
-			LayoutOrder = order, Size = UDim2.new(1, -8, 0, 28), AutoButtonColor = false,
+			LayoutOrder = order, Size = UDim2.new(1, -8, 0, 42), AutoButtonColor = false,
 			BackgroundColor3 = target == state.SelectedPlayer and colors.AccentSoft or colors.Raised,
-			BorderSizePixel = 0, Font = Enum.Font.Gotham, Text = text, TextColor3 = colors.Text,
-			TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
+			BorderSizePixel = 0, Text = "",
 		}, playerList)
 		create("UICorner", {CornerRadius = UDim.new(0, 5)}, row)
-		create("UIPadding", {PaddingLeft = UDim.new(0, 10)}, row)
-		connect(row.Activated, function()
+		create("TextLabel", {Position = UDim2.fromOffset(10, 4), Size = UDim2.new(1, -104, 0, 18), BackgroundTransparency = 1,
+			Font = Enum.Font.GothamSemibold, Text = target.DisplayName, TextColor3 = colors.Text, TextSize = 11,
+			TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = Enum.TextXAlignment.Left}, row)
+		create("TextLabel", {Position = UDim2.fromOffset(10, 23), Size = UDim2.new(1, -20, 0, 14), BackgroundTransparency = 1,
+			Font = Enum.Font.Gotham, Text = "@" .. target.Name, TextColor3 = colors.Muted, TextSize = 9,
+			TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = Enum.TextXAlignment.Left}, row)
+		local level = tonumber(target:GetAttribute("Level"))
+		create("TextLabel", {Position = UDim2.new(1, -90, 0, 4), Size = UDim2.fromOffset(80, 18), BackgroundTransparency = 1,
+			Font = Enum.Font.GothamSemibold, Text = target == player and "YOU" or (level and level >= 0 and level < math.huge and ("LV. " .. math.floor(level)) or ""),
+			TextColor3 = colors.Accent, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right}, row)
+		table.insert(playerRowConnections, row.Activated:Connect(function()
 			if state.SelectedPlayer == target then
 				state.SelectedPlayer = nil
-				selectedLabel.Text = "Selected: none"
 				if state.SpectateTarget == target then stopSpectating() end
 			else
 				state.SelectedPlayer = target
-				selectedLabel.Text = "Selected: " .. target.DisplayName
+				if target == player then stopSpectating() end
 			end
+			refreshSpectateStatus()
 			state.RefreshPlayers()
-		end)
+		end))
 	end
+	if shown == 0 then
+		create("TextLabel", {Name = "EmptyResults", Size = UDim2.new(1, -8, 0, 42), BackgroundTransparency = 1,
+			Font = Enum.Font.Gotham, Text = "No players match your search.", TextColor3 = colors.Muted, TextSize = 11}, playerList)
+	end
+	playerCountLabel.Text = string.format("%d of %d players  |  Click a name to select", shown, total)
 end
 state.RefreshPlayers()
-connect(Players.PlayerAdded, state.RefreshPlayers)
+connect(playerSearch:GetPropertyChangedSignal("Text"), function() state.RefreshPlayers() end)
+connect(Players.PlayerAdded, function() state.RefreshPlayers() end)
 connect(Players.PlayerRemoving, function(leaving)
 	if state.SelectedPlayer == leaving then state.SelectedPlayer = nil end
 	if state.SpectateTarget == leaving then stopSpectating() end
-	state.RefreshPlayers()
+	refreshSpectateStatus()
+	state.RefreshPlayers(leaving)
 end)
 
 local function removeEsp(target)
@@ -1045,34 +1143,13 @@ function controller.ResolvePlayerEspData(target, character, humanoid)
 end
 
 local ui = controller.UI
-if type(ui) == "table" and ui.Gui then
-	for _, object in ipairs(ui.Gui:GetDescendants()) do
-		if object:IsA("TextLabel") and object.Text == "UNIVERSAL PLAYER ESP" then
-			object.Text = "BEYOND NEN PLAYER ESP"
-			break
-		end
-	end
-end
-
-if type(ui) == "table" and ui.Pages and ui.Pages.Players and type(ui.Card) == "function" and type(ui.Button) == "function" then
-	local optionsCard = ui.Card(ui.Pages.Players, "BEYOND NEN ESP OPTIONS", "Choose exactly which identity fields, body outline, and resource bars are visible.", 236)
-	local labels = {
-		Name = "Name", Level = "Level", Distance = "Distance", Box = "Body box",
-		Health = "Health bar", Energy = "Energy bar", Stamina = "Stamina bar",
-	}
-	local order = {"Name", "Level", "Distance", "Box", "Health", "Energy", "Stamina"}
-	for index, key in ipairs(order) do
-		local column = (index - 1) % 2
-		local row = math.floor((index - 1) / 2)
-		local enabled = controller.State.EspSettings[key] == true
-		ui.Button(optionsCard, labels[key] .. ": " .. (enabled and "ON" or "OFF"), 14 + column * 190, 72 + row * 40, 180, function(object)
-			local nextValue = controller.State.EspSettings[key] ~= true
-			controller.State.EspSettings[key] = nextValue
-			object.Text = labels[key] .. ": " .. (nextValue and "ON" or "OFF")
-			object.BackgroundColor3 = nextValue and ui.Colors.AccentSoft or ui.Colors.Surface
-			if type(controller.SaveConfig) == "function" then controller.SaveConfig() end
-		end, enabled and ui.Colors.AccentSoft or ui.Colors.Surface)
-	end
+if type(ui) == "table" and ui.EspPages and ui.EspPages.Players then
+	local identityCard = ui.Card(ui.EspPages.Players, "NAMES & OUTLINES", "Choose the information shown above players and their body outline.", 164)
+	identityCard.LayoutOrder = 10
+	ui.OptionGrid(identityCard, {{"Name", "Name"}, {"Level", "Level"}, {"Distance", "Distance"}, {"Box", "Body box"}}, controller.State.EspSettings, 72)
+	local resourcesCard = ui.Card(ui.EspPages.Players, "RESOURCE BARS", "Bars sit outside the body box: health, energy, then stamina.", 164)
+	resourcesCard.LayoutOrder = 20
+	ui.OptionGrid(resourcesCard, {{"Health", "Health bar"}, {"Energy", "Energy bar"}, {"Stamina", "Stamina bar"}}, controller.State.EspSettings, 72)
 end
 
 local function captureEspState()
@@ -1133,8 +1210,9 @@ local function captureEspState()
 end
 controller.CaptureBeyondNenEspState = captureEspState
 
-if type(ui) == "table" and ui.Pages and ui.Pages.Players and type(ui.Card) == "function" and type(ui.Button) == "function" then
-	local discoveryCard = ui.Card(ui.Pages.Players, "BEYOND NEN ESP DISCOVERY", "If level, energy, or stamina is missing, capture the passive client state and send the saved report.", 126)
+if type(ui) == "table" and ui.Pages and ui.Pages.Settings and type(ui.Card) == "function" and type(ui.Button) == "function" then
+	local discoveryCard = ui.Card(ui.Pages.Settings, "ESP DIAGNOSTICS", "Capture a report if a player's level or resource bar is missing or incorrect.", 126)
+	discoveryCard.LayoutOrder = 30
 	local status = ui.Create("TextLabel", {
 		Position = UDim2.fromOffset(204, 73), Size = UDim2.new(1, -218, 0, 40), BackgroundTransparency = 1,
 		Font = Enum.Font.Gotham, Text = "No remotes are fired.", TextColor3 = ui.Colors.Muted, TextSize = 9,
@@ -1181,7 +1259,7 @@ local function numeric(value)
 end
 
 local function newSession(now)
-	return {StartedAt = now, Counters = {Kills = 0, Chests = 0, Hops = 0, Deaths = 0, Money = 0}, Samples = {}}
+	return {StartedAt = now, Counters = {Kills = 0, Bosses = 0, Chests = 0, Hops = 0, Deaths = 0, Money = 0}, Samples = {}}
 end
 
 local function restoreSession(data, now, userId, universeId, jobId)
@@ -1257,9 +1335,11 @@ end
 
 local definitions = {
 	Level = {"Level", "CurrentLevel", "PlayerLevel"},
-	Money = {"Jenni", "Jenny", "Money", "Cash", "Yen"},
-	Kills = {"NPCKills", "NPCsKilled", "MobsKilled", "EnemiesKilled", "MobKills", "TotalNPCKills"},
-	Chests = {"ChestsLooted", "ChestsOpened", "TotalChestsOpened", "TotalChestsLooted"},
+	-- Confirmed by Capture Stats: lifetime counters are baselines, not session gains.
+	Money = {"LifetimeJenniEarned", "Jenni", "Jenny", "Money", "Cash", "Yen"},
+	Kills = {"NPCKills", "NPCsKilled", "MobsKilled", "EnemiesKilled", "MobKills", "TotalNPCKills", "TitleBanditKills"},
+	Bosses = {"BossesDefeated"},
+	Chests = {"TitleChestsOpened", "ChestsLooted", "ChestsOpened", "TotalChestsOpened", "TotalChestsLooted"},
 }
 local slotNames = {"CurrentSlot", "ActiveSlot", "SelectedSlot", "SaveSlot", "Slot"}
 local function normalize(value) return tostring(value):lower():gsub("[^%w]", "") end
@@ -1332,11 +1412,11 @@ local function findSource(roots, names)
 	end
 end
 
-local sources, pending, labels = {}, {}, {}
-local card = ui.Card(ui.Pages.Home, "SESSION STATS", "Carries across server hops; resets after 15 minutes away.", 450)
+local sources, pending, labels, headings = {}, {}, {}, {}
+local card = ui.Card(ui.Pages.Home, "SESSION STATS", "Counts gains during this session. Carries across server hops; resets after 15 minutes away.", 522)
 card.LayoutOrder = -1
 local grid = ui.Create("Frame", {
-	Position = UDim2.fromOffset(14, 68), Size = UDim2.new(1, -28, 0, 280), BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(14, 68), Size = UDim2.new(1, -28, 0, 352), BackgroundTransparency = 1,
 }, card)
 ui.Create("UIGridLayout", {
 	CellPadding = UDim2.fromOffset(8, 8), CellSize = UDim2.new(0.5, -4, 0, 64),
@@ -1345,10 +1425,11 @@ ui.Create("UIGridLayout", {
 for order, definition in ipairs({
 	{"Time", "SESSION TIME"}, {"Level", "LEVEL / GAINED"}, {"LevelRate", "LEVELS / HOUR"}, {"Kills", "NPC KILLS"},
 	{"Money", "JENNI EARNED"}, {"Chests", "CHESTS LOOTED"}, {"Hops", "SERVER HOPS"}, {"Deaths", "DEATHS"},
+	{"Bosses", "BOSSES DEFEATED"},
 }) do
 	local tile = ui.Create("Frame", {LayoutOrder = order, BackgroundColor3 = ui.Colors.Surface, BorderSizePixel = 0}, grid)
 	ui.Create("UICorner", {CornerRadius = UDim.new(0, 7)}, tile)
-	ui.Create("TextLabel", {
+	headings[definition[1]] = ui.Create("TextLabel", {
 		Position = UDim2.fromOffset(12, 7), Size = UDim2.new(1, -24, 0, 16), BackgroundTransparency = 1,
 		Font = Enum.Font.Gotham, Text = definition[2], TextColor3 = ui.Colors.Muted, TextSize = 9,
 		TextXAlignment = Enum.TextXAlignment.Left,
@@ -1360,7 +1441,7 @@ for order, definition in ipairs({
 	}, tile)
 end
 local status = ui.Create("TextLabel", {
-	Position = UDim2.fromOffset(14, 407), Size = UDim2.new(1, -28, 0, 30), BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(14, 479), Size = UDim2.new(1, -28, 0, 30), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Reading character stats...", TextColor3 = ui.Colors.Muted, TextSize = 9,
 	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
 }, card)
@@ -1373,7 +1454,9 @@ local function render()
 	local gained = level and math.max(0, level - (session.StartLevel or level)) or 0
 	labels.Level.Text = level and string.format("%d  (+%d)", level, gained) or "Not detected"
 	labels.LevelRate.Text = level and rate(gained) or "--"
-	for _, key in ipairs({"Kills", "Money", "Chests"}) do
+	local banditCounter = sources.Kills and normalize(sources.Kills.Attribute or sources.Kills.Object.Name) == "titlebanditkills"
+	headings.Kills.Text = banditCounter and "BANDIT KILLS" or "NPC KILLS"
+	for _, key in ipairs({"Kills", "Bosses", "Money", "Chests"}) do
 		labels[key].Text = sources[key] and (key == "Chests" and tostring(math.floor(session.Counters[key]))
 			or string.format("%d  (%s/h)", session.Counters[key], rate(session.Counters[key]))) or "Not detected"
 	end
@@ -1384,7 +1467,8 @@ local function render()
 	else
 		local count = 0
 		for _ in pairs(sources) do count += 1 end
-		status.Text = count == 4 and "Stats update live. Positive Jenni gains count as earnings."
+		status.Text = count == 5 and (banditCounter and "Stats update live. Bandit kills and boss defeats are counted separately."
+			or "Stats update live. Lifetime totals are not counted as session gains.")
 			or "Some stats aren't exposed yet. Capture Stats helps identify them."
 	end
 end
@@ -1408,10 +1492,10 @@ local function capture()
 	return writeLocal(reportFile, report)
 end
 
-ui.Button(card, "Reset Session", 14, 362, 164, function()
+ui.Button(card, "Reset Session", 14, 434, 164, function()
 	resetSession(session, os.time()); save(); render()
 end)
-ui.Button(card, "Capture Stats", 188, 362, 164, function()
+ui.Button(card, "Capture Stats", 188, 434, 164, function()
 	local ok = capture()
 	status.Text = ok and "Saved beyond_nen_session_state.txt" or "Capture could not be saved."
 end, ui.Colors.AccentSoft)
@@ -1463,7 +1547,7 @@ local function refreshSources()
 		sample(key)
 	end
 	local signature = {}
-	for _, key in ipairs({"Level", "Money", "Kills", "Chests"}) do table.insert(signature, sources[key] and sources[key].Id or "?") end
+	for _, key in ipairs({"Level", "Money", "Kills", "Bosses", "Chests"}) do table.insert(signature, sources[key] and sources[key].Id or "?") end
 	local joined = table.concat(signature, "|")
 	if joined ~= lastCaptureSignature then lastCaptureSignature = joined; capture() end
 end
@@ -1758,33 +1842,29 @@ local function updateNpc(model, localRoot, characters)
 	if entry.HealthBinding then entry.HealthBinding.Refresh() end
 end
 
-local npcCard = ui.Card(ui.Pages.Players, "BEYOND NEN NPC ESP", "Green quests, red enemies, orange bosses, blue other NPCs, gray unclassified. Range is in studs.", 350)
-ui.Button(npcCard, state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF", 14, 72, 180, function(object)
+local npcPage = ui.EspPages.NPCs
+local npcCard = ui.Card(npcPage, "NPC ESP", "Enable NPC overlays and set how far they can be seen.", 146)
+ui.Create("TextLabel", {Position = UDim2.new(0.5, 4, 0, 62), Size = UDim2.new(0.5, -18, 0, 16), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "MAX DISTANCE (STUDS)", TextColor3 = colors.Muted, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left}, npcCard)
+ui.FitColumn(ui.Button(npcCard, state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF", 0, 0, 180, function(object)
 	state.NpcEspEnabled = not state.NpcEspEnabled
 	object.Text = state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF"
 	object.BackgroundColor3 = state.NpcEspEnabled and colors.AccentSoft or colors.Surface
 	if state.NpcEspEnabled then startWatching() else stopWatching() end
 	controller.SaveConfig()
-end, state.NpcEspEnabled and colors.AccentSoft or colors.Surface)
-ui.ValueBox(npcCard, "NPC range (studs)", 204, 72, 180, state.NpcEspDistance, function(box)
+end, state.NpcEspEnabled and colors.AccentSoft or colors.Surface), 0, 86)
+ui.FitColumn(ui.ValueBox(npcCard, "NPC range (studs)", 0, 0, 180, state.NpcEspDistance, function(box)
 	local value = tonumber(box.Text)
 	if value and value == value then state.NpcEspDistance = math.clamp(value, 100, 10000) end
 	box.Text = tostring(math.floor(state.NpcEspDistance))
 	controller.SaveConfig()
-end)
-local labels = {Name = "NPC name / role", Distance = "Distance", Health = "Health bar", Box = "Body box",
-	Quest = "Quest NPCs", Enemy = "Enemy NPCs", Boss = "Bosses", Other = "Other NPCs", Unknown = "Unclassified"}
-for index, key in ipairs({"Name", "Distance", "Health", "Box", "Quest", "Enemy", "Boss", "Other", "Unknown"}) do
-	local enabled = state.NpcEspSettings[key] == true
-	ui.Button(npcCard, labels[key] .. ": " .. (enabled and "ON" or "OFF"), 14 + ((index - 1) % 2) * 190,
-		124 + math.floor((index - 1) / 2) * 42, 180, function(object)
-			local nextValue = state.NpcEspSettings[key] ~= true
-			state.NpcEspSettings[key] = nextValue
-			object.Text = labels[key] .. ": " .. (nextValue and "ON" or "OFF")
-			object.BackgroundColor3 = nextValue and colors.AccentSoft or colors.Surface
-			controller.SaveConfig()
-		end, enabled and colors.AccentSoft or colors.Surface)
-end
+end), 1, 86)
+local typesCard = ui.Card(npcPage, "NPC TYPES", "Green quests, red enemies, orange bosses, blue other NPCs, gray unclassified.", 206)
+typesCard.LayoutOrder = 10
+ui.OptionGrid(typesCard, {{"Quest", "Quest NPCs"}, {"Enemy", "Enemy NPCs"}, {"Boss", "Bosses"}, {"Other", "Other NPCs"}, {"Unknown", "Unclassified"}}, state.NpcEspSettings, 72)
+local displayCard = ui.Card(npcPage, "NAMES, HEALTH & OUTLINES", "Choose the details shown for each visible NPC.", 164)
+displayCard.LayoutOrder = 20
+ui.OptionGrid(displayCard, {{"Name", "NPC name / role"}, {"Distance", "Distance"}, {"Health", "Health bar"}, {"Box", "Body box"}}, state.NpcEspSettings, 72)
 
 local elapsed = 0
 controller.Connect(RunService.Heartbeat, function(delta)

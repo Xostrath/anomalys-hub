@@ -712,20 +712,22 @@ local function updateEsp(target, localRoot)
 			TextYAlignment = Enum.TextYAlignment.Bottom, ZIndex = 5,
 		}, entry.Gui)
 		entry.BoxGui = create("BillboardGui", {
-			Name = "AnomalyUniversalESPBox", Size = UDim2.new(boxWidthStuds, 0, boxHeightStuds, 0), StudsOffsetWorldSpace = boxOffset,
+			-- Billboard drawing is bounded by its canvas, even when descendants
+			-- do not clip. Reserve 32 pixels on each side for bars and strokes.
+			Name = "AnomalyUniversalESPBox", Size = UDim2.new(boxWidthStuds, 64, boxHeightStuds, 8), StudsOffsetWorldSpace = boxOffset,
 			AlwaysOnTop = true, LightInfluence = 0, MaxDistance = state.EspDistance, Adornee = root, ClipsDescendants = false,
 		}, gui)
 		entry.BoxFrame = create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromScale(1, 1),
+			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(1, -64, 1, -8),
 			BackgroundTransparency = 1, BorderSizePixel = 0,
 		}, entry.BoxGui)
 		entry.BoxStroke = create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.4, Transparency = 0}, entry.BoxFrame)
 		local function makeResourceBar(name, rightOffset, fillColor)
 			local background = create("Frame", {
-				Name = name, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, rightOffset, 0, 3),
-				Size = UDim2.new(0, 7, 1, -6), BackgroundColor3 = Color3.fromRGB(8, 8, 8),
+				Name = name, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, rightOffset - 32, 0, 4),
+				Size = UDim2.new(0, 7, 1, -8), BackgroundColor3 = Color3.fromRGB(8, 8, 8),
 				BackgroundTransparency = 0.02, BorderSizePixel = 0, ZIndex = 3,
-			}, entry.BoxFrame)
+			}, entry.BoxGui)
 			create("UICorner", {CornerRadius = UDim.new(0, 3)}, background)
 			create("UIStroke", {Color = Color3.fromRGB(15, 15, 15), Thickness = 1, Transparency = 0}, background)
 			local fill = create("Frame", {
@@ -760,9 +762,9 @@ local function updateEsp(target, localRoot)
 	entry.Gui.MaxDistance = state.EspDistance
 	entry.Gui.StudsOffsetWorldSpace = entry.InfoOffset
 	entry.BoxGui.MaxDistance = state.EspDistance
-	entry.BoxGui.Size = UDim2.new(entry.BoxWidthStuds, 0, entry.BoxHeightStuds, 0)
+	entry.BoxGui.Size = UDim2.new(entry.BoxWidthStuds, 64, entry.BoxHeightStuds, 8)
 	entry.BoxGui.StudsOffsetWorldSpace = entry.BoxOffset
-	entry.BoxFrame.Size = UDim2.fromScale(1, 1)
+	entry.BoxFrame.Size = UDim2.new(1, -64, 1, -8)
 	local settings = state.EspSettings
 	local lines = {}
 	if settings.Name then table.insert(lines, target.DisplayName) end

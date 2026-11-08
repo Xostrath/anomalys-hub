@@ -3110,7 +3110,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v8. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v9. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3195,9 +3195,16 @@ local weaponProfiles = {
 		-- Six v6 damage snapshots at phases .537-.611, speed 1.04.
 		-- The exact move name and automatic parry outcome remain unverified.
 		["113521135913624"] = {Phase = .52, Name = "dagger additional strike (test)"},
-		-- Later hits persist after a confirmed first parry in the capture.
-		-- Each contact is attempted at most once; cooldowns still gate inputs.
-		["78084477149043"] = {Phases = {.30, .87, 1.12, 1.50}, Name = "dagger multi-hit"},
+		-- Later hits persist after a confirmed first parry. Two automatic runs
+		-- also show an earlier follow-up at .533/.571, previously unmapped.
+		-- Nearby follow-ups hit after facing/projection rejected them. Treat
+		-- those contacts within 9 studs as threats even after the wielder turns;
+		-- this is a conservative test rule, not a measured server hitbox radius.
+		["78084477149043"] = {Phases = {.30, .52, .87, 1.12, 1.50}, FollowupRadius = 9, Name = "dagger multi-hit"},
+		-- A different repeated strike: three sequences show damage around .52, .70,
+		-- .88, 1.06, 1.24, 1.44, 1.62 at speed .6. Seven observed contacts only;
+		-- automatic parry outcome and the exact move name remain unverified.
+		["81971337593137"] = {Phases = {.52, .70, .88, 1.06, 1.24, 1.42, 1.60}, Name = "dagger repeated strike (test)"},
 	}},
 }
 local knownAnimations = {}
@@ -3210,7 +3217,7 @@ for _, key in ipairs({"sword", "dagger"}) do
 	end
 end
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {}}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v8", "Fists / Pitchfork / BigPitchfork / Sword / Dagger. Pitchfork combo and multi-hit attacks added.", 224)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v9", "Fists / Pitchfork / BigPitchfork / Sword / Dagger. Dagger repeated attacks and nearby follow-ups updated.", 224)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3223,11 +3230,12 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v8 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v9 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 8. Pitchfork and Dagger each have one four-contact move. New pitchfork/dagger/sword timings are under test. No actor-name filters."
+		.. "\nFists: 12 animations. Pitchfork: 6. BigPitchfork: 5. Sword: 9. Dagger: 9. Pitchfork has a four-contact move; Dagger has five- and seven-contact moves. New timings remain under test. No actor-name filters."
 		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger IDs select their profile. Explicit conflicting Character.Weapon is never overridden. Sword reach 12 studs; other profiles retain 9."
+		.. "\nDagger 78084477149043 follow-ups use current distance within 9 studs regardless of facing/projection; its first contact retains directional checks. This test rule is not a measured hitbox."
 		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
 		.. "\nCOMBAT_STATE records raw local attributes at inputs, damage and rejections; their clock bases may differ. NO_OBSERVED_REQUEST means no hook observation before the deadline/stop, not proof that nothing reached the server."
 		.. "\nUnknown weapons and animation variants are logged and skipped; a Fists label alone does not establish every fist animation's timing."
@@ -3388,7 +3396,9 @@ local function damageSnapshot(localRoot)
 				table.insert(tracks, string.format("%s:%.3f@%.3f", id, track.TimePosition, track.Speed))
 			end
 		end
-		note(string.format("DAMAGE_NEARBY actor=%s weapon=%s distance=%.2f tracks(id:phase@speed)=%s actorId=%d", rig.Model.Name, key, distance, table.concat(tracks, ","), rig.Id))
+		local delta = localRoot.Position - root.Position
+		local facingDot = distance < 1 and 1 or root.CFrame.LookVector:Dot(delta.Unit)
+		note(string.format("DAMAGE_NEARBY actor=%s weapon=%s distance=%.2f tracks(id:phase@speed)=%s actorId=%d facing=%.3f", rig.Model.Name, key, distance, table.concat(tracks, ","), rig.Id, facingDot))
 	end
 end
 local function watchTrack(rig, track)
@@ -3577,12 +3587,14 @@ local function step()
 			-- velocity projection for closing attacks, instead of a fixed timer.
 			local projected = delta + (localRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity) * math.max(0, remaining)
 			local facingDot = distance < 1 and 1 or root.CFrame.LookVector:Dot(delta.Unit)
-			local facing = facingDot >= .15
-			if distance <= (weapon.MaxDistance or 12) and projected.Magnitude <= (weapon.Reach or 9) and math.abs(delta.Y) <= 8 and facing then
+			local radialFollowup = contact > 1 and profile.FollowupRadius
+			local geometryOk = distance <= (weapon.MaxDistance or 12) and projected.Magnitude <= (weapon.Reach or 9) and facingDot >= .15
+			if radialFollowup then geometryOk = distance <= radialFollowup end
+			if geometryOk and math.abs(delta.Y) <= 8 then
 				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1} end
 			elseif swing.GeometryContact ~= contact then
 				swing.GeometryContact = contact
-				note(string.format("SKIP actorId=%d weapon=%s animation=%s contact=%d reason=geometry phase=%.3f eta=%.3f distance=%.2f projected=%.2f vertical=%.2f facing=%.3f", rig.Id, weaponKey, swing.Asset, contact, phase, remaining, distance, projected.Magnitude, delta.Y, facingDot))
+				note(string.format("SKIP actorId=%d weapon=%s animation=%s contact=%d reason=geometry phase=%.3f eta=%.3f distance=%.2f projected=%.2f vertical=%.2f facing=%.3f mode=%s", rig.Id, weaponKey, swing.Asset, contact, phase, remaining, distance, projected.Magnitude, delta.Y, facingDot, radialFollowup and "nearby-followup" or "directional"))
 			end
 		end
 	end
@@ -3616,7 +3628,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger mappedWeaponAnimations=40 duration=90")
+	note("START key=" .. state.Key.Name .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Sword,Dagger mappedWeaponAnimations=41 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

@@ -97,6 +97,9 @@ local state = {
 	EspEnabled = false,
 	EspDistance = 2500,
 	EspSettings = {Name = true, Level = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
+	NpcEspEnabled = false,
+	NpcEspDistance = 2500,
+	NpcEspSettings = {Name = true, Distance = true, Box = true, Health = true},
 	Noclip = false,
 	InfiniteJump = false,
 	SpeedEnabled = false,
@@ -133,6 +136,13 @@ local function loadConfig()
 		end
 	end
 	state.InfiniteJump = decoded.InfiniteJump == true
+	state.NpcEspEnabled = decoded.NpcEspEnabled == true
+	state.NpcEspDistance = math.clamp(tonumber(decoded.NpcEspDistance) or 2500, 100, 10000)
+	if type(decoded.NpcEspSettings) == "table" then
+		for key in pairs(state.NpcEspSettings) do
+			if type(decoded.NpcEspSettings[key]) == "boolean" then state.NpcEspSettings[key] = decoded.NpcEspSettings[key] end
+		end
+	end
 	state.SpeedEnabled = decoded.SpeedEnabled == true
 	state.WalkSpeed = math.clamp(tonumber(decoded.WalkSpeed) or 16, 8, 250)
 	state.JumpPower = math.clamp(tonumber(decoded.JumpPower) or 50, 25, 250)
@@ -146,6 +156,9 @@ local function saveConfig()
 		EspEnabled = state.EspEnabled,
 		EspDistance = state.EspDistance,
 		EspSettings = table.clone(state.EspSettings),
+		NpcEspEnabled = state.NpcEspEnabled,
+		NpcEspDistance = state.NpcEspDistance,
+		NpcEspSettings = table.clone(state.NpcEspSettings),
 		InfiniteJump = state.InfiniteJump,
 		SpeedEnabled = state.SpeedEnabled,
 		WalkSpeed = state.WalkSpeed,
@@ -1453,6 +1466,205 @@ end)
 controller.CaptureBeyondNenSessionState = capture
 hookCharacter(player.Character)
 refreshSources(); save(); render()
+
+end)()
+;(function()
+-- Beyond Nen NPC ESP. Reads streamed humanoids only; sends no game requests.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local ui, state = controller.UI, controller.State
+local create, colors = ui.Create, ui.Colors
+local tracked, entries = {}, {}
+local addedConnection, removingConnection
+local watching, stopped = false, false
+
+local function removeEntry(humanoid)
+	local entry = entries[humanoid]
+	if not entry then return end
+	entry.Gui:Destroy()
+	entry.BoxGui:Destroy()
+	entries[humanoid] = nil
+end
+
+local function track(object)
+	if object:IsA("Humanoid") then tracked[object] = true end
+end
+
+local function stopWatching()
+	watching = false
+	if addedConnection then addedConnection:Disconnect(); addedConnection = nil end
+	if removingConnection then removingConnection:Disconnect(); removingConnection = nil end
+	for humanoid in pairs(entries) do removeEntry(humanoid) end
+	table.clear(tracked)
+end
+
+local function startWatching()
+	if watching or stopped then return end
+	watching = true
+	-- Subscribe before the single initial scan so spawning/streaming cannot fall
+	-- into a gap. Subsequent updates visit humanoids, not the whole workspace.
+	addedConnection = Workspace.DescendantAdded:Connect(track)
+	removingConnection = Workspace.DescendantRemoving:Connect(function(object)
+		if tracked[object] then
+			tracked[object] = nil
+			removeEntry(object)
+		end
+	end)
+	for _, object in ipairs(Workspace:GetDescendants()) do track(object) end
+end
+
+local function isPlayerCharacter(model, characters)
+	local ancestor = model
+	while ancestor and ancestor ~= Workspace do
+		if characters[ancestor] then return true end
+		ancestor = ancestor.Parent
+	end
+	return false
+end
+
+local function displayName(model, humanoid)
+	for _, key in ipairs({"DisplayName", "NPCName"}) do
+		local value = model:GetAttribute(key)
+		if type(value) == "string" and value:match("%S") then return value end
+	end
+	local value = humanoid.DisplayName
+	if type(value) == "string" and value:match("%S") then return value end
+	return model.Name
+end
+
+local function makeEntry(model, root)
+	local width, height, offset = 4, 6, Vector3.zero
+	local ok, bounds, size = pcall(model.GetBoundingBox, model)
+	if ok and typeof(bounds) == "CFrame" and typeof(size) == "Vector3" then
+		width = math.clamp(size.X + 0.35, 2.8, 20)
+		height = math.clamp(size.Y + 0.35, 4.5, 30)
+		offset = bounds.Position - root.Position
+	end
+	local entry = {Model = model, Root = root}
+	entry.Gui = create("BillboardGui", {
+		Name = "AnomalyBeyondNenNPCESP", Size = UDim2.fromOffset(240, 62),
+		StudsOffsetWorldSpace = offset + Vector3.new(0, height * 0.5 + 1.8, 0),
+		AlwaysOnTop = true, LightInfluence = 0, Adornee = root,
+	}, ui.Gui)
+	entry.Label = create("TextLabel", {
+		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
+		TextColor3 = colors.Text, TextStrokeColor3 = Color3.new(), TextStrokeTransparency = 0.12,
+		TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
+		TextYAlignment = Enum.TextYAlignment.Bottom,
+	}, entry.Gui)
+	-- Match the player ESP: stable dimensions in studs, a white body box, and
+	-- health outside the box but inside the padded BillboardGui drawing canvas.
+	entry.BoxGui = create("BillboardGui", {
+		Name = "AnomalyBeyondNenNPCBox", Size = UDim2.new(width, 64, height, 8),
+		StudsOffsetWorldSpace = offset, AlwaysOnTop = true, LightInfluence = 0,
+		Adornee = root, ClipsDescendants = false,
+	}, ui.Gui)
+	local box = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.new(1, -64, 1, -8), BackgroundTransparency = 1, BorderSizePixel = 0,
+	}, entry.BoxGui)
+	entry.Stroke = create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.4}, box)
+	entry.Health = create("Frame", {
+		Name = "Health", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -23, 0, 4),
+		Size = UDim2.new(0, 7, 1, -8), BackgroundColor3 = Color3.fromRGB(8, 8, 8),
+		BorderSizePixel = 0, ZIndex = 3,
+	}, entry.BoxGui)
+	create("UICorner", {CornerRadius = UDim.new(0, 3)}, entry.Health)
+	create("UIStroke", {Color = Color3.fromRGB(15, 15, 15), Thickness = 1}, entry.Health)
+	entry.Fill = create("Frame", {
+		Name = "Fill", AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1),
+		Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(239, 55, 62),
+		BorderSizePixel = 0, ZIndex = 4,
+	}, entry.Health)
+	create("UICorner", {CornerRadius = UDim.new(0, 3)}, entry.Fill)
+	return entry
+end
+
+local function updateNpc(humanoid, localRoot, characters)
+	local model = humanoid.Parent
+	if not model or not model:IsA("Model") or not model:IsDescendantOf(Workspace) then
+		tracked[humanoid] = nil
+		removeEntry(humanoid)
+		return
+	end
+	if not localRoot or humanoid.Health <= 0 or isPlayerCharacter(model, characters) then
+		removeEntry(humanoid)
+		return
+	end
+	local root = humanoid.RootPart or model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("Head")
+	if not root or not root:IsA("BasePart") or not root:IsDescendantOf(model) then removeEntry(humanoid); return end
+	local distance = (root.Position - localRoot.Position).Magnitude
+	if distance > state.NpcEspDistance then removeEntry(humanoid); return end
+	local entry = entries[humanoid]
+	if not entry or entry.Model ~= model or entry.Root ~= root then
+		removeEntry(humanoid)
+		entry = makeEntry(model, root)
+		entries[humanoid] = entry
+	end
+	local settings, lines = state.NpcEspSettings, {}
+	if settings.Name then table.insert(lines, displayName(model, humanoid) .. " [NPC]") end
+	if settings.Distance then table.insert(lines, string.format("%d STUDS", math.floor(distance + 0.5))) end
+	entry.Label.Text = table.concat(lines, "\n")
+	entry.Gui.Enabled = #lines > 0
+	entry.Gui.MaxDistance = state.NpcEspDistance
+	entry.BoxGui.MaxDistance = state.NpcEspDistance
+	entry.BoxGui.Enabled = settings.Box or settings.Health
+	entry.Stroke.Enabled = settings.Box == true
+	entry.Health.Visible = settings.Health == true
+	entry.Fill.Size = UDim2.fromScale(1, humanoid.MaxHealth > 0 and math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1) or 0)
+end
+
+local npcCard = ui.Card(ui.Pages.Players, "BEYOND NEN NPC ESP", "Names above NPCs, health beside their boxes. Range is in studs; only loaded NPCs are visible.", 244)
+ui.Button(npcCard, state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF", 14, 72, 180, function(object)
+	state.NpcEspEnabled = not state.NpcEspEnabled
+	object.Text = state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF"
+	object.BackgroundColor3 = state.NpcEspEnabled and colors.AccentSoft or colors.Surface
+	if state.NpcEspEnabled then startWatching() else stopWatching() end
+	controller.SaveConfig()
+end, state.NpcEspEnabled and colors.AccentSoft or colors.Surface)
+ui.ValueBox(npcCard, "NPC range (studs)", 204, 72, 180, state.NpcEspDistance, function(box)
+	local value = tonumber(box.Text)
+	if value and value == value then state.NpcEspDistance = math.clamp(value, 100, 10000) end
+	box.Text = tostring(math.floor(state.NpcEspDistance))
+	controller.SaveConfig()
+end)
+local labels = {Name = "NPC name", Distance = "Distance", Health = "Health bar", Box = "Body box"}
+for index, key in ipairs({"Name", "Distance", "Health", "Box"}) do
+	local enabled = state.NpcEspSettings[key] == true
+	ui.Button(npcCard, labels[key] .. ": " .. (enabled and "ON" or "OFF"), 14 + ((index - 1) % 2) * 190,
+		124 + math.floor((index - 1) / 2) * 42, 180, function(object)
+			local nextValue = state.NpcEspSettings[key] ~= true
+			state.NpcEspSettings[key] = nextValue
+			object.Text = labels[key] .. ": " .. (nextValue and "ON" or "OFF")
+			object.BackgroundColor3 = nextValue and colors.AccentSoft or colors.Surface
+			controller.SaveConfig()
+		end, enabled and colors.AccentSoft or colors.Surface)
+end
+
+local elapsed = 0
+controller.Connect(RunService.Heartbeat, function(delta)
+	if stopped or not state.NpcEspEnabled then return end
+	elapsed += delta
+	if elapsed < 0.15 then return end
+	elapsed = 0
+	local character = Players.LocalPlayer.Character
+	local localRoot = character and character:FindFirstChild("HumanoidRootPart")
+	local characters = {}
+	for _, target in ipairs(Players:GetPlayers()) do
+		if target.Character then characters[target.Character] = true end
+	end
+	for humanoid in pairs(tracked) do updateNpc(humanoid, localRoot, characters) end
+end)
+controller.RegisterCleanup(function()
+	stopped = true
+	stopWatching()
+end)
+if state.NpcEspEnabled then startWatching() end
 
 end)()
 end

@@ -3115,7 +3115,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v24. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v25. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3276,13 +3276,20 @@ local weaponProfiles = {
 		-- generic Fists; carried tools and actor names do not select this profile.
 		-- Two episodes: 18 equal-damage samples cover these 13 phase windows,
 		-- speed1, range7.65-20.79. Missing pulses are not invented between them.
-		["73241145651241"] = {Phases = {.40, .50, .63, .75, 1.10, 1.22, 1.35, 1.82, 1.92, 2.06, 2.18, 2.32, 2.40}, MinFollowupLead = .08, Reach = 23, MaxDistance = 26, Name = "pistols burst A (test)"},
+		-- Three later runs also hit at phases3.108/3.121/3.133 after the old
+		-- final window. Preserve the earlier seeds and add only this late contact.
+		["73241145651241"] = {Phases = {.40, .50, .63, .75, 1.10, 1.22, 1.35, 1.82, 1.92, 2.06, 2.18, 2.32, 2.40, 3.08}, MinFollowupLead = .08, Reach = 23, MaxDistance = 26, Name = "pistols burst A (test)"},
 		-- Two runs: pulses at .800/.825 through1.833/1.883, speed1, range
 		-- 25.05-26.46, facing-.060 to-.337. Final receipt has larger damage;
 		-- these are observed contact windows, not an established shot count.
-		["73875507755468"] = {Phases = {.78, .89, 1.00, 1.11, 1.23, 1.34, 1.46, 1.57, 1.69, 1.81}, MinFollowupLead = .08, Reach = 28, MaxDistance = 31, MinFacing = -.4, Name = "pistols burst B (test)"},
-		-- Two first-contact samples .508/.513, plus follow-up1.004; speed1.
-		["76637609852449"] = {Phases = {.48, .98}, MinFollowupLead = .08, Reach = 15, MaxDistance = 18, MinFacing = -.5, Name = "pistols two-contact strike (test)"},
+		-- Two v24 runs: geometry skips at vertical-25 followed by matching
+		-- damage, distance25-29.24. This projectile needs its own height bound;
+		-- all other attacks retain the default8. Keep the existing current cap31.
+		["73875507755468"] = {Phases = {.78, .89, 1.00, 1.11, 1.23, 1.34, 1.46, 1.57, 1.69, 1.81}, MinFollowupLead = .08, Reach = 30, MaxDistance = 31, MaxVertical = 30, MinFacing = -.4, Name = "pistols burst B (test)"},
+		-- Previously only .48/.98 were mapped. Independent v24 runs show a
+		-- continuing train at1.104-2.450 plus a final hit3.312/3.337 (speed1).
+		-- Rear hits at3.77-6.09 studs justify a close radius for this ID only.
+		["76637609852449"] = {Phases = {.48, .98, 1.10, 1.23, 1.36, 1.49, 1.62, 1.75, 1.88, 2.02, 2.17, 2.30, 2.43, 3.28}, MinFollowupLead = .08, Reach = 15, MaxDistance = 18, CloseRangeRadius = 10, MinFacing = -.5, Name = "pistols multi-hit strike (test)"},
 		-- Two samples .452/.465 at speed1.064, distances8.62/5.28; one rear
 		-- angle-.923. Geometry and timing seeds still require an automatic test.
 		["83129479286148"] = {Phase = .43, Reach = 10, MaxDistance = 13, MinFacing = -.95, Name = "pistols close strike (test)"},
@@ -3327,9 +3334,10 @@ local weaponProfiles = {
 		-- phases 1.798/1.817 after the seventh, including after an earlier parry.
 		-- A health drop at distance 16.50 after a skip at projected 16.31 shows
 		-- the default melee range is insufficient. Broader bounds apply only here.
-		-- v23 contact7 hit after facing-.350 was skipped; first-contact
-		-- facing stays directional. Five other contacts confirmed parries.
-		["81971337593137"] = {Phases = {.52, .70, .88, 1.06, 1.24, 1.42, 1.60, 1.78}, Reach = 18, MaxDistance = 22, FollowupMinFacing = -.4, Name = "dagger repeated strike"},
+		-- v24: two runs hit from behind at5.16-9.27 studs after facing skips
+		-- as low as-.996, including the first contact. Use a close radius10;
+		-- outside it retain directional first/follow-up bounds and reach18.
+		["81971337593137"] = {Phases = {.52, .70, .88, 1.06, 1.24, 1.42, 1.60, 1.78}, Reach = 18, MaxDistance = 22, CloseRangeRadius = 10, FollowupMinFacing = -.4, Name = "dagger repeated strike"},
 		-- Three damage samples at phases 1.354/1.367/1.421, speed 1.0, up to
 		-- 11.96 studs. Timing seed only: exact name and parryability unverified.
 		["17087924823"] = {Phase = 1.32, Reach = 13, MaxDistance = 16, Name = "dagger long-windup strike (test)"},
@@ -3348,7 +3356,7 @@ local targetModes = {"NPCs", "Players", "Both"}
 local savedTargets = controller.State and controller.State.BeyondNenParryTargets
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {},
 	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "NPCs"}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v24", "Dagger angle fixes and initial Shockwork Pistols support. Choose NPCs, Players, or Both below; changing targets stops the test.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v25", "Close dagger attacks and extended pistol coverage. Choose NPCs, Players, or Both below; changing targets stops the test.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3361,12 +3369,12 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v24 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v25 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
 		.. "\nFists: 13 animations. Pitchfork: 6. BigPitchfork: 8. Rifle: 6 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
-		.. "\nShockwork Pistols v24: four exact animations from explicit weapon metadata, with 13/10/2/1 candidate contact windows. BurstA reach23/max26/facing.15; burstB reach28/max31/facing-.4; two-contact15/max18/facing-.5; close10/max13/facing-.95. Repeated contacts require .08s lead and normal cooldowns; no Rifle sustained-guard rule is inherited. Damage samples do not prove parryability or complete attack coverage. Other pistol animations stay unmapped."
+		.. "\nShockwork Pistols v25: four exact animations from explicit weapon metadata, with 14/10/14/1 candidate contact windows. BurstA includes late phase3.08, reach23/max26/facing.15. BurstB reach30/max31/height30/facing-.4 after repeated damage across vertical25. Multi-hit76637609852449 extends through3.28, reach15/max18, close radius10, otherwise facing-.5. Close strike10/max13/facing-.95. Other height bounds remain8. Repeated contacts require .08s lead and normal cooldowns; no Rifle sustained-guard rule is inherited. These are trial bounds/contact seeds, not measured hitboxes, shot counts or proof every contact is parryable. Other pistol animations stay unmapped."
 		.. "\nFists v20: alternate first strike reach12/max15, close radius10; second reach11/max14, close radius2; third reach11/max14. Close radius uses current distance without facing/velocity prediction, while retaining exact animation timing and elevation8. Trial bounds from observed damage, not measured hitboxes. Phase seeds and other Fists variants unchanged."
 		.. "\nRifle v16 had zero automatic inputs because it was unmapped. v18 added trial strike timings and eleven burst contact windows, not an established shot count. Burst reach35/max38 and strike A reach14/max17 are separate from default melee bounds. Burst follow-ups need .08s lead and respect game cooldown. Projectile speed/distance delay and full attack coverage remain unverified."
 		.. "\nRifle v18 confirmed6 close-attack and3 burst parries. v19 burst-only guard trial: initial F hold up to.30s; a matched ParryResult extends it through phase1.65, capped at2s total. Accepted alone never extends guard. Rejection, stopped/reused/paused track, target loss, focus/menu/chat/death/travel/unload release normally. Sustained block is not counted as another parry; whether it protects later bullets needs in-game testing."
@@ -3379,7 +3387,7 @@ local function save(reason)
 		.. "\nBat timings are initial seeds from v12 health-drop samples. Its multi-hit skill may contain additional contacts; no complete-move coverage or automatic success is assumed."
 		.. "\nFox Bear skill contacts retain normal input backoff, game cooldowns, facing and elevation checks. Known animation phases do not establish whether every skill contact is parryable."
 		.. "\nDagger 78084477149043 follow-ups use current distance within 9 studs regardless of facing/projection; its first contact retains directional checks. This test rule is not a measured hitbox."
-		.. "\nDagger v24: first combo strike119352136287386 allows facing>=-.85 after two angle-related misses; repeated-strike81971337593137 follow-ups allow>=-.4 after a skipped seventh contact hit. Its first contact still requires>=.15. Existing range, phase/speed timing and cooldown rules are unchanged."
+		.. "\nDagger v25: repeated-strike81971337593137 treats current distance<=10 as a threat regardless of facing/projection after repeated rear-angle damage. Outside10, first contact requires facing>=.15 and follow-ups>=-.4, projected reach18/current22. Elevation8, phases, live speed and cooldown rules remain. Opener119352136287386 retains facing>=-.85; other dagger attacks do not inherit the new radius."
 		.. "\nGATE transitions explain input pauses; SKIP records geometry/late decisions. FRAME_GAP is local heartbeat spacing, not measured network lag."
 		.. "\nCOMBAT_STATE records raw local attributes at inputs, damage and rejections; their clock bases may differ. NO_OBSERVED_REQUEST means no hook observation before the deadline/stop, not proof that nothing reached the server."
 		.. "\nDECISION requestDelay is local elapsed time from outgoing observation to response, not isolated network latency. Rejected requests are not replayed or retimestamped."
@@ -3864,7 +3872,7 @@ local function step()
 			local minimumFacing = (contact > 1 and profile.FollowupMinFacing) or profile.MinFacing or .15
 			local geometryOk = distance <= (profile.MaxDistance or weapon.MaxDistance or 12) and projected.Magnitude <= (profile.Reach or weapon.Reach or 9) and facingDot >= minimumFacing
 			if radialFollowup then geometryOk = distance <= radialFollowup elseif closeThreat then geometryOk = true end
-			if geometryOk and math.abs(delta.Y) <= 8 then
+			if geometryOk and math.abs(delta.Y) <= (profile.MaxVertical or 8) then
 				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1, GuardThroughPhase = profile.GuardThroughPhase, GeometryMode = geometryMode} end
 			elseif swing.GeometryContact ~= contact then
 				swing.GeometryContact = contact

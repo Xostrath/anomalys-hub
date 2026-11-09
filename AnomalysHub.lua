@@ -3048,7 +3048,8 @@ end)()
 ;(function()
 -- General merchant catalog and purchase signature observed in MerchantController.
 -- An independent view avoids the native shop's 14-stud walk-away UI closure.
--- Server purchase acceptance at distance must still be verified in-game.
+-- Native and hub requests match. Live tests charged only beside the merchant.
+-- Browsing remotely does not establish server permission to buy remotely.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -3057,6 +3058,7 @@ if not ui or not ui.Pages.Shops then return end
 local player = game:GetService("Players").LocalPlayer
 local storage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
+local world = game:GetService("Workspace")
 local state = {Closed = false, Open = false, Loading = false, Busy = false, Epoch = 0, NextBuy = 0, Rows = {}, Lines = {}}
 local catalog, reputation, talents, items
 
@@ -3068,7 +3070,7 @@ local function log(message)
 	if #state.Lines > 80 then table.remove(state.Lines, 1) end
 	if type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	pcall(writefile, "AnomalyHub/universal/beyond_nen_shop_test.txt", "BEYOND NEN REMOTE MERCHANT v1\nOnly explicit Buy clicks send one purchase(itemName) request. No movement or repeated requests.\n"
+	pcall(writefile, "AnomalyHub/universal/beyond_nen_shop_test.txt", "BEYOND NEN REMOTE MERCHANT v2\nOnly explicit Buy clicks send one purchase(itemName) request. No movement or repeated requests.\nBalance observations do not prove an inventory grant; proximity threshold is not established.\n"
 		.. table.concat(state.Lines, "\n"))
 end
 local function getModule(parent, name)
@@ -3124,12 +3126,36 @@ local function purchaseRemote()
 	return found
 end
 
-local entryCard = ui.Card(ui.Pages.Shops, "REMOTE MERCHANT // v1", "Open the general merchant's catalog anywhere. Choose an item, then buy one at a time.", 166)
+local function merchantDistance()
+	local character = player.Character
+	local origin = character and character:FindFirstChild("HumanoidRootPart")
+	if not origin or not origin:IsA("BasePart") then return nil end
+	local map = world:FindFirstChild("World")
+	local merchants = map and map:FindFirstChild("MerchantStore")
+	local nearest, name
+	for i, npc in ipairs(merchants and merchants:GetChildren() or {}) do
+		if i > 150 then break end
+		if npc:IsA("Model") and npc.Name ~= "Black Merchant" then
+			local root = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
+			if root and root:IsA("BasePart") then
+				local distance = (origin.Position - root.Position).Magnitude
+				if finite(distance) and (not nearest or distance < nearest) then nearest, name = distance, npc.Name end
+			end
+		end
+	end
+	return nearest, name
+end
+local entryCard = ui.Card(ui.Pages.Shops, "REMOTE MERCHANT // v2", "Browse the catalog anywhere. Use Buy beside the general merchant; distant purchases have not worked in testing.", 190)
 entryCard.LayoutOrder = 10
 local status = ui.Create("TextLabel", {
 	Name = "ShopStatus", Position = UDim2.fromOffset(14, 116), Size = UDim2.new(1, -28, 0, 36), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready to open the merchant.", TextColor3 = ui.Colors.Muted, TextSize = 11,
 	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, entryCard)
+local distanceLabel = ui.Create("TextLabel", {
+	Name = "MerchantDistance", Position = UDim2.fromOffset(14, 157), Size = UDim2.new(1, -28, 0, 20), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Merchant distance is shown when the catalog is open.", TextColor3 = ui.Colors.Muted, TextSize = 10,
+	TextXAlignment = Enum.TextXAlignment.Left,
 }, entryCard)
 local shopCard = ui.Card(ui.Pages.Shops, "MERCHANT INVENTORY", "Prices include your current reputation and shop discounts.", 458)
 shopCard.LayoutOrder, shopCard.Visible = 20, false
@@ -3182,6 +3208,29 @@ local function updateSelection()
 	buyButton.Text = state.Busy and "Waiting for response..." or (name and price and ("Buy 1 - " .. price .. " Jenni") or "Select an item")
 	buyButton.Active = state.Open and not state.Busy and price ~= nil
 end
+local function updateDistance()
+	local distance, name = merchantDistance()
+	distanceLabel.Text = distance and string.format("%s: %.0f studs away", name, distance) or "Merchant position is not loaded. Visit the general merchant to buy."
+end
+local function finishPurchase(attempt, outcome, message, warning)
+	if state.Pending ~= attempt then return end
+	state.Pending = nil; state.Busy = false
+	if state.Closed then return end
+	log("OUTCOME " .. outcome .. " item=" .. attempt.Name .. " expected=" .. attempt.Price .. " JenniBefore=" .. attempt.Funds
+		.. " JenniNow=" .. tostring(player:GetAttribute("Jenni")) .. " distanceAtRequest=" .. tostring(attempt.Distance))
+	if not state.Open or attempt.Epoch ~= state.Epoch then return end
+	updateSelection(); setStatus(message, warning and ui.Colors.Warning or nil)
+end
+local function checkPayment()
+	local attempt = state.Pending
+	if not attempt or not attempt.Returned then return end
+	local current = tonumber(player:GetAttribute("Jenni"))
+	if finite(current) and attempt.Price > 0 and math.abs(attempt.Funds - current - attempt.Price) < 0.001 then
+		finishPurchase(attempt, "EXPECTED_DEBIT_OBSERVED", tostring(attempt.Price) .. " Jenni deducted. Check your inventory for " .. attempt.Name .. ".")
+	elseif os.clock() >= attempt.Deadline then
+		finishPurchase(attempt, "UNCONFIRMED", "Purchase unconfirmed. Check your inventory; try beside the merchant if nothing arrived.", true)
+	end
+end
 local function render()
 	clearRows()
 	local rows = {}
@@ -3228,7 +3277,8 @@ local function openShop()
 		state.Open = true; shopCard.Visible = true; openButton.Text = "Refresh Merchant"
 		local count = render()
 		setStatus(count > 0 and (tostring(math.min(count, 200)) .. " items. Select one below.") or "The merchant catalog is empty.")
-		log("OPEN entries=" .. count .. " purchaseRemote=" .. tostring(purchaseRemote() ~= nil))
+		updateDistance()
+		log("OPEN entries=" .. count .. " purchaseRemote=" .. tostring(purchaseRemote() ~= nil) .. " distance=" .. tostring(merchantDistance()))
 	end)
 end
 local function closeShop()
@@ -3251,22 +3301,26 @@ local function buy()
 	if not remote then setStatus("The merchant service is unavailable. Try again after it loads.", ui.Colors.Warning); log("NO PURCHASE REMOTE"); return end
 	state.Busy = true; state.NextBuy = os.clock() + 0.8
 	local epoch = state.Epoch
+	local attempt = {Name = name, Price = price, Funds = funds, Epoch = epoch, Distance = merchantDistance()}
+	state.Pending = attempt
 	updateSelection(); setStatus("Requesting " .. name .. "...")
-	log("PURCHASE item=" .. name .. " price=" .. price .. " JenniBefore=" .. funds)
+	log("PURCHASE item=" .. name .. " price=" .. price .. " JenniBefore=" .. funds .. " distance=" .. tostring(attempt.Distance))
 	task.spawn(function()
 		-- Exactly the captured client signature: MerchantService.purchase(itemName).
 		-- No cost/quantity/location override, no retry, and no purchase on selection.
-		if state.Closed or not state.Open or epoch ~= state.Epoch then state.Busy = false; return end
+		if state.Closed or not state.Open or epoch ~= state.Epoch then state.Busy = false; state.Pending = nil; return end
 		local result = table.pack(pcall(remote.InvokeServer, remote, name))
-		state.Busy = false
 		if state.Closed then return end
 		log("RETURN ok=" .. tostring(result[1]) .. " first=" .. tostring(result[2]) .. " second=" .. tostring(result[3])
 			.. " JenniAfter=" .. tostring(player:GetAttribute("Jenni")))
-		if epoch ~= state.Epoch or not state.Open then return end
-		updateSelection()
-		if not result[1] then setStatus("Purchase request failed. Check your inventory before retrying.", ui.Colors.Warning)
-		elseif result[2] == false then setStatus("The server declined the purchase. Check the game's notification.", ui.Colors.Warning)
-		else setStatus("Request sent for " .. name .. ". Check your inventory for the result.") end
+		if not result[1] then finishPurchase(attempt, "REQUEST_ERROR", "Purchase request failed. Check your inventory before retrying.", true)
+		elseif result[2] == false then finishPurchase(attempt, "DECLINED", "The server declined the purchase. Check the game's notification.", true)
+		elseif price == 0 then finishPurchase(attempt, "FREE_ITEM_UNCONFIRMED", "Request returned for " .. name .. ". Check your inventory for the free item.")
+		else
+			attempt.Returned, attempt.Deadline = true, os.clock() + 3
+			if state.Open and epoch == state.Epoch then setStatus("Waiting for the purchase to appear...") end
+			checkPayment()
+		end
 	end)
 end
 openButton = ui.FitColumn(ui.Button(entryCard, "Open Merchant", 0, 0, 180, openShop, ui.Colors.AccentSoft), 0, 72)
@@ -3275,12 +3329,14 @@ buyButton = ui.Button(shopCard, "Select an item", 14, 402, 220, buy, ui.Colors.A
 buyButton.Size = UDim2.new(1, -28, 0, 36)
 local elapsed = 0
 controller.Connect(runService.Heartbeat, function(delta)
-	if not state.Open or state.Closed then return end
+	if state.Closed then return end
+	checkPayment()
+	if not state.Open then return end
 	elapsed += delta
-	if elapsed >= 1 then elapsed = 0; updateSelection() end
+	if elapsed >= 1 then elapsed = 0; updateSelection(); updateDistance() end
 end)
 controller.RegisterCleanup(function()
-	state.Closed = true; state.Open = false; state.Epoch += 1; clearRows()
+	state.Closed = true; state.Open = false; state.Pending = nil; state.Busy = false; state.Epoch += 1; clearRows()
 end)
 controller.OpenBeyondNenMerchant = openShop
 

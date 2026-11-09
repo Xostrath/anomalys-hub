@@ -2633,7 +2633,7 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Shared passive observations for the mapped fishing, meditation and combat remotes.
+-- Shared passive observations for mapped activity, combat and merchant remotes.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -2646,6 +2646,8 @@ local definitions = {
 	},
 	NenMasteryService = {RF = {"SetMeditationTechnique"}},
 	MovementService = {RF = {"Dash", "TpDash"}},
+	MerchantService = {RF = {"purchase", "sellGear", "sellItem"}},
+	BlackMerchantService = {RF = {"Buy", "GetOffer"}, RE = {"OfferChanged"}},
 }
 -- Exact client-visible paths from the Beyond Nen fingerprint. Both Block
 -- remotes keep distinct names; UnreliableRemoteEvents use their own method hook.
@@ -2793,9 +2795,251 @@ function controller.WatchBeyondNenCombat(callback)
 	local movement = watch("MovementService", callback)
 	return function() combat(); movement() end
 end
+function controller.WatchBeyondNenMerchant(callback)
+	if type(callback) ~= "function" then return function() end end
+	local merchant = watch("MerchantService", function(name, ...) callback("MerchantService." .. name, ...) end)
+	local blackMerchant = watch("BlackMerchantService", function(name, ...) callback("BlackMerchantService." .. name, ...) end)
+	return function() merchant(); blackMerchant() end
+end
 controller.RegisterCleanup(function()
 	closed = true; table.clear(listeners); sync()
 end)
+
+end)()
+;(function()
+-- Observe one normal merchant interaction before implementing remote shop access.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local player = game:GetService("Players").LocalPlayer
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ui = controller.UI
+local folder = "AnomalyHub/universal/"
+local capture = {Active = false, Closed = false, Lines = {}, Bytes = 0, LastUI = {}, Buttons = {}, Connections = {}, Serial = 0}
+
+local function sample(value, depth, seen)
+	depth, seen = depth or 0, seen or {}
+	if typeof(value) == "Instance" then return "<" .. value.ClassName .. ":" .. value:GetFullName() .. ">" end
+	if type(value) == "string" then return string.format("%q", value:sub(1, 600)) end
+	if type(value) ~= "table" then return tostring(value) end
+	if seen[value] then return "<cycle>" end
+	if depth >= 3 then return "<depth limit>" end
+	seen[value] = true
+	local parts, count = {}, 0
+	for key, item in pairs(value) do
+		count += 1; if count > 20 then table.insert(parts, "<field limit>"); break end
+		table.insert(parts, sample(key, depth + 1, seen) .. "=" .. sample(item, depth + 1, seen))
+	end
+	seen[value] = nil
+	return "{" .. table.concat(parts, ",") .. "}"
+end
+local function log(message)
+	if not capture.Active then return end
+	local line = string.format("%.3fs\t%s", os.clock() - capture.Started, tostring(message):sub(1, 7000))
+	if #capture.Lines >= 5000 or capture.Bytes + #line > 750000 then capture.Limited = true; return end
+	table.insert(capture.Lines, line); capture.Bytes += #line + 1
+end
+local function save(reason)
+	capture.Report = "BEYOND NEN MERCHANT CAPTURE // v1\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
+		.. "\nObserves normal merchant calls/returns, shop/dialog UI and manual interaction inputs. Sends no inputs or remote requests."
+		.. "\nCaptures up to six matching client merchant/dialog controllers if decompilation is available; never requires or executes them."
+		.. "\nDecompiled client code may be incomplete and cannot establish server distance validation. No chat or typed text is recorded."
+		.. "\nOutgoing calls are logged after returning; requestStart preserves call time. Hook paths may duplicate calls."
+		.. "\nLimits: 120s, 5000 lines/750KB, 1200 UI objects, six sources at 2MB/4s each."
+		.. "\n" .. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason .. (capture.Limited and "\nREPORT LIMIT REACHED" or "")
+	if type(writefile) ~= "function" then return false end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	local ok = pcall(writefile, folder .. "beyond_nen_merchant_capture.txt", capture.Report)
+	if capture.Stem then pcall(writefile, folder .. capture.Stem .. ".txt", capture.Report) end
+	return ok
+end
+local function effectiveVisible(object)
+	while object and object ~= player do
+		if object:IsA("GuiObject") and not object.Visible then return false end
+		if object:IsA("LayerCollector") and not object.Enabled then return false end
+		object = object.Parent
+	end
+	return true
+end
+local function roots()
+	local pg = player:FindFirstChildOfClass("PlayerGui")
+	local found = {}
+	if not pg then return found end
+	local main = pg:FindFirstChild("Main")
+	local function add(object) if object then table.insert(found, object) end end
+	-- Current and legacy merchant views, plus the observed dialogue views.
+	add(main and main:FindFirstChild("MerchantShop"))
+	add(pg:FindFirstChild("BetterDialog")); add(pg:FindFirstChild("Dialog"))
+	add(main and main:FindFirstChild("NpcInteractHud"))
+	add(pg:FindFirstChild("OreSell"))
+	for _, parent in ipairs({pg, main or pg}) do
+		for _, object in ipairs(parent:GetChildren()) do
+			if string.lower(object.Name):find("merchant", 1, true) then add(object) end
+		end
+	end
+	return found
+end
+local function snapshot()
+	local current, seen, count = {}, {}, 0
+	for _, root in ipairs(roots()) do
+		local objects = {root}
+		for _, object in ipairs(root:GetDescendants()) do table.insert(objects, object) end
+		for _, object in ipairs(objects) do
+			if seen[object] then continue end
+			seen[object] = true; count += 1
+			if count > 1200 then current["GUI LIMIT"] = "1200 objects; remaining omitted"; break end
+			local detail = object.ClassName
+			if object:IsA("LayerCollector") then detail ..= " enabled=" .. tostring(object.Enabled) end
+			if object:IsA("GuiObject") then
+				detail ..= " visible=" .. tostring(object.Visible) .. " effective=" .. tostring(effectiveVisible(object))
+					.. " pos=" .. tostring(object.Position) .. " size=" .. tostring(object.Size)
+				if object:IsA("TextLabel") or object:IsA("TextButton") then detail ..= " text=" .. sample(object.Text) end
+			end
+			local attributes = object:GetAttributes()
+			if next(attributes) then detail ..= " attrs=" .. sample(attributes) end
+			current[object:GetFullName()] = detail
+			if object:IsA("GuiButton") and not capture.Buttons[object] then
+				capture.Buttons[object] = object.Activated:Connect(function()
+					log("BUTTON " .. object:GetFullName() .. " visible=" .. tostring(effectiveVisible(object)))
+				end)
+			end
+		end
+		if count > 1200 then break end
+	end
+	for object, connection in pairs(capture.Buttons) do
+		if not seen[object] or not object.Parent then connection:Disconnect(); capture.Buttons[object] = nil end
+	end
+	if count == 0 then current["SHOP UI"] = "No merchant/dialog GUI loaded" end
+	for key, value in pairs(current) do if capture.LastUI[key] ~= value then log("STATE " .. key .. " " .. value) end end
+	for key in pairs(capture.LastUI) do if current[key] == nil then log("REMOVED " .. key) end end
+	capture.LastUI = current
+end
+local function captureSources(serial)
+	local scripts = player:FindFirstChild("PlayerScripts")
+	local client = scripts and scripts:FindFirstChild("Client")
+	local controllers = client and client:FindFirstChild("Controllers")
+	if not controllers then log("SOURCES Client.Controllers not loaded"); return end
+	local selected, queue, index = {}, {controllers}, 1
+	while index <= #queue and index <= 500 do
+		local object = queue[index]; index += 1
+		local name = string.lower(object.Name):gsub("[^%w]", "")
+		local isScript = object:IsA("ModuleScript") or object:IsA("LocalScript")
+		if object.Parent == controllers then log("CONTROLLER " .. object.ClassName .. " " .. object:GetFullName()) end
+		if isScript and (name:find("merchant", 1, true) or name == "npccontroller" or name == "npcscontroller"
+			or name == "npcinteractcontroller" or name == "interactioncontroller" or name == "dialogcontroller"
+			or name == "dialoguecontroller") then table.insert(selected, object) end
+		for _, child in ipairs(object:GetChildren()) do
+			if #queue >= 500 then log("SOURCES controller inventory limited to 500 objects"); break end
+			table.insert(queue, child)
+		end
+	end
+	table.sort(selected, function(a, b)
+		local aMerchant, bMerchant = a.Name:lower():find("merchant", 1, true) ~= nil, b.Name:lower():find("merchant", 1, true) ~= nil
+		if aMerchant ~= bMerchant then return aMerchant end
+		return a:GetFullName() < b:GetFullName()
+	end)
+	local decompiler = env.decompile or decompile
+	if type(decompiler) ~= "function" or type(writefile) ~= "function" then
+		log("SOURCES unavailable: " .. (type(decompiler) ~= "function" and "no decompiler" or "no file writer")); return
+	end
+	log("SOURCES candidates=" .. #selected)
+	for index, object in ipairs(selected) do
+		if index > 6 then log("SOURCES remaining candidates omitted (six source limit)"); break end
+		if not capture.Active or capture.Serial ~= serial then return end
+		local done, success, source = false, false, nil
+		local job = task.spawn(function() success, source = pcall(decompiler, object); done = true end)
+		local deadline = os.clock() + 4
+		while not done and os.clock() < deadline and capture.Active and capture.Serial == serial do task.wait(0.05) end
+		if not done and type(task.cancel) == "function" then pcall(task.cancel, job) end
+		if not capture.Active or capture.Serial ~= serial then return end
+		local label = object:GetFullName()
+		if not done then log("SOURCE TIMEOUT " .. label)
+		elseif not success or type(source) ~= "string" then log("SOURCE UNAVAILABLE " .. label .. " " .. sample(source))
+		elseif #source == 0 or #source > 2000000 then log("SOURCE SIZE REJECTED " .. label .. " bytes=" .. #source)
+		else
+			local sourcePath = folder .. capture.Stem .. "_" .. index .. "_" .. object.Name:gsub("[^%w_]", "_") .. ".lua"
+			local saved = pcall(writefile, sourcePath, source)
+			log((saved and "SOURCE SAVED " or "SOURCE WRITE FAILED ") .. label .. " bytes=" .. #source .. " file=" .. sourcePath)
+		end
+	end
+end
+
+local card = ui.Card(ui.Pages.Settings, "MERCHANT SETUP // v1", "Record talking to the merchant and opening the shop so remote access can be mapped.", 210)
+card.LayoutOrder = 25
+local status = ui.Create("TextLabel", {
+	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 78), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Start recording near the merchant, talk normally, open the shop, then close it and Stop + Save. No purchase is needed.",
+	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, card)
+local recordButton
+local function stop(reason)
+	if not capture.Active then return end
+	pcall(snapshot); capture.Active = false
+	if capture.Unwatch then capture.Unwatch(); capture.Unwatch = nil end
+	for _, connection in pairs(capture.Buttons) do connection:Disconnect() end
+	for _, connection in ipairs(capture.Connections) do connection:Disconnect() end
+	table.clear(capture.Buttons); table.clear(capture.Connections)
+	local saved = save(reason)
+	recordButton.Text = "Record Merchant"
+	status.Text = saved and "Merchant recording saved. Ready to review." or "File saving unavailable. Use Copy Recording."
+end
+local function start()
+	if capture.Closed then return end
+	if capture.Active then stop("STOPPED"); return end
+	capture.Serial += 1
+	capture.Lines, capture.Bytes, capture.LastUI, capture.Limited = {}, 0, {}, false
+	capture.Started, capture.LastSaved, capture.Active = os.clock(), os.clock(), true
+	capture.Stem = "beyond_nen_merchant_" .. os.time() .. "_" .. math.floor(os.clock() * 1000) .. "_" .. capture.Serial
+	local serial = capture.Serial
+	capture.Unwatch = controller.WatchBeyondNenMerchant(function(name, direction, args, requestStart)
+		if capture.Active and capture.Serial == serial and requestStart >= capture.Started then
+			log(name .. " " .. direction .. " requestStart=" .. string.format("%.3f", requestStart - capture.Started) .. " args=" .. sample(args))
+		end
+	end)
+	local probe = env.__AnomalyBeyondFishingProbe
+	log("Coverage: " .. (probe and #probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "UI only; outgoing hooks unavailable"))
+	for remote, definition in pairs(probe and probe.Targets or {}) do
+		if definition.Service == "MerchantService" or definition.Service == "BlackMerchantService" then log("REMOTE " .. definition.Service .. "." .. definition.Name .. " " .. remote:GetFullName()) end
+	end
+	table.insert(capture.Connections, UserInputService.InputBegan:Connect(function(input, processed)
+		if UserInputService:GetFocusedTextBox() then return end
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.KeyCode == Enum.KeyCode.T or input.KeyCode == Enum.KeyCode.E then
+			log("INTERACT " .. tostring(input.UserInputType) .. " " .. tostring(input.KeyCode) .. " processed=" .. tostring(processed) .. " pointer=" .. tostring(UserInputService:GetMouseLocation()))
+		end
+	end))
+	pcall(snapshot); save("RECORDING")
+	recordButton.Text = "Stop + Save"
+	status.Text = "Recording for up to 2 minutes. Talk to the merchant, open the shop, select an item to view it, close the shop, then Stop + Save."
+	task.spawn(function()
+		local ok, err = pcall(captureSources, serial)
+		if capture.Active and capture.Serial == serial then
+			if not ok then log("SOURCES ERROR " .. tostring(err)) end
+			save("RECORDING")
+		end
+	end)
+end
+recordButton = ui.FitColumn(ui.Button(card, "Record Merchant", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
+ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()
+	if capture.Active then save("RECORDING") end
+	if capture.Report and type(setclipboard) == "function" then pcall(setclipboard, capture.Report) end
+end), 1, 72)
+local elapsed = 0
+controller.Connect(RunService.Heartbeat, function(delta)
+	if not capture.Active then return end
+	elapsed += delta
+	if elapsed >= 0.2 then
+		elapsed = 0
+		local ok, err = pcall(snapshot)
+		if not ok then log("SNAPSHOT ERROR " .. tostring(err)) end
+	end
+	if capture.Limited then stop("LIMIT_REACHED")
+	elseif os.clock() - capture.Started >= 120 then stop("COMPLETE")
+	elseif os.clock() - capture.LastSaved >= 5 then save("RECORDING"); capture.LastSaved = os.clock() end
+end)
+controller.Connect(player.OnTeleport, function() stop("TELEPORT") end)
+controller.RegisterCleanup(function() stop("UNLOAD"); capture.Closed = true end)
+controller.CaptureBeyondNenMerchant = start
 
 end)()
 ;(function()

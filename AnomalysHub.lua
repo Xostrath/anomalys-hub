@@ -257,6 +257,7 @@ local pageMeta = {
 	ESP = {"ESP", "Player and NPC overlays together, with independent controls"},
 	Auto = {"AUTO", "Automatic activities and setup controls"},
 	Combat = {"COMBAT", "Combat recording and defense tools"},
+	Shops = {"SHOPS", "Browse the merchant from wherever you are"},
 	Movement = {"MOVEMENT", "Character movement and collision utilities"},
 	Servers = {"SERVER NAVIGATION", "Rejoin or move to another public server"},
 	Settings = {"SETTINGS", "Persistence, keybind, reload, and cleanup"},
@@ -273,7 +274,7 @@ local function makePage(name)
 	return page
 end
 for _, name in ipairs({"Home", "Players", "ESP", "Movement", "Servers", "Settings"}) do makePage(name) end
-if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto"); makePage("Combat") end
+if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto"); makePage("Combat"); makePage("Shops") end
 
 local function selectTab(name)
 	if not pages[name] then return end
@@ -294,6 +295,8 @@ end
 local tabNames = {{"Home", "[D]  Dashboard"}, {"Players", "[P]  Players"}, {"ESP", "[E]  ESP"}, {"Movement", "[M]  Movement"}, {"Servers", "[S]  Servers"}, {"Settings", "[=]  Settings"}}
 if pages.Auto then table.insert(tabNames, 4, {"Auto", "[A]  Auto"}) end
 if pages.Combat then table.insert(tabNames, 4, {"Combat", "[C]  Combat"}) end
+if pages.Shops then table.insert(tabNames, 6, {"Shops", "[$]  Shops"}) end
+tabBar.Size = UDim2.new(1, -20, 0, #tabNames * 40)
 for order, definition in ipairs(tabNames) do
 	local name, text = definition[1], definition[2]
 	local button = create("TextButton", {
@@ -3040,6 +3043,246 @@ end)
 controller.Connect(player.OnTeleport, function() stop("TELEPORT") end)
 controller.RegisterCleanup(function() stop("UNLOAD"); capture.Closed = true end)
 controller.CaptureBeyondNenMerchant = start
+
+end)()
+;(function()
+-- General merchant catalog and purchase signature observed in MerchantController.
+-- An independent view avoids the native shop's 14-stud walk-away UI closure.
+-- Server purchase acceptance at distance must still be verified in-game.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local ui = controller.UI
+if not ui or not ui.Pages.Shops then return end
+local player = game:GetService("Players").LocalPlayer
+local storage = game:GetService("ReplicatedStorage")
+local runService = game:GetService("RunService")
+local state = {Closed = false, Open = false, Loading = false, Busy = false, Epoch = 0, NextBuy = 0, Rows = {}, Lines = {}}
+local catalog, reputation, talents, items
+
+local function finite(value)
+	return type(value) == "number" and value == value and value >= 0 and value < math.huge
+end
+local function log(message)
+	table.insert(state.Lines, string.format("%.3f %s", os.clock(), tostring(message):sub(1, 700)))
+	if #state.Lines > 80 then table.remove(state.Lines, 1) end
+	if type(writefile) ~= "function" then return end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	pcall(writefile, "AnomalyHub/universal/beyond_nen_shop_test.txt", "BEYOND NEN REMOTE MERCHANT v1\nOnly explicit Buy clicks send one purchase(itemName) request. No movement or repeated requests.\n"
+		.. table.concat(state.Lines, "\n"))
+end
+local function getModule(parent, name)
+	local object = parent and parent:FindFirstChild(name)
+	if not object or not object:IsA("ModuleScript") then return nil, name .. " is not loaded" end
+	local ok, value = pcall(require, object)
+	if not ok or type(value) ~= "table" then return nil, "Could not read " .. name .. ": " .. tostring(value) end
+	return value
+end
+local function loadData()
+	local sharedFolder = storage:FindFirstChild("Shared")
+	local data = sharedFolder and sharedFolder:FindFirstChild("Data")
+	local a, err = getModule(data, "BasicMerchantData")
+	if not a then return nil, err end
+	local b; b, err = getModule(data, "ReputationPerks")
+	if not b then return nil, err end
+	local c; c, err = getModule(data, "Talents")
+	if not c then return nil, err end
+	if type(b.ApplyDiscount) ~= "function" or type(c.Reduction) ~= "function" then return nil, "Shop price functions are unavailable" end
+	local d = getModule(data and data:FindFirstChild("InventoryItems"), "ItemList")
+	return {Catalog = a, Reputation = b, Talents = c, Items = d}
+end
+local function priceFor(entry)
+	if type(entry) ~= "table" or not finite(entry.price) then return nil end
+	local ok, value = pcall(function()
+		local discounted = reputation.ApplyDiscount(entry.price, player:GetAttribute("Reputation"))
+		if not finite(discounted) then return nil end
+		if discounted > 0 then
+			local multiplier = talents.Reduction(player, "ShopDiscount")
+			if not finite(multiplier) then return nil end
+			discounted = math.max(1, math.floor(discounted * multiplier))
+		end
+		return discounted
+	end)
+	return ok and finite(value) and value or nil
+end
+local function purchaseRemote()
+	local packages = storage:FindFirstChild("Packages")
+	local index = packages and packages:FindFirstChild("_Index")
+	local found
+	for _, package in ipairs(index and index:GetChildren() or {}) do
+		if not package.Name:match("^sleitnick_knit@") then continue end
+		local knit = package:FindFirstChild("knit")
+		local services = knit and knit:FindFirstChild("Services")
+		local merchant = services and services:FindFirstChild("MerchantService")
+		local rf = merchant and merchant:FindFirstChild("RF")
+		local remote = rf and rf:FindFirstChild("purchase")
+		if remote and remote:IsA("RemoteFunction") then
+			if found and found ~= remote then return nil end
+			found = remote
+		end
+	end
+	return found
+end
+
+local entryCard = ui.Card(ui.Pages.Shops, "REMOTE MERCHANT // v1", "Open the general merchant's catalog anywhere. Choose an item, then buy one at a time.", 166)
+entryCard.LayoutOrder = 10
+local status = ui.Create("TextLabel", {
+	Name = "ShopStatus", Position = UDim2.fromOffset(14, 116), Size = UDim2.new(1, -28, 0, 36), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Ready to open the merchant.", TextColor3 = ui.Colors.Muted, TextSize = 11,
+	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, entryCard)
+local shopCard = ui.Card(ui.Pages.Shops, "MERCHANT INVENTORY", "Prices include your current reputation and shop discounts.", 458)
+shopCard.LayoutOrder, shopCard.Visible = 20, false
+local list = ui.Create("ScrollingFrame", {
+	Name = "MerchantItems", Position = UDim2.fromOffset(14, 68), Size = UDim2.new(1, -28, 0, 232), BackgroundColor3 = ui.Colors.Surface,
+	BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageColor3 = ui.Colors.Accent, AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	CanvasSize = UDim2.new(),
+}, shopCard)
+ui.Create("UIListLayout", {Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder}, list)
+ui.Create("UIPadding", {PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5), PaddingLeft = UDim.new(0, 5)}, list)
+local detail = ui.Create("TextLabel", {
+	Name = "ItemDetail", Position = UDim2.fromOffset(14, 309), Size = UDim2.new(1, -28, 0, 78), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Select an item to see its details.", TextColor3 = ui.Colors.Text, TextSize = 11,
+	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+}, shopCard)
+local openButton, buyButton
+local function setStatus(text, color)
+	if state.Closed then return end
+	status.Text, status.TextColor3 = text, color or ui.Colors.Muted
+end
+local function clearRows()
+	for _, row in ipairs(state.Rows) do row.Connection:Disconnect(); row.Button:Destroy() end
+	table.clear(state.Rows)
+end
+local function updateSelection()
+	if state.Closed then return end
+	local name = state.Selected
+	local entry = catalog and name and catalog[name]
+	local price = priceFor(entry)
+	state.QuotedPrice = price
+	for _, row in ipairs(state.Rows) do
+		local rowEntry = catalog and catalog[row.Name]
+		local rowPrice = priceFor(rowEntry)
+		local stock = type(rowEntry) == "table" and rowEntry.stock
+		row.Button.Text = row.Name .. "    |    " .. (rowPrice and string.format("%s Jenni", rowPrice) or "Price unavailable")
+			.. (type(stock) == "number" and (stock <= 0 and "    SOLD OUT" or "    x" .. stock) or "")
+		row.Button.BackgroundColor3 = row.Name == name and ui.Colors.AccentSoft or ui.Colors.Surface
+	end
+	if not entry then
+		detail.Text = "Select an item to see its details."
+	else
+		local description = ""
+		for _, item in pairs(items or {}) do
+			if type(item) == "table" and item.ItemName == name then
+				description = type(item.Description) == "string" and item.Description:sub(1, 420) or ""; break
+			end
+		end
+		detail.Text = name .. "\n" .. (price and (tostring(price) .. " Jenni") or "Price unavailable") .. (description ~= "" and "\n" .. description or "")
+	end
+	buyButton.Text = state.Busy and "Waiting for response..." or (name and price and ("Buy 1 - " .. price .. " Jenni") or "Select an item")
+	buyButton.Active = state.Open and not state.Busy and price ~= nil
+end
+local function render()
+	clearRows()
+	local rows = {}
+	for name, entry in pairs(catalog) do
+		if type(name) == "string" and #name <= 160 and type(entry) == "table" and finite(entry.price) then
+			table.insert(rows, {Name = name, Entry = entry})
+		end
+	end
+	table.sort(rows, function(a, b)
+		local aFeatured, bFeatured = a.Entry.featured == true, b.Entry.featured == true
+		if aFeatured ~= bFeatured then return aFeatured end
+		if a.Entry.price ~= b.Entry.price then return a.Entry.price < b.Entry.price end
+		return a.Name < b.Name
+	end)
+	for i, row in ipairs(rows) do
+		if i > 200 then break end
+		local button = ui.Create("TextButton", {
+			Name = "MerchantItem", LayoutOrder = i, Size = UDim2.new(1, -12, 0, 36), BackgroundColor3 = ui.Colors.Surface,
+			BorderSizePixel = 0, Font = Enum.Font.Gotham, Text = row.Name, TextSize = 11, TextColor3 = ui.Colors.Text,
+			TextWrapped = true, AutoButtonColor = false,
+		}, list)
+		local connection = button.Activated:Connect(function()
+			if state.Closed or not state.Open or state.Loading then return end
+			state.Selected = row.Name; updateSelection()
+		end)
+		table.insert(state.Rows, {Name = row.Name, Button = button, Connection = connection})
+	end
+	if state.Selected and not catalog[state.Selected] then state.Selected = nil end
+	updateSelection()
+	return #rows
+end
+local function openShop()
+	if state.Closed or state.Loading or state.Busy then return end
+	state.Epoch += 1
+	local epoch = state.Epoch
+	state.Loading = true
+	setStatus("Reading the merchant catalog...")
+	task.spawn(function()
+		local data, err = loadData()
+		state.Loading = false
+		if state.Closed or epoch ~= state.Epoch then return end
+		if not data then setStatus("Merchant unavailable. Try opening again.", ui.Colors.Warning); log("LOAD FAILED " .. tostring(err)); return end
+		catalog, reputation, talents, items = data.Catalog, data.Reputation, data.Talents, data.Items
+		state.Open = true; shopCard.Visible = true; openButton.Text = "Refresh Merchant"
+		local count = render()
+		setStatus(count > 0 and (tostring(math.min(count, 200)) .. " items. Select one below.") or "The merchant catalog is empty.")
+		log("OPEN entries=" .. count .. " purchaseRemote=" .. tostring(purchaseRemote() ~= nil))
+	end)
+end
+local function closeShop()
+	state.Epoch += 1; state.Open = false; state.Selected = nil
+	shopCard.Visible = false; openButton.Text = "Open Merchant"
+	clearRows(); setStatus(state.Busy and "Shop closed. An existing purchase request is still pending." or "Merchant closed.")
+end
+local function buy()
+	if state.Closed or not state.Open or state.Loading or state.Busy or os.clock() < state.NextBuy then return end
+	local name, quoted = state.Selected, state.QuotedPrice
+	local entry = name and catalog and catalog[name]
+	local price = priceFor(entry)
+	if not price then setStatus("Select an item with an available price.", ui.Colors.Warning); return end
+	if type(entry.stock) == "number" and entry.stock <= 0 then setStatus("This item is sold out.", ui.Colors.Warning); return end
+	if price ~= quoted then updateSelection(); setStatus("The price changed. Review it, then click Buy again.", ui.Colors.Warning); return end
+	local funds = tonumber(player:GetAttribute("Jenni"))
+	if not finite(funds) then setStatus("Your Jenni balance is unavailable.", ui.Colors.Warning); return end
+	if funds < price then setStatus("Not enough Jenni for this item.", ui.Colors.Warning); return end
+	local remote = purchaseRemote()
+	if not remote then setStatus("The merchant service is unavailable. Try again after it loads.", ui.Colors.Warning); log("NO PURCHASE REMOTE"); return end
+	state.Busy = true; state.NextBuy = os.clock() + 0.8
+	local epoch = state.Epoch
+	updateSelection(); setStatus("Requesting " .. name .. "...")
+	log("PURCHASE item=" .. name .. " price=" .. price .. " JenniBefore=" .. funds)
+	task.spawn(function()
+		-- Exactly the captured client signature: MerchantService.purchase(itemName).
+		-- No cost/quantity/location override, no retry, and no purchase on selection.
+		if state.Closed or not state.Open or epoch ~= state.Epoch then state.Busy = false; return end
+		local result = table.pack(pcall(remote.InvokeServer, remote, name))
+		state.Busy = false
+		if state.Closed then return end
+		log("RETURN ok=" .. tostring(result[1]) .. " first=" .. tostring(result[2]) .. " second=" .. tostring(result[3])
+			.. " JenniAfter=" .. tostring(player:GetAttribute("Jenni")))
+		if epoch ~= state.Epoch or not state.Open then return end
+		updateSelection()
+		if not result[1] then setStatus("Purchase request failed. Check your inventory before retrying.", ui.Colors.Warning)
+		elseif result[2] == false then setStatus("The server declined the purchase. Check the game's notification.", ui.Colors.Warning)
+		else setStatus("Request sent for " .. name .. ". Check your inventory for the result.") end
+	end)
+end
+openButton = ui.FitColumn(ui.Button(entryCard, "Open Merchant", 0, 0, 180, openShop, ui.Colors.AccentSoft), 0, 72)
+ui.FitColumn(ui.Button(entryCard, "Close Merchant", 0, 0, 180, closeShop), 1, 72)
+buyButton = ui.Button(shopCard, "Select an item", 14, 402, 220, buy, ui.Colors.AccentSoft)
+buyButton.Size = UDim2.new(1, -28, 0, 36)
+local elapsed = 0
+controller.Connect(runService.Heartbeat, function(delta)
+	if not state.Open or state.Closed then return end
+	elapsed += delta
+	if elapsed >= 1 then elapsed = 0; updateSelection() end
+end)
+controller.RegisterCleanup(function()
+	state.Closed = true; state.Open = false; state.Epoch += 1; clearRows()
+end)
+controller.OpenBeyondNenMerchant = openShop
 
 end)()
 ;(function()

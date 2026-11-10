@@ -3116,7 +3116,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v26. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v27. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3161,20 +3161,34 @@ local weaponProfiles = {
 	}},
 	olympusshield = {Label = "Olympus Shield", Reach = 10, MaxDistance = 13, Animations = {
 		-- v25 records explicit Character.Weapon/Tool="Olympus Shield".
-		-- These are contact seeds from damage snapshots, not verified hitboxes
-		-- or successful automatic parries. Never select by the NPC's name.
+		-- Contact seeds are estimates, not verified hitboxes. v26 matched one
+		-- automatic A parry; the others remain trials. Never select by NPC name.
 		-- Three separate swings hit at .431/.449, speed1.036, distance3.21-9.21.
 		-- One rear hit at3.21/facing-.996 gets a narrowly bounded close radius.
 		["73449931119965"] = {Phase = .40, CloseRangeRadius = 4, Name = "shield strike A (test)"},
-		-- Single observed contacts: .557 at6.53/facing.619 and .380 at7.07/-.323.
-		["93672385277810"] = {Phase = .53, Name = "shield strike B (test)"},
+		-- B originally had one late receipt at.557. v26 has two at.449, speed
+		-- 1.036; the old seed's tap at.380 preceded damage by only67ms and
+		-- received FreshHitStun. Advance this seed, not the general input lead.
+		["93672385277810"] = {Phase = .42, Name = "shield strike B (test)"},
+		-- C: .380 at7.07/facing-.323, corroborated by v26 at.397/distance4.95.
 		["88180283191055"] = {Phase = .35, MinFacing = -.4, Name = "shield strike C (test)"},
-		-- Two separate windups hit at .937/.921, speed1, distance15.84/17.01.
-		["105757645584829"] = {Phase = .90, Reach = 18, MaxDistance = 21, Name = "shield windup (test)"},
-		-- Five damage pulses within one track: .871/1.067/1.267/1.500/1.917.
-		-- Do not invent contacts in the unobserved gap or infer them from
-		-- unmatched F/parry events; their source/animation association is unknown.
-		["131524195476030"] = {Phases = {.84, 1.04, 1.24, 1.47, 1.89}, MinFollowupLead = .08, Reach = 17, MaxDistance = 20, Name = "shield multi-hit (test)"},
+		-- Original windups at .937/.921, speed1, distance15.84/17.01. v26
+		-- adds .967/.937 at23.74/31.52; first was skipped atcurrent27.91 /
+		-- projected22.85, second was cooldown-gated. Keep the phase seed.
+		["105757645584829"] = {Phase = .90, Reach = 32, MaxDistance = 35, Name = "shield windup (test)"},
+		-- v25: .871/1.067/1.267/1.500/1.917. v26:1.017/1.250/1.433/1.650,
+		-- extending observed damage range to18.94. Use earlier repeated receipt
+		-- estimates and the newly observed1.650 pulse, without inventing later
+		-- contacts or inferring them from unmatched F/parry events.
+		["131524195476030"] = {Phases = {.84, 1.00, 1.22, 1.41, 1.62, 1.89}, MinFollowupLead = .08, Reach = 20, MaxDistance = 23, Name = "shield multi-hit (test)"},
+		-- v26 isolated new strike at.470/speed1.036/distance6.08.
+		["83501186503326"] = {Phase = .44, Name = "shield strike D (test)"},
+		-- Two separate skill contacts at1.172/1.167, speed1.25, distance5.14/30.52.
+		["137572178347251"] = {Phase = 1.13, Reach = 32, MaxDistance = 35, Name = "shield ranged skill (test)"},
+		-- One isolated contact at.792/speed1.25/distance4.44; trial timing only.
+		["17198599697"] = {Phase = .76, Name = "shield additional strike (test)"},
+		-- 71522785988111 and84503197252950 overlapped at one damage event;
+		-- neither gets a timing assignment from that ambiguous observation.
 	}},
 	bigpitchfork = {Label = "BigPitchfork", Animations = {
 		-- Captured Character.Weapon="BigPitchfork". No actor-name checks.
@@ -3377,7 +3391,7 @@ local targetModes = {"NPCs", "Players", "Both"}
 local savedTargets = controller.State and controller.State.BeyondNenParryTargets
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {},
 	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "NPCs"}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v26", "Olympus Shield trial coverage and two Bear height fixes. Choose NPCs, Players, or Both below; changing targets stops the test.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v27", "Earlier shield strike and expanded shield coverage. Choose NPCs, Players, or Both below; changing targets stops the test.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3390,11 +3404,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v26 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v27 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
-		.. "\nOlympus Shield v26: five exact animations from explicit weapon metadata. Strike A phase.40/reach10/max13/close4 (three damage samples); B phase.53 and C phase.35/facing-.4 (one sample each). Windup phase.90/reach18/max21 (two samples). Multi-hit phases.84/1.04/1.24/1.47/1.89, reach17/max20, follow-up lead.08 (one five-hit episode). Height8, normal input/cooldown gates. No automatic success established, no additional contacts inferred from unmatched inputs/results, and other shield animations remain unmapped."
+		.. "\nOlympus Shield v27: eight exact animations from explicit weapon metadata. A phase.40/reach10/max13/close4 retains v26's matched parry. B advances.53 to.42 after two damage receipts at.449; C stays.35/facing-.4. Windup stays.90, expands to reach32/max35 after damage at23.74/31.52. Multi-hit phases.84/1.00/1.22/1.41/1.62/1.89, reach20/max23, follow-up lead.08 after a second episode reached18.94 and revealed the1.650 contact. New D phase.44, ranged skill1.13/reach32/max35 (two samples), additional strike.76 (one sample). Height8 and normal input/cooldown gates remain. These are trial timings/bounds, not guaranteed hitboxes or parryability. Overlapping71522785988111/84503197252950 stay unmapped; unmatched inputs/results do not establish timing or success."
 		.. "\nFists: 13 animations. Pitchfork: 6. BigPitchfork: 8. Rifle: 6 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
 		.. "\nShockwork Pistols v25: four exact animations from explicit weapon metadata, with 14/10/14/1 candidate contact windows. BurstA includes late phase3.08, reach23/max26/facing.15. BurstB reach30/max31/height30/facing-.4 after repeated damage across vertical25. Multi-hit76637609852449 extends through3.28, reach15/max18, close radius10, otherwise facing-.5. Close strike10/max13/facing-.95. Other height bounds remain8. Repeated contacts require .08s lead and normal cooldowns; no Rifle sustained-guard rule is inherited. These are trial bounds/contact seeds, not measured hitboxes, shot counts or proof every contact is parryable. Other pistol animations stay unmapped."
 		.. "\nFists v20: alternate first strike reach12/max15, close radius10; second reach11/max14, close radius2; third reach11/max14. Close radius uses current distance without facing/velocity prediction, while retaining exact animation timing and elevation8. Trial bounds from observed damage, not measured hitboxes. Phase seeds and other Fists variants unchanged."
@@ -3946,7 +3960,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield mappedWeaponAnimations=77 duration=90")
+	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield mappedWeaponAnimations=80 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

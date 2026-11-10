@@ -3198,7 +3198,7 @@ function controller.IsBeyondNenChestRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen Auto Chests v5. Open inventory chests; move away from existing chests.
+-- Beyond Nen Auto Chests v6. Close items immediately; make room for the next chest.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -3224,7 +3224,7 @@ end
 local function save()
 	if not state.Archive or type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	local report = "BEYOND NEN AUTO CHESTS v5 // OPEN ONLY / CHEST CLEARANCE\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n")
+	local report = "BEYOND NEN AUTO CHESTS v6 // IMMEDIATE CLOSE / CHEST CLEARANCE\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n")
 	pcall(writefile, "AnomalyHub/universal/beyond_nen_autochests_test.txt", report)
 	pcall(writefile, state.Archive, report)
 end
@@ -3445,7 +3445,15 @@ local function smallStep()
 	note(string.format("STEP_START target=4 clearance=%.2f planned=%.2f backend=%s", currentClearance, bestClearance, state.MoveKey and "movement key" or "continuous Move"))
 	return true
 end
+local function hideChestItems()
+	-- Exact ScreenGui observed in the chest recordings. Do not destroy it or
+	-- alter unrelated menus; the game enables it again on a manual opening.
+	local pg = player:FindFirstChildOfClass("PlayerGui")
+	local view = pg and pg:FindFirstChild("ChestView")
+	if view and view:IsA("ScreenGui") then view.Enabled = false end
+end
 local function finishChest()
+	if not state.Enabled or state.Pending or state.Phase ~= "Opened" then return end
 	local id = state.ChestId
 	state.Done[id] = true
 	state.Phase = "Closing"
@@ -3463,9 +3471,10 @@ end
 local function confirmOpen()
 	if state.OpenConfirmed then return end
 	state.OpenConfirmed = true; state.Opened += 1
-	-- Let the game's opening handlers finish before closing the window and continuing.
-	state.Phase, state.NextAction = "Opened", os.clock() + .35
+	state.Phase, state.NextAction = "Opened", os.clock()
+	hideChestItems()
 	note("OPEN confirmed id=" .. tostring(state.ChestId))
+	finishChest()
 end
 local function requestInventoryTool(entry)
 	-- Captured successful path: UUID -> backpack -> equip. No numbered slot replacement.
@@ -3644,7 +3653,7 @@ local function step()
 		finishChest()
 	end
 end
-local card = ui.Card(ui.Pages.Auto, "AUTO CHESTS // v5", "Opens selected inventory chests. Steps about 4 studs away from nearby chests to make room for the next placement.", 390)
+local card = ui.Card(ui.Pages.Auto, "AUTO CHESTS // v6", "Opens selected inventory chests and immediately closes the items window. Steps about 4 studs away to make room for the next chest.", 390)
 card.LayoutOrder = 35
 status = ui.Create("TextLabel", {Position = UDim2.fromOffset(14, 310), Size = UDim2.new(1, -28, 0, 66), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Off. Select chest types below.", TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left}, card)
@@ -3714,6 +3723,11 @@ controller.Connect(RunService.Heartbeat, function()
 	if not ok then note("ERROR " .. tostring(err)); stop("Auto Chests stopped after an error.") end
 end)
 controller.Connect(RunService.RenderStepped, function()
+	-- The game's OpenedChest handler may show the panel after our event
+	-- listener. Keep that confirmed opening closed before the next render.
+	if state.Enabled and state.OpenConfirmed and (state.Phase == "Opened" or state.Phase == "Closing" or state.Phase == "Between") then
+		hideChestItems()
+	end
 	if state.Enabled and state.MoveHumanoid and not state.MoveKey and state.Focused and not Input:GetFocusedTextBox() then
 		pcall(function() state.MoveHumanoid:Move(state.MoveDirection, false) end)
 	end

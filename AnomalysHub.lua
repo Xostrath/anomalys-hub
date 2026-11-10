@@ -420,7 +420,7 @@ task.spawn(function()
 	if not unloaded and ok and type(info) == "table" and type(info.Name) == "string" then gameNameLabel.Text = info.Name end
 end)
 
-local playerCard = card(pages.Players, "SPECTATE v6", "Choose a player with the arrows or open the list. Right-drag to orbit; scroll to zoom.", 202)
+local playerCard = card(pages.Players, "SPECTATE v6", "Choose a player with the arrows or open the list. Right-drag to orbit; scroll to zoom.", 154)
 local spectateBar = create("Frame", {
 	Name = "SpectateControls", Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 36),
 	BackgroundColor3 = colors.Surface, BorderSizePixel = 0,
@@ -449,18 +449,13 @@ local selectedLabel = create("TextLabel", {
 	Font = Enum.Font.Gotham, Text = "Viewing your character", TextColor3 = colors.Muted, TextSize = 10,
 	TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
 }, playerCard)
-local spectateRecordButton = fitColumn(button(playerCard, "Record Spectate", 0, 0, 180, nil, colors.AccentSoft), 0, 154)
-local spectateRecordStatus = create("TextLabel", {
-	Position = UDim2.new(.5, 4, 0, 151), Size = UDim2.new(.5, -18, 0, 42), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Record nearby, distant, and leaderboard selections.", TextColor3 = colors.Muted, TextSize = 9,
-	TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
-}, playerCard)
-local playerSearch = valueBox(playerCard, "Search players...", 14, 202, 180, "", function() end)
+local spectateRecordButton, spectateRecordStatus -- archived recorder UI
+local playerSearch = valueBox(playerCard, "Search players...", 14, 154, 180, "", function() end)
 playerSearch.Size = UDim2.new(1, -138, 0, 34)
-local refreshPlayersButton = button(playerCard, "Refresh", 0, 202, 98, function() if state.RefreshPlayers then state.RefreshPlayers() end end)
-refreshPlayersButton.Position = UDim2.new(1, -112, 0, 202)
+local refreshPlayersButton = button(playerCard, "Refresh", 0, 154, 98, function() if state.RefreshPlayers then state.RefreshPlayers() end end)
+refreshPlayersButton.Position = UDim2.new(1, -112, 0, 154)
 local playerList = create("ScrollingFrame", {
-	Position = UDim2.fromOffset(14, 244), Size = UDim2.new(1, -28, 0, 166), BackgroundColor3 = colors.Surface,
+	Position = UDim2.fromOffset(14, 196), Size = UDim2.new(1, -28, 0, 166), BackgroundColor3 = colors.Surface,
 	BorderSizePixel = 0, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
 	ScrollBarThickness = 4, ScrollBarImageColor3 = colors.Accent,
 }, playerCard)
@@ -468,12 +463,12 @@ create("UICorner", {CornerRadius = UDim.new(0, 7)}, playerList)
 create("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, playerList)
 create("UIPadding", {PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4), PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4)}, playerList)
 local playerCountLabel = create("TextLabel", {
-	Position = UDim2.fromOffset(14, 416), Size = UDim2.new(1, -28, 0, 22), BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(14, 368), Size = UDim2.new(1, -28, 0, 22), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "", TextColor3 = colors.Muted, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
 }, playerCard)
 function state.SetPlayerListOpen(open)
 	state.PlayerListOpen = open == true
-	playerCard.Size = UDim2.new(1, 0, 0, state.PlayerListOpen and 450 or 202)
+	playerCard.Size = UDim2.new(1, 0, 0, state.PlayerListOpen and 402 or 154)
 	for _, object in ipairs({playerSearch, refreshPlayersButton, playerList, playerCountLabel}) do object.Visible = state.PlayerListOpen end
 end
 state.SetPlayerListOpen(false)
@@ -1384,225 +1379,6 @@ end)
 note("READY v6"); save()
 
 end)()
-;(function()
--- Explicit, local-only capture of spectate clicks and character availability.
-local env = (getgenv and getgenv()) or shared
-local controller = env.__AnomalyUniversalController
-if type(controller) ~= "table" then return end
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local GuiService = game:GetService("GuiService")
-local Input = game:GetService("UserInputService")
-local player, ui, state = Players.LocalPlayer, controller.UI, controller.State
-local button, status = ui.SpectateRecordButton, ui.SpectateRecordStatus
-local path = "AnomalyHub/universal/spectate_capture.txt"
-local capture = {Active = false, Closed = false, Lines = {}, Bytes = 0, Roster = {}, Seen = {}, Last = {}}
-local function read(object, key)
-	if not object then return nil end
-	local ok, value = pcall(function() return object[key] end)
-	if ok then return value end
-	return nil
-end
-local function describe(object)
-	if not object then return "nil" end
-	local ok, result = pcall(function() return object.ClassName .. ":" .. object:GetFullName() end)
-	return ok and result or "unavailable"
-end
-local function position(root)
-	if not root or not root:IsA("BasePart") then return "unknown" end
-	local p = root.Position
-	return string.format("(%.1f,%.1f,%.1f)", p.X, p.Y, p.Z)
-end
-local function log(message)
-	if not capture.Active then return end
-	local line = string.format("%.3f %s", os.clock() - capture.Started, tostring(message):sub(1, 5000))
-	if #capture.Lines >= 3000 or capture.Bytes + #line + 1 > 750000 then capture.Limited = true; return end
-	table.insert(capture.Lines, line); capture.Bytes += #line + 1
-end
-local function save(reason)
-	capture.Report = "ANOMALY SPECTATE CAPTURE v2 // PASSIVE\nplace=" .. tostring(game.PlaceId)
-		.. "\nCaptures local character availability, current camera, scoped leaderboard UI, and mouse clicks."
-		.. "\nThe recorder sends no inputs, teleports, streaming requests or remote calls; no decompilation or chat/typed text capture."
-		.. "\nSpectate itself may request a last-known area; STREAM events record attempts, not guaranteed character loading."
-		.. "\nUnknown positions stay unknown; LAST_SEEN positions are historical and do not establish a current location."
-		.. "\nLimits: 180 seconds, 3000 lines, 750KB; leaderboard 200 objects; click hits first 8 plus up to 8 deeper leaderboard hits."
-		.. "\n" .. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason
-		.. (capture.Limited and "\nCAPTURE LIMIT REACHED" or "")
-	if type(writefile) ~= "function" then return false end
-	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	return pcall(writefile, path, capture.Report)
-end
-local function modelState(model)
-	local humanoid = model and model:FindFirstChildOfClass("Humanoid")
-	local root = model and (model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head"))
-	local inWorld = model ~= nil and model:IsDescendantOf(workspace)
-	local usable = inWorld and humanoid ~= nil and humanoid.Health > 0 and root ~= nil and root:IsA("BasePart")
-	local detail = "model=" .. describe(model) .. " inWorld=" .. tostring(inWorld)
-		.. " humanoid=" .. describe(humanoid) .. " hp=" .. tostring(humanoid and humanoid.Health)
-		.. " root=" .. describe(root) .. " usable=" .. tostring(usable) .. " position=" .. position(root)
-	return detail, usable, root
-end
-local function targetSnapshot(target, full)
-	if not target then return end
-	local character = target.Character
-	local detail, usable, root = modelState(character)
-	local signature = describe(character) .. ":" .. tostring(usable) .. ":" .. describe(root)
-	if capture.Roster[target] ~= signature then
-		capture.Roster[target] = signature
-		log("AVAILABILITY @" .. target.Name .. " " .. detail)
-	end
-	if usable then capture.Seen[target] = {At = os.clock(), Position = position(root)} end
-	if not full then return end
-	log("TARGET @" .. target.Name .. " " .. detail)
-	local localCharacter = player.Character
-	local localRoot = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
-	if usable and localRoot and localRoot:IsA("BasePart") then
-		log(string.format("DISTANCE @%s %.1f studs", target.Name, (root.Position - localRoot.Position).Magnitude))
-	elseif capture.Seen[target] then
-		log(string.format("LAST_SEEN @%s age=%.1fs position=%s (historical)", target.Name, os.clock() - capture.Seen[target].At, capture.Seen[target].Position))
-	end
-	local models = workspace:FindFirstChild("Humanoids")
-	local named = controller.Profile == "BeyondNen" and models and models:FindFirstChild(target.Name)
-	if named and named ~= character then log("EXACT_NAME_CANDIDATE @" .. target.Name .. " " .. modelState(named)) end
-	for _, object in ipairs(character and {target, character} or {target}) do
-		local fields = {}
-		local ok, attributes = pcall(object.GetAttributes, object)
-		if ok then
-			local count = 0
-			for key, value in pairs(attributes) do
-				local lower = string.lower(key)
-				if typeof(value) == "Vector3" or typeof(value) == "CFrame" or lower:find("position", 1, true)
-					or lower:find("location", 1, true) or lower:find("stream", 1, true) then
-					table.insert(fields, key .. "=" .. tostring(value):sub(1, 180)); count += 1
-					if count >= 24 then table.insert(fields, "<attribute limit>"); break end
-				end
-			end
-		end
-		local attributesText = describe(object) .. " " .. table.concat(fields, " | ")
-		if capture.Last[object] ~= attributesText then capture.Last[object] = attributesText; log("LOCATION_ATTRIBUTES " .. attributesText) end
-	end
-	if character and capture.Last.Character ~= character then
-		capture.Last.Character = character
-		local children = character:GetChildren()
-		for i = 1, math.min(#children, 40) do log("CHARACTER_CHILD " .. describe(children[i])) end
-		if #children > 40 then log("CHARACTER_CHILD LIMIT 40") end
-		log("MODEL_STREAMING mode=" .. tostring(read(character, "ModelStreamingMode")) .. " primaryPart=" .. describe(read(character, "PrimaryPart")))
-	end
-end
-local function snapshotUI(reason)
-	local pg = player:FindFirstChildOfClass("PlayerGui")
-	local board = pg and pg:FindFirstChild("Leaderboard")
-	log("LEADERBOARD_SNAPSHOT " .. reason .. " root=" .. describe(board))
-	if not board then return end
-	log("LEADERBOARD_ROOT enabled=" .. tostring(read(board, "Enabled")) .. " ignoreInset=" .. tostring(read(board, "IgnoreGuiInset")))
-	local list = board:FindFirstChild("PlayerList")
-	if not list then log("LEADERBOARD PlayerList missing"); return end
-	local queue, cursor = {list}, 1
-	while cursor <= #queue and cursor <= 200 do
-		local object = queue[cursor]; cursor += 1
-		local text = describe(object)
-		if object:IsA("GuiObject") then
-			text ..= " visible=" .. tostring(object.Visible) .. " active=" .. tostring(object.Active)
-				.. " pos=" .. tostring(object.AbsolutePosition) .. " size=" .. tostring(object.AbsoluteSize) .. " z=" .. tostring(object.ZIndex)
-		end
-		if object:IsA("TextLabel") or object:IsA("TextButton") then text ..= " text=" .. string.format("%q", object.Text:sub(1, 180)) end
-		log("GUI " .. text)
-		for _, child in ipairs(object:GetChildren()) do
-			if #queue >= 200 then capture.UiLimited = true; break end
-			table.insert(queue, child)
-		end
-	end
-	if capture.UiLimited then log("LEADERBOARD UI LIMIT 200") end
-end
-local function sample()
-	local camera = workspace.CurrentCamera
-	local selected, target = state.SelectedPlayer, state.SpectateTarget
-	log("STATE selected=" .. (selected and selected.Name or "nil") .. " viewing=" .. (target and target.Name or "nil")
-		.. " waiting=" .. tostring(state.SpectateWaiting) .. " reason=" .. tostring(state.SpectateWaitReason) .. " cameraType=" .. tostring(read(camera, "CameraType"))
-		.. " subject=" .. describe(read(camera, "CameraSubject")) .. " frame=" .. tostring(read(camera, "CFrame")))
-	targetSnapshot(target or selected, true)
-	if os.clock() >= (capture.NextRoster or 0) then
-		capture.NextRoster = os.clock() + 2
-		for _, current in ipairs(Players:GetPlayers()) do targetSnapshot(current, false) end
-		for current in pairs(capture.Roster) do
-			if current.Parent ~= Players then log("PLAYER_LEFT " .. current.Name); capture.Roster[current] = nil; capture.Seen[current] = nil end
-		end
-	end
-end
-local function stop(reason)
-	if not capture.Active then return end
-	log("STOP " .. tostring(reason)); snapshotUI("stop")
-	capture.Active = false
-	local saved = save(reason or "user")
-	button.Text, button.BackgroundColor3 = "Record Spectate", ui.Colors.AccentSoft
-	status.Text = saved and ("Saved recording" .. (capture.Limited and " (limit reached)" or "") .. ". Tell me done.") or "Could not save recording: file access unavailable."
-	status.TextColor3 = saved and ui.Colors.Success or ui.Colors.Warning
-end
-local function start()
-	if capture.Closed or controller.IsUnloaded() then return end
-	if type(writefile) ~= "function" then status.Text = "Recording needs executor file access."; return end
-	capture.Active, capture.Started, capture.NextSample, capture.NextSave, capture.NextRoster = true, os.clock(), 0, 0, 0
-	capture.Lines, capture.Bytes, capture.Roster, capture.Seen, capture.Last, capture.Limited, capture.UiLimited = {}, 0, {}, {}, {}, false, false
-	log("START profile=" .. tostring(controller.Profile))
-	for _, key in ipairs({"StreamingEnabled", "StreamingMinRadius", "StreamingTargetRadius", "ModelStreamingBehavior", "StreamOutBehavior"}) do
-		log("WORKSPACE " .. key .. "=" .. tostring(read(workspace, key)))
-	end
-	log("REPLICATION_FOCUS " .. describe(read(player, "ReplicationFocus")))
-	snapshotUI("start"); sample()
-	if not save("recording") then stop("save failed"); return end
-	button.Text, button.BackgroundColor3 = "Stop + Save", ui.Colors.Danger
-	status.Text, status.TextColor3 = "Recording. Try nearby, distant, and leaderboard selections. Auto-saves after 3 minutes.", ui.Colors.Success
-end
-controller.RecordSpectateEvent = function(message) log("EVENT " .. message) end
-controller.IsSpectateRecording = function() return capture.Active end
-controller.CaptureSpectateClick = function(phase, input, processed, target, row, position)
-	if not capture.Active or Input:GetFocusedTextBox() then return end
-	local pg = player:FindFirstChildOfClass("PlayerGui")
-	local inset = GuiService:GetGuiInset()
-	position = position or input.Position
-	log("MOUSE " .. phase .. " button=" .. tostring(input.UserInputType) .. " input=" .. tostring(input.Position) .. " used=" .. tostring(position)
-		.. " inset=" .. tostring(inset) .. " processed=" .. tostring(processed) .. " resolved=" .. (target and target.Name or "nil") .. " row=" .. describe(row))
-	if not pg then return end
-	local board = pg:FindFirstChild("Leaderboard")
-	for _, query in ipairs({{Name = "GUI", X = position.X, Y = position.Y},
-		{Name = "LEGACY_OFFSET", X = input.Position.X - inset.X, Y = input.Position.Y - inset.Y}}) do
-		local hits = pg:GetGuiObjectsAtPosition(query.X, query.Y)
-		log("HITS " .. query.Name .. " count=" .. #hits)
-		for i = 1, math.min(#hits, 8) do
-			local object = hits[i]
-			-- Paths/geometry only: never copy arbitrary text from chat or input boxes.
-			log("HIT " .. query.Name .. " " .. i .. " " .. describe(object) .. " pos=" .. tostring(object.AbsolutePosition)
-				.. " size=" .. tostring(object.AbsoluteSize) .. " active=" .. tostring(object.Active) .. " visible=" .. tostring(object.Visible))
-		end
-		-- Transparent full-screen HUD frames can occupy all of the first 8 hits.
-		-- Keep native row geometry too, preserving its original hit-stack index.
-		local count = 0
-		if board then
-			for i = 9, #hits do
-				local object = hits[i]
-				if object == board or object:IsDescendantOf(board) then
-					log("HIT_LEADERBOARD " .. query.Name .. " " .. i .. " " .. describe(object) .. " pos=" .. tostring(object.AbsolutePosition)
-						.. " size=" .. tostring(object.AbsoluteSize) .. " active=" .. tostring(object.Active) .. " visible=" .. tostring(object.Visible))
-					count += 1; if count >= 8 then break end
-				end
-			end
-		end
-	end
-end
-controller.Connect(button.Activated, function() if capture.Active then stop("user") else start() end end)
-controller.Connect(RunService.Heartbeat, function()
-	if not capture.Active then return end
-	if capture.Limited or os.clock() - capture.Started >= 180 then stop(capture.Limited and "limit" or "180 seconds"); return end
-	if os.clock() >= capture.NextSample then
-		capture.NextSample = os.clock() + .5
-		local ok, err = pcall(sample)
-		if not ok then log("SAMPLE ERROR " .. tostring(err)); stop("sample error"); return end
-	end
-	if os.clock() >= capture.NextSave then capture.NextSave = os.clock() + 2; save("recording") end
-end)
-controller.RegisterCleanup(function() stop("unload"); capture.Closed = true end)
-
-end)()
 if anomalyProfile == 'BeyondNen' then
 (function()
 -- Beyond Nen profile adapter
@@ -2150,7 +1926,7 @@ local function render()
 		for _ in pairs(sources) do count += 1 end
 		status.Text = count == 5 and (banditCounter and "Stats update live. Bandit kills and boss defeats are counted separately."
 			or "Stats update live. Lifetime totals are not counted as session gains.")
-			or "Some stats aren't exposed yet. Capture Stats helps identify them."
+			or "Some stats are not exposed by the game yet."
 	end
 end
 
@@ -2268,24 +2044,7 @@ end
 ui.Button(card, "Reset Session", 14, 434, 164, function()
 	resetSession(session, os.time()); save(); render()
 end)
-ui.Button(card, "Capture Stats", 188, 434, 164, function()
-	local ok = capture()
-	status.Text = ok and "Saved beyond_nen_session_state.txt" or "Capture could not be saved."
-end, ui.Colors.AccentSoft)
-
-killTestButton = ui.Button(card, "Record Kill Test", 362, 434, 164, function()
-	if killTest then sampleKillTest(); stopKillTest("STOPPED"); return end
-	local values, slot = collectKillState()
-	local lines = {"BEYOND NEN KILL TEST // PASSIVE v1", "Local stats and active-save progress only. No game requests; this recording does not award/count kills.",
-		"place=" .. tostring(game.PlaceId) .. " slot=" .. tostring(slot) .. " target=Port Marksman",
-		"Progress capture: 3 child levels, 256 objects; poll interval 0.25s.", "[BASELINE]"}
-	local keys = {}; for key in pairs(values) do table.insert(keys, key) end; table.sort(keys)
-	for _, key in ipairs(keys) do table.insert(lines, key .. "=" .. values[key]) end
-	killTest = {Started = os.clock(), Slot = slot, Previous = values, Lines = lines, Bytes = #table.concat(lines, "\n"), LastSaved = os.clock()}
-	if not writeKillTest("RECORDING") then killTest = nil; status.Text = "Kill test could not be saved."; return end
-	killTestButton.Text = "Stop Kill Test"
-	capture(); render()
-end, ui.Colors.AccentSoft)
+-- Manual stat/kill recorder controls archived; session tracking remains active.
 
 local function sample(key)
 	local source = sources[key]
@@ -2837,378 +2596,7 @@ end)
 
 end)()
 ;(function()
--- Passive chest interaction capture. Never opens chests, takes loot or sends input.
-local env = (getgenv and getgenv()) or shared
-local controller = env.__AnomalyUniversalController
-if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
-local player = game:GetService("Players").LocalPlayer
-local RunService = game:GetService("RunService")
-local Input = game:GetService("UserInputService")
-local Prompts = game:GetService("ProximityPromptService")
-local HttpService = game:GetService("HttpService")
-local ui = controller.UI
-local path = "AnomalyHub/universal/beyond_nen_chest_capture.txt"
-local capture = {Active = false, Closed = false, Epoch = 0, Lines = {}, Connections = {}}
-local card = ui.Card(ui.Pages.Auto, "CHEST RECORDER v2", "Record inventory selection, chest placement, opening and looting.", 218)
-card.LayoutOrder = 40
-local status = ui.Create("TextLabel", {
-	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Ready. Start nearby, open an unopened chest normally, take loot, and close its window.",
-	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-}, card)
-local recordButton
-local function log(message)
-	if not capture.Active then return end
-	local line = string.format("%.4fs\t%s", os.clock() - capture.Started, tostring(message):sub(1, 7000))
-	if #capture.Lines >= 3000 or capture.Bytes + #line + 1 > 700000 then capture.Limited = true; return end
-	table.insert(capture.Lines, line); capture.Bytes += #line + 1
-end
-local function position(object)
-	if object:IsA("BasePart") then return object.Position end
-	if object:IsA("Model") then return object:GetPivot().Position end
-	if object:IsA("Attachment") then return object.WorldPosition end
-	if object.Parent and (object:IsA("ProximityPrompt") or object:IsA("ClickDetector")) then return position(object.Parent) end
-	return nil
-end
-local function id(object)
-	if not capture.Ids[object] then capture.NextId += 1; capture.Ids[object] = capture.NextId end
-	return tostring(capture.Ids[object])
-end
-local function describe(object)
-	local result = "#" .. id(object) .. " " .. object.ClassName .. ":" .. object:GetFullName()
-	local point = position(object)
-	if point then result ..= " position=" .. tostring(point) end
-	return result
-end
-local function sample(value, depth, seen, budget)
-	depth, seen, budget = depth or 0, seen or {}, budget or {Left = 256}
-	budget.Left -= 1; if budget.Left < 0 then return "<node limit>" end
-	local kind = typeof(value)
-	if kind == "Instance" then return "<" .. describe(value) .. ">" end
-	if kind == "string" then return string.format("%q", value:sub(1, 600)) end
-	if kind ~= "table" then return tostring(value) end
-	if seen[value] then return "<cycle>" end
-	if depth >= 4 then return "<depth limit>" end
-	seen[value] = true
-	local fields, count = {}, 0
-	for key, item in pairs(value) do
-		if budget.Left <= 0 then table.insert(fields, "<node limit>"); break end
-		count += 1; if count > 32 then table.insert(fields, "<field limit>"); break end
-		table.insert(fields, sample(key, depth + 1, seen, budget) .. "=" .. sample(item, depth + 1, seen, budget))
-	end
-	seen[value] = nil
-	return "{" .. table.concat(fields, ",") .. "}"
-end
-local function save(reason)
-	capture.Report = "BEYOND NEN CHEST CAPTURE v2 // PASSIVE\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
-		.. "\nObserves mapped chest/inventory calls, local chest inventory/hotbar/equipment, nearby chest/prompt state and chest/loot GUI."
-		.. "\nNo inputs, prompt activation, remote requests/replays, decompilation or network uploads are performed by this recorder."
-		.. "\nOutgoing observations occur after return; requestStart preserves start time. Hook paths can duplicate a call."
-		.. "\nMissing streamed objects or signals are not proof of missing chests. Events/returns do not alone prove loot was awarded."
-		.. "\nLimits: 120s, 3000 lines/700KB body, 256 candidates, nearest 8 within 100 studs, 48 objects per chest, 150 GUI objects."
-		.. "\nWorld discovery: 25000 initial objects plus additions. GUI search: 2000 objects. Chat/text-entry excluded."
-		.. "\n" .. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason .. (capture.Limited and "\nREPORT LIMIT REACHED" or "")
-	if type(writefile) ~= "function" then return false end
-	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	local latest = pcall(writefile, path, capture.Report)
-	capture.HistorySaved = pcall(writefile, capture.ArchivePath, capture.Report)
-	return latest or capture.HistorySaved
-end
-local function namedChest(name)
-	name = name:lower()
-	return name:find("chest", 1, true) or name:find("treasure", 1, true) or name:find("loot", 1, true)
-end
-local function localDistance(object)
-	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-	local point = position(object)
-	return root and point and (root.Position - point).Magnitude or math.huge
-end
-local function insideCharacter(object)
-	local ancestor = object
-	while ancestor and ancestor ~= workspace do
-		if ancestor:IsA("Model") and ancestor:FindFirstChildOfClass("Humanoid") then return true end
-		ancestor = ancestor.Parent
-	end
-	return false
-end
-local function candidate(object)
-	if capture.Candidates[object] or insideCharacter(object) then return end
-	local interaction = object:IsA("ProximityPrompt") or object:IsA("ClickDetector")
-	if not interaction and not ((object:IsA("Model") or object:IsA("BasePart")) and namedChest(object.Name)) then return end
-	if capture.CandidateCount >= 256 then
-		if not capture.CandidateLimit then log("DISCOVERY_LIMIT candidate cap 256 reached"); capture.CandidateLimit = true end
-		-- Retain nearby interactions even when the map contains many distant prompts.
-		local furthest, furthestDistance = nil, localDistance(object)
-		for existing in pairs(capture.Candidates) do
-			local distance = existing:IsDescendantOf(workspace) and localDistance(existing) or math.huge
-			if distance > furthestDistance then furthest, furthestDistance = existing, distance end
-		end
-		if not furthest then return end
-		capture.Candidates[furthest] = nil; capture.CandidateCount -= 1
-	end
-	capture.Candidates[object] = true; capture.CandidateCount += 1
-end
-local function visible(object)
-	local node = object
-	while node and node ~= player do
-		if node:IsA("GuiObject") and not node.Visible then return false end
-		if node:IsA("LayerCollector") and not node.Enabled then return false end
-		node = node.Parent
-	end
-	return true
-end
-local function guiRelevant(object, pg)
-	local node = object
-	while node and node ~= pg do
-		if node == ui.Gui then return false end
-		node = node.Parent
-	end
-	node = object
-	while node and node ~= pg do
-		if namedChest(node.Name) then return true end
-		node = node.Parent
-	end
-	-- Catch generically named loot panels without recording unrelated HUD/chat text.
-	if object:IsA("TextButton") then
-		local text = object.Text:lower():gsub("<[^>]+>", ""):gsub("%s+", " ")
-		return text == "take all" or text == "loot all" or text == "open chest"
-	end
-	return false
-end
-local function snapshot()
-	local current, wanted, pool = {}, {}, {}
-	-- Record the active slot only. These containers came from the session capture.
-	local data = player:FindFirstChild("Data")
-	local sharedData = data and data:FindFirstChild("SharedData")
-	local saves = data and data:FindFirstChild("SavesSlot")
-	local slotId
-	for _, root in ipairs({player, data or player, sharedData or player}) do
-		for _, key in ipairs({"CurrentSlot", "ActiveSlot", "SelectedSlot", "SaveSlot", "Slot"}) do
-			local child = root:FindFirstChild(key)
-			local value = root:GetAttribute(key) or (child and child:IsA("ValueBase") and child.Value)
-			if type(value) == "string" or type(value) == "number" then slotId = tostring(value); break end
-		end
-		if slotId then break end
-	end
-	local slot = saves and slotId and saves:FindFirstChild(slotId)
-	if saves and not slotId then
-		local choices = {}; for _, child in ipairs(saves:GetChildren()) do if child:FindFirstChild("CharacterData") then table.insert(choices, child) end end
-		if #choices == 1 then slot = choices[1] end
-	end
-	local playerData = slot and slot:FindFirstChild("PlayerData")
-	current["INVENTORY_SLOT"] = slot and slot:GetFullName() or "active slot unavailable"
-	if playerData then
-		for _, name in ipairs({"Inventory", "HotbarBackpack", "Equipment"}) do
-			local folder = playerData:FindFirstChild(name)
-			if folder then
-				current["DATA " .. id(folder)] = describe(folder) .. " attrs=" .. sample(folder:GetAttributes())
-				for index, item in ipairs(folder:GetChildren()) do
-					if index > 500 then current["INVENTORY LIMIT"] = "500 entries per container"; break end
-					local itemName = item:GetAttribute("item_name") or item.Name
-					if name ~= "Inventory" or namedChest(tostring(itemName)) then
-						current["ITEM " .. id(item)] = describe(item) .. " attrs=" .. sample(item:GetAttributes())
-					end
-				end
-			end
-		end
-	end
-	for _, root in ipairs({player:FindFirstChildOfClass("Backpack") or player, player.Character or player}) do
-		for _, tool in ipairs(root:GetChildren()) do
-			if tool:IsA("Tool") then current["TOOL " .. id(tool)] = describe(tool) .. " attrs=" .. sample(tool:GetAttributes()) end
-		end
-	end
-	for object in pairs(capture.Candidates) do
-		if not object:IsDescendantOf(workspace) then capture.Candidates[object] = nil; capture.CandidateCount -= 1
-		else
-			local distance = localDistance(object)
-			if distance <= 100 then table.insert(pool, {Object = object, Distance = distance}) end
-		end
-	end
-	table.sort(pool, function(a, b) return a.Distance < b.Distance end)
-	local roots, seenRoots = {}, {}
-	for _, entry in ipairs(pool) do
-		local object = entry.Object
-		-- Group a prompt/part with its nearest named chest model, avoiding duplicate trees.
-		local ancestor = object.Parent
-		while ancestor and ancestor ~= workspace do
-			if ancestor:IsA("Model") and namedChest(ancestor.Name) then object = ancestor; break end
-			ancestor = ancestor.Parent
-		end
-		if not seenRoots[object] then
-			seenRoots[object] = true; table.insert(roots, {Object = object, Distance = entry.Distance})
-			if #roots >= 8 then break end
-		end
-	end
-	for _, entry in ipairs(roots) do
-		local root = entry.Object
-		current["NEAR " .. id(root)] = describe(root) .. " distance=" .. string.format("%.1f", entry.Distance)
-		local objects = {root}
-		for _, object in ipairs(root:GetDescendants()) do
-			if #objects >= 48 then current["WORLD LIMIT " .. id(root)] = "48 objects; remaining descendants omitted"; break end
-			table.insert(objects, object)
-		end
-		for _, object in ipairs(objects) do
-			local detail = describe(object) .. " attrs=" .. sample(object:GetAttributes())
-			if object:IsA("ValueBase") then detail ..= " value=" .. sample(object.Value) end
-			if object:IsA("ProximityPrompt") then
-				detail ..= " action=" .. sample(object.ActionText) .. " object=" .. sample(object.ObjectText)
-					.. " enabled=" .. tostring(object.Enabled) .. " hold=" .. tostring(object.HoldDuration)
-					.. " range=" .. tostring(object.MaxActivationDistance) .. " lineOfSight=" .. tostring(object.RequiresLineOfSight)
-					.. " key=" .. tostring(object.KeyboardKeyCode)
-			elseif object:IsA("ClickDetector") then
-				detail ..= " range=" .. tostring(object.MaxActivationDistance); wanted[object] = "CLICK"
-			end
-			current["WORLD " .. id(object)] = detail
-		end
-	end
-	local pg = player:FindFirstChildOfClass("PlayerGui")
-	local count = 0
-	if pg then
-		local guiObjects = {}
-		-- The v1 global GUI cap cut off the live loot rows. Inspect ChestView first.
-		local chestView = pg:FindFirstChild("ChestView")
-		if chestView then
-			table.insert(guiObjects, chestView)
-			for _, object in ipairs(chestView:GetDescendants()) do table.insert(guiObjects, object) end
-		end
-		for _, object in ipairs(pg:GetDescendants()) do
-			if object ~= chestView and not (chestView and object:IsDescendantOf(chestView)) then table.insert(guiObjects, object) end
-		end
-		for index, object in ipairs(guiObjects) do
-			if index > 2000 then current["GUI SEARCH LIMIT"] = "2000 objects"; break end
-			if not (object:IsA("GuiObject") or object:IsA("LayerCollector")) or not guiRelevant(object, pg) then continue end
-			count += 1; if count > 150 then current["GUI LIMIT"] = "150 objects"; break end
-			local detail = describe(object) .. " shown=" .. tostring(visible(object))
-			if object:IsA("GuiObject") then detail ..= " pos=" .. tostring(object.AbsolutePosition) .. " size=" .. tostring(object.AbsoluteSize) end
-			if object:IsA("TextLabel") or object:IsA("TextButton") then detail ..= " text=" .. sample(object.Text) end
-			if object:IsA("ImageLabel") or object:IsA("ImageButton") then detail ..= " image=" .. sample(object.Image) end
-			if object:IsA("GuiButton") then wanted[object] = "GUI_BUTTON" end
-			current["GUI " .. id(object)] = detail
-		end
-	end
-	for _, key in ipairs({"Money", "Jenni", "TitleChestsOpened", "ChestsLooted", "ChestsOpened", "TotalChestsOpened", "TotalChestsLooted"}) do
-		current["Player@" .. key] = tostring(player:GetAttribute(key))
-	end
-	for key, value in pairs(current) do if capture.LastState[key] ~= value then log("STATE " .. key .. " " .. value) end end
-	for key in pairs(capture.LastState) do if current[key] == nil then log("LEFT_SCOPE " .. key) end end
-	capture.LastState = current
-	for object, connection in pairs(capture.ObjectConnections) do
-		if not wanted[object] then connection:Disconnect(); capture.ObjectConnections[object] = nil end
-	end
-	for object, kind in pairs(wanted) do
-		if capture.ObjectConnections[object] then continue end
-		local signal = kind == "CLICK" and object.MouseClick or object.Activated
-		capture.ObjectConnections[object] = signal:Connect(function(who)
-			if Input:GetFocusedTextBox() or (kind == "CLICK" and who and who ~= player) then return end
-			log(kind .. " " .. describe(object))
-		end)
-	end
-	capture.Nearby = #roots
-end
-local function stop(reason)
-	if not capture.Active then return end
-	local ok, err = pcall(snapshot); if not ok then log("SNAPSHOT_ERROR " .. tostring(err)) end
-	log("STOP " .. reason); capture.Active = false
-	if capture.Unwatch then capture.Unwatch(); capture.Unwatch = nil end
-	if capture.UnwatchInventory then capture.UnwatchInventory(); capture.UnwatchInventory = nil end
-	for _, connection in ipairs(capture.Connections) do connection:Disconnect() end; table.clear(capture.Connections)
-	for _, connection in pairs(capture.ObjectConnections) do connection:Disconnect() end; table.clear(capture.ObjectConnections)
-	local saved = save(reason)
-	capture.Candidates, capture.Ids, capture.LastState = {}, {}, {}
-	recordButton.Text, recordButton.BackgroundColor3 = "Record Chests", ui.Colors.AccentSoft
-	status.Text = saved and ("Chest recording saved. " .. (capture.HistorySaved and "Separate history file kept." or "Latest file only; history save failed."))
-		or "File save failed. Use Copy Recording."
-end
-local function start()
-	if capture.Closed or controller.IsUnloaded() then return end
-	if capture.Active then stop("STOPPED"); return end
-	if controller.SetBeyondNenAutoChests then controller.SetBeyondNenAutoChests(false) end
-	capture.Epoch += 1
-	local ok, nonce = pcall(function() return HttpService:GenerateGUID(false) end)
-	if not ok then nonce = tostring(math.floor(os.clock() * 1000000)) .. "_" .. capture.Epoch end
-	capture.ArchivePath = "AnomalyHub/universal/beyond_nen_chest_capture_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
-	capture.Active, capture.Started, capture.NextSample, capture.NextSave = true, os.clock(), 0, os.clock() + 3
-	capture.Lines, capture.Bytes, capture.Limited, capture.CandidateLimit = {}, 0, false, false
-	capture.Ids, capture.NextId, capture.Candidates, capture.CandidateCount = {}, 0, {}, 0
-	capture.LastState, capture.ObjectConnections, capture.Nearby = {}, {}, 0
-	local epoch = capture.Epoch
-	local function current() return capture.Active and capture.Epoch == epoch end
-	local setupOk, setupError = pcall(function()
-		log("START session=" .. capture.ArchivePath)
-		if controller.WatchBeyondNenChests then
-			capture.Unwatch = controller.WatchBeyondNenChests(function(name, direction, args, started)
-				if not current() or started < capture.Started then return end
-				log("REMOTE " .. name .. " " .. direction .. " requestStart=" .. string.format("%.4f", started - capture.Started) .. " args=" .. sample(args))
-			end)
-		end
-		if controller.WatchBeyondNenChestInventory then
-			capture.UnwatchInventory = controller.WatchBeyondNenChestInventory(function(name, direction, args, started)
-				if not current() or started < capture.Started then return end
-				log("REMOTE " .. name .. " " .. direction .. " requestStart=" .. string.format("%.4f", started - capture.Started) .. " args=" .. sample(args))
-			end)
-		end
-		local probe = env.__AnomalyBeyondFishingProbe
-		log("COVERAGE " .. (probe and #probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "outgoing hooks unavailable; incoming events/UI only"))
-		local count = 0
-		for remote, definition in pairs(probe and probe.Targets or {}) do
-			if definition.Service == "ChestService" then count += 1; log("WATCH " .. remote:GetFullName()) end
-		end
-		log("WATCH_COUNT " .. count)
-		table.insert(capture.Connections, workspace.DescendantAdded:Connect(function(object) if current() then candidate(object) end end))
-		for index, object in ipairs(workspace:GetDescendants()) do
-			if index > 25000 then log("DISCOVERY_LIMIT initial 25000 objects; later additions still observed"); break end
-			candidate(object)
-		end
-		for _, name in ipairs({"PromptShown", "PromptHidden", "PromptButtonHoldBegan", "PromptButtonHoldEnded", "PromptTriggered", "PromptTriggerEnded"}) do
-			local connected, err = pcall(function()
-				table.insert(capture.Connections, Prompts[name]:Connect(function(prompt, who)
-					if not current() or Input:GetFocusedTextBox() or localDistance(prompt) > 100 then return end
-					if typeof(who) == "Instance" and who:IsA("Player") and who ~= player then return end
-					candidate(prompt); log("PROMPT " .. name .. " " .. describe(prompt) .. " detail=" .. sample(who))
-				end))
-			end)
-			if not connected then log("COVERAGE " .. name .. " unavailable: " .. tostring(err)) end
-		end
-		local function input(direction, value, processed)
-			if not current() or Input:GetFocusedTextBox() then return end
-			local key = value.KeyCode.Name ~= "Unknown" and value.KeyCode.Name or value.UserInputType.Name
-			if key ~= "E" and key ~= "F" and key ~= "MouseButton1" and key ~= "MouseButton2" and key ~= "Touch" and key ~= "ButtonX" and key ~= "ButtonA" then return end
-			log("INPUT " .. direction .. " key=" .. key .. " processed=" .. tostring(processed) .. " pointer=" .. tostring(Input:GetMouseLocation()))
-		end
-		table.insert(capture.Connections, Input.InputBegan:Connect(function(value, processed) input("DOWN", value, processed) end))
-		table.insert(capture.Connections, Input.InputEnded:Connect(function(value, processed) input("UP", value, processed) end))
-		snapshot()
-	end)
-	if not setupOk then log("ERROR " .. tostring(setupError)); stop("START_ERROR"); return end
-	if not save("RECORDING") then stop("SAVE_FAILED"); return end
-	recordButton.Text, recordButton.BackgroundColor3 = "Stop + Save", ui.Colors.Danger
-	status.Text = "Record up to 2 minutes: move two chest types from inventory into the hotbar, equip one, place/open it, take loot and close. Stop + Save."
-end
-recordButton = ui.FitColumn(ui.Button(card, "Record Chests", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
-ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()
-	if capture.Active then save("RECORDING") end
-	if capture.Report and type(setclipboard) == "function" then
-		local ok = pcall(setclipboard, capture.Report); status.Text = ok and "Chest recording copied." or "Clipboard unavailable."
-	end
-end), 1, 72)
-controller.Connect(RunService.Heartbeat, function()
-	if not capture.Active then return end
-	local now = os.clock()
-	if capture.Limited or now - capture.Started >= 120 then stop(capture.Limited and "LIMIT_REACHED" or "COMPLETE"); return end
-	if now >= capture.NextSample then
-		capture.NextSample = now + .2
-		local ok, err = pcall(snapshot)
-		if not ok then log("ERROR " .. tostring(err)); stop("CAPTURE_ERROR"); return end
-	end
-	if now >= capture.NextSave then capture.NextSave = now + 3; save("RECORDING") end
-end)
-controller.Connect(player.OnTeleport, function() stop("TELEPORT") end)
-controller.RegisterCleanup(function() stop("UNLOAD"); capture.Closed = true end)
-function controller.IsBeyondNenChestRecording() return capture.Active end
-
-end)()
-;(function()
--- Talent Recorder v1: observes the user's normal rerolls; never spends currency.
+-- Talent Recorder v2: prunes the hub/chat before bounded UI discovery.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -3218,7 +2606,7 @@ local HttpService = game:GetService("HttpService")
 local ui = controller.UI
 local state = {Active = false, Closed = false, Lines = {}, Bytes = 0, Epoch = 0}
 local path = "AnomalyHub/universal/beyond_nen_talent_capture.txt"
-local card = ui.Card(ui.Pages.Auto, "TALENT RECORDER // v1", "Capture talent slots, rarities, Jenni cost and a manual reroll. Recording does not roll or spend anything.", 218)
+local card = ui.Card(ui.Pages.Auto, "TALENT RECORDER // v2", "Capture talent slots, rarities and reroll results. Recording does not roll or spend anything.", 218)
 card.LayoutOrder = 45
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
@@ -3273,7 +2661,7 @@ local function log(message)
 	state.Bytes += #line + 1; table.insert(state.Lines, line)
 end
 local function save(reason)
-	state.Report = "BEYOND NEN TALENT CAPTURE v1 // PASSIVE\nplace=" .. game.PlaceId .. " universe=" .. game.GameId
+	state.Report = "BEYOND NEN TALENT CAPTURE v2 // PASSIVE\nplace=" .. game.PlaceId .. " universe=" .. game.GameId
 		.. "\nOnly observes TalentService, local talent/currency values and scoped talent UI. No requests, input, purchases, decompilation or uploads."
 		.. "\nOutgoing calls are observed after return; requestStart is the original start time. Hook paths may duplicate observations."
 		.. "\nLimits: 180s, 3000 lines/700KB; UI discovery 4000 nodes, capture 350; local Data discovery 2500 nodes. Chat and text entry excluded."
@@ -3312,11 +2700,23 @@ local function snapshot()
 		end
 	end
 	local pg = player:FindFirstChildOfClass("PlayerGui")
-	local candidates, roots = {}, {}
-	for index, object in ipairs(pg and pg:GetDescendants() or {}) do
-		if index > 4000 then remember("UI_SEARCH_LIMIT", "4000"); break end
+	local candidates, roots, queue = {}, {}, {}
+	-- Prune excluded subtrees before counting. A large injected hub previously
+	-- exhausted discovery before the game's talent menu could be reached.
+	for _, child in ipairs(pg and pg:GetChildren() or {}) do
+		if not excluded(child, pg) then table.insert(queue, child) end
+	end
+	table.sort(queue, function(a, b) return (relevant(a.Name) and 0 or 1) < (relevant(b.Name) and 0 or 1) end)
+	local index = 1
+	while index <= #queue do
+		if #candidates >= 4000 then remember("UI_SEARCH_LIMIT", "4000"); break end
+		local object = queue[index]; index += 1
 		if excluded(object, pg) then continue end
 		table.insert(candidates, object)
+		for _, child in ipairs(object:GetChildren()) do
+			if #queue >= 8000 then remember("UI_QUEUE_LIMIT", "8000"); break end
+			if not excluded(child, pg) then table.insert(queue, child) end
+		end
 		if relevant(object.Name) then roots[object] = true end
 		if (object:IsA("TextLabel") or object:IsA("TextButton")) and visible(object) then
 			local text = object.Text:lower():gsub("<[^>]*>", "")
@@ -3380,7 +2780,7 @@ local function start()
 	if not setupOK then log("ERROR " .. tostring(err)); stop("START_ERROR"); return end
 	if not save("RECORDING") then stop("SAVE_FAILED"); return end
 	button.Text, button.BackgroundColor3 = "Stop + Save", ui.Colors.Danger
-	status.Text = "Recording up to 3 minutes. Open talents, select an unwanted low-rarity slot, reroll with Jenni and wait for the new talent and balance. Then Stop + Save."
+	status.Text = "Recording up to 3 minutes. Open talents and inspect each owned talent so its name and rarity appear. No reroll needed for this capture. Then Stop + Save."
 end
 button = ui.FitColumn(ui.Button(card, "Record Talents", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
 ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()
@@ -5818,175 +5218,6 @@ end)
 controller.Connect(player.OnTeleport, function() if auto.Enabled then stop("Stopped for travel.") end end)
 controller.RegisterCleanup(function() stop("Unloaded."); auto.Closed = true end)
 controller.SetBeyondNenAutoFishing = enable
-
-end)()
-;(function()
--- Scoped meditation capture, including external technique-picker and Reel UI.
-local env = (getgenv and getgenv()) or shared
-local controller = env.__AnomalyUniversalController
-if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
-local player = game:GetService("Players").LocalPlayer
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local ui = controller.UI
-local path = "AnomalyHub/universal/beyond_nen_meditation_capture.txt"
-local capture = {Active = false, Closed = false, Lines = {}, Bytes = 0, LastUI = {}, Connections = {}}
-
-local function sample(value, depth, seen, budget)
-	depth, seen, budget = depth or 0, seen or {}, budget or {Left = 256}
-	budget.Left -= 1; if budget.Left < 0 then return "<node limit>" end
-	local kind = typeof(value)
-	if kind == "Instance" then
-		local detail = value.ClassName .. ":" .. value:GetFullName()
-		if value:IsA("BasePart") then detail ..= " position=" .. tostring(value.Position) .. " size=" .. tostring(value.Size) end
-		return "<" .. detail .. ">"
-	end
-	if kind == "string" then return string.format("%q", value:sub(1, 600)) end
-	if kind ~= "table" then return tostring(value) end
-	if seen[value] then return "<cycle>" end
-	if depth >= 4 then return "<depth limit>" end
-	seen[value] = true
-	local fields, count = {}, 0
-	for key, item in pairs(value) do
-		if budget.Left <= 0 then table.insert(fields, "<node limit>"); break end
-		count += 1; if count > 32 then table.insert(fields, "<field limit>"); break end
-		table.insert(fields, sample(key, depth + 1, seen, budget) .. "=" .. sample(item, depth + 1, seen, budget))
-	end
-	seen[value] = nil
-	return "{" .. table.concat(fields, ",") .. "}"
-end
-local function log(message)
-	if #capture.Lines >= 4000 or capture.Bytes >= 500000 then capture.Limited = true; return end
-	local line = string.format("%.3fs\t%s", os.clock() - capture.Started, tostring(message):sub(1, 7000))
-	table.insert(capture.Lines, line); capture.Bytes += #line + 1
-end
-local function save(reason)
-	capture.Report = "BEYOND NEN MEDITATION // PASSIVE v2\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
-		.. "\nObserves mapped meditation/technique-selection signals, meditation/picker/Reel UI, equipment and local meditation stats."
-		.. "\nNo inputs sent, remotes invoked/replayed or scripts decompiled. Chat/text-entry keystrokes are excluded."
-		.. "\nOutgoing calls appear after they return; requestStart preserves original time. Hook paths may duplicate calls."
-		.. "\nLimits: 120 seconds, 4000 lines/500KB, 300 GUI objects, tables 4 levels/32 fields/256 nodes."
-		.. "\n" .. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason
-		.. (capture.Limited and "\nREPORT LIMIT REACHED" or "")
-	if type(writefile) ~= "function" then return false end
-	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	return pcall(writefile, path, capture.Report)
-end
-local function snapshot()
-	local current = {}
-	local pg = player:FindFirstChildOfClass("PlayerGui")
-	local gui = pg and pg:FindFirstChild("Meditation")
-	local progress = controller.BeyondNenMeditationProgress
-	if progress and os.clock() >= (capture.NextRoots or 0) then
-		capture.NextRoots, capture.Roots = os.clock() + 0.5, progress.DiagnosticRoots(pg)
-	end
-	local roots = capture.Roots or (gui and {gui}) or {}
-	if #roots > 0 then
-		local objects, seen = {}, {}
-		for _, root in ipairs(roots) do
-			if not root.Parent then continue end
-			local descendants = {root}
-			for _, object in ipairs(root:GetDescendants()) do table.insert(descendants, object) end
-			for _, object in ipairs(descendants) do
-				if seen[object] then continue end
-				if #objects >= 300 then current["GUI LIMIT"] = "300 objects; remaining objects omitted"; break end
-				seen[object] = true; table.insert(objects, object)
-			end
-		end
-		for _, object in ipairs(objects) do
-			local detail = object.ClassName
-			if object:IsA("LayerCollector") then detail ..= " enabled=" .. tostring(object.Enabled) end
-			if object:IsA("GuiObject") then
-				detail ..= " visible=" .. tostring(object.Visible) .. " pos=" .. tostring(object.Position) .. " size=" .. tostring(object.Size)
-					.. " absPos=" .. tostring(object.AbsolutePosition) .. " absSize=" .. tostring(object.AbsoluteSize) .. " rotation=" .. tostring(object.Rotation)
-			end
-			if object:IsA("TextLabel") or object:IsA("TextButton") then detail ..= " text=" .. sample(object.Text) end
-			if object:IsA("ImageLabel") or object:IsA("ImageButton") then detail ..= " image=" .. sample(object.Image) end
-			current[object:GetFullName()] = detail
-		end
-	else current["Meditation GUI"] = "not loaded" end
-	for _, key in ipairs({"MeditationTechnique", "NenMeditation"}) do current["Player@" .. key] = tostring(player:GetAttribute(key)) end
-	for key, value in pairs(player:GetAttributes()) do
-		if key:match("^NenXP_") or key:match("^NenTier_") then current["Player@" .. key] = tostring(value) end
-	end
-	local character = player.Character
-	if character then
-		for _, object in ipairs(character:GetChildren()) do
-			if object:IsA("Tool") then current["Tool:" .. object.Name] = "enabled=" .. tostring(object.Enabled) end
-		end
-	end
-	for key, value in pairs(current) do if capture.LastUI[key] ~= value then log("STATE " .. key .. " " .. value) end end
-	for key in pairs(capture.LastUI) do if current[key] == nil then log("REMOVED " .. key) end end
-	capture.LastUI = current
-end
-
-local card = ui.Card(ui.Pages.Auto, "MEDITATION RECORDER", "Record other meditation modes or a session that needs troubleshooting.", 218)
-card.LayoutOrder = 30
-local status = ui.Create("TextLabel", {
-	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Ready. Turn Auto Fishing off, then record a manual meditation session.",
-	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-}, card)
-local recordButton
-local function stop(reason)
-	if not capture.Active then return end
-	pcall(snapshot); capture.Active = false
-	if capture.Unwatch then capture.Unwatch(); capture.Unwatch = nil end
-	for _, connection in ipairs(capture.Connections) do connection:Disconnect() end
-	table.clear(capture.Connections)
-	local saved = save(reason)
-	recordButton.Text = "Record Meditation"
-	status.Text = saved and "Meditation recording saved. Ready to review." or "File saving unavailable. Use Copy Recording."
-end
-local function start()
-	if capture.Closed then return end
-	if capture.Active then stop("STOPPED"); return end
-	capture.Lines, capture.Bytes, capture.LastUI, capture.Limited = {}, 0, {}, false
-	capture.Roots, capture.NextRoots = nil, nil
-	capture.Started, capture.LastSaved, capture.Active = os.clock(), os.clock(), true
-	local started = capture.Started
-	capture.Unwatch = controller.WatchBeyondNenMeditation(function(name, direction, args, requestStart)
-		if not capture.Active or capture.Started ~= started or requestStart < started then return end
-		log(name .. " " .. direction .. " requestStart=" .. string.format("%.3f", requestStart - started) .. " args=" .. sample(args))
-	end)
-	local probe = env.__AnomalyBeyondFishingProbe
-	log("Coverage: " .. (probe and #probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "incoming signals and UI only; outgoing hooks unavailable"))
-	local count = 0
-	for remote, definition in pairs(probe and probe.Targets or {}) do
-		if definition.Service == "MeditationService" or definition.Service == "NenMasteryService" then count += 1; log("REMOTE " .. definition.Name .. " " .. remote:GetFullName()) end
-	end
-	if count == 0 then log("MeditationService unavailable; GUI and input recording only.") end
-	local function input(direction, value, processed)
-		if UserInputService:GetFocusedTextBox() or value.UserInputType == Enum.UserInputType.MouseMovement then return end
-		log("INPUT " .. direction .. " " .. tostring(value.UserInputType) .. " " .. tostring(value.KeyCode) .. " processed=" .. tostring(processed)
-			.. " pointer=" .. tostring(UserInputService:GetMouseLocation()))
-	end
-	table.insert(capture.Connections, UserInputService.InputBegan:Connect(function(value, processed) input("DOWN", value, processed) end))
-	table.insert(capture.Connections, UserInputService.InputEnded:Connect(function(value, processed) input("UP", value, processed) end))
-	pcall(snapshot); save("RECORDING")
-	recordButton.Text = "Stop + Save"
-	status.Text = "Recording up to 2 minutes. Place the mat, start meditation, complete several prompts, stop meditating, then Stop + Save."
-end
-recordButton = ui.FitColumn(ui.Button(card, "Record Meditation", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
-ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()
-	if capture.Active then save("RECORDING") end
-	if capture.Report and type(setclipboard) == "function" then
-		local ok = pcall(setclipboard, capture.Report)
-		status.Text = ok and "Recording copied." or "Clipboard unavailable."
-	end
-end), 1, 72)
-local elapsed = 0
-controller.Connect(RunService.Heartbeat, function(delta)
-	if not capture.Active then return end
-	elapsed += delta
-	if elapsed >= 0.05 then elapsed = 0; pcall(snapshot) end
-	if capture.Limited then stop("LIMIT_REACHED")
-	elseif os.clock() - capture.Started >= 120 then stop("COMPLETE")
-	elseif os.clock() - capture.LastSaved >= 5 then save("RECORDING"); capture.LastSaved = os.clock() end
-end)
-controller.Connect(player.OnTeleport, function() stop("TELEPORT") end)
-controller.RegisterCleanup(function() stop("UNLOAD"); capture.Closed = true end)
-controller.CaptureBeyondNenMeditation = start
 
 end)()
 ;(function()

@@ -3642,7 +3642,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v37. Additional Fists and TwinBladeBoss trials.
+-- Beyond Nen auto-parry test v38. Equipped Crimson Greatsword trial strikes.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3688,6 +3688,20 @@ local weaponProfiles = {
 		-- v16: three separate damage snapshots at .887/.904/.871, speed1,
 		-- distances3.76-6.60. Separate from ordinary combo and looping14241195451.
 		["17050689141"] = {Phase = .85, Name = "Fists long-windup strike (test)"},
+	}},
+	crimsongreatsword = {Label = "Crimson Greatsword (test)", Reach = 17, MaxDistance = 20, Animations = {
+		-- v37 test1794350699 actor3: current Tool.WeaponName, not generic
+		-- CombatStyle=Fists or starter choice. Other players are nearby; use
+		-- the repeated17.892 strike receipts with one close Action track.
+		-- A: .455/.476@.84 at1.75/3.63; .490@.84 at9.42 had mixed21.725 damage.
+		["138248836920331"] = {Phase = .42, Reach = 12, MaxDistance = 15, Name = "greatsword strike A (test)"},
+		-- B/D/E each have one17.892 receipt. C repeats three times.
+		["129815430890080"] = {Phase = .40, Reach = 11, MaxDistance = 14, Name = "greatsword strike B (test)"}, -- .441@.84,d9.03
+		["88983520204375"] = {Phase = .60, Reach = 16, MaxDistance = 19, Name = "greatsword strike C (test)"}, -- .652/.709/.728@1.15,d.69-14.36
+		["105806192689952"] = {Phase = .44, Name = "greatsword strike D (test)"}, -- .483@.84,d14.98
+		["98241832656464"] = {Phase = .37, MinFacing = -.75, Name = "greatsword strike E (test)"}, -- .410@.84,d15.09,facing-.715
+		-- Skill103202654097978 and109622047856146 remain diagnostic;
+		-- one episode is insufficient to establish skill contact sequences.
 	}},
 	twinbladeboss = {Label = "TwinBladeBoss (test)", Reach = 20, MaxDistance = 23, Animations = {
 		-- Explicit Weapon=TwinBladeBoss in test1794345713. Three isolated
@@ -4042,7 +4056,7 @@ state.EffectiveTargetMode = state.TargetMode == "Auto" and "Both" or state.Targe
 local function targetLabel()
 	return "Targets: " .. (state.TargetMode == "Auto" and ("Auto / " .. state.EffectiveTargetMode .. (state.BossModel and " (boss)" or "")) or state.TargetMode)
 end
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v37", "Auto watches players and NPCs, switching to NPC-only during a detected boss fight.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v38", "Auto watches players and NPCs, switching to NPC-only during a detected boss fight.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -4060,10 +4074,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v37 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v38 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nEFFECTIVE_TARGETS=" .. state.EffectiveTargetMode
+		.. "\nv38: current Crimson Greatsword Tool.WeaponName overrides generic player Fists and selects five exact trial strikes from v37 capture1794350699. A/C have repeated strike receipts; B/D/E single-sample. Backpack/starter metadata and unrelated weapons cannot select it. Existing Fists fallback remains. Skill sequences stay unmapped. New coverage requires live validation; previous timings/cooldowns remain unchanged."
 		.. "\nv37 adds one Fists strike from seven isolated v36 damage snapshots and two TwinBladeBoss trial strikes from explicit weapon metadata. New input timing needs live validation. Existing timings, cooldowns and own-skill restrictions unchanged."
 		.. "\nv36 adds12 trial weapon/animation entries: Fox Bear Claws5 strikes plus3-contact skill, MOS Gauntlets3 strikes plus rear skill, Stone Beast5/2-contact skills. Based on completed v35 damage snapshots and exact equipped/linked weapon metadata, not player names. Player CombatStyle=Fists can resolve current Fox Bear Claws/MOS Gauntlets tools; existing exact Fists mappings remain available for their common attacks. Boss Fox Bear timings are separate from player Claws. Stone Beast requires matching weapon metadata, enabling Auto boss recognition for mapped Stone Eye threats. Some phases have one sample; speeds are read live. No automatic outcomes yet, guaranteed hitbox, or proven complete skill coverage. Crowded overlapping/periodic skills and Dual Yoyo remain unmapped. Unmatched key events are not attributed to the user."
 		.. "\nv35: two v34/Auto captures show boss-only transitions and return to Both; nine unconflicted matched results across them, plus one result after a rejected request and intervening unmatched F-DOWN. BurstB retries occurred but remain unproven: later requests were rejected FreshHitStun. Keep v34 timing/cooldown behavior. Only burstA73241145651241 and strike126546963227585 add close radius6 after recorded facing skips at1.89/5.08 studs then nearby damage. No new timing seeds or weapon IDs. Results after rejection or an intervening unmatched key DOWN are counted separately as uncertain, never extending a guard; a later rejection reclassifies earlier matches. Source of unmatched inputs is unknown."
@@ -4263,6 +4278,8 @@ local function weaponOf(rig)
 				candidate = "foxbearclaws"
 			elseif name == "MOS Gauntlets" or (tool:GetAttribute("WeaponLinked") == true and bound == "MOS Gauntlets") then
 				candidate = "mosgauntlets"
+			elseif name == "Crimson Greatsword" then
+				candidate = "crimsongreatsword"
 			elseif name == "Crazy Slots" and rig.Model:GetAttribute("CustomWeapon") == "Scythe Slot" then
 				candidate = "scytheslot"
 			end
@@ -4287,7 +4304,7 @@ local function attackOf(rig, id)
 	-- These players also played common Fists attacks in the same captures.
 	-- Preserve existing exact-ID coverage when current equipment selects a
 	-- new family; never infer unrecorded attacks or override Character.Weapon.
-	if source == "equipped-tool/Player.CombatStyle=Fists" and (key == "foxbearclaws" or key == "mosgauntlets")
+	if source == "equipped-tool/Player.CombatStyle=Fists" and (key == "foxbearclaws" or key == "mosgauntlets" or key == "crimsongreatsword")
 		and not weapon.Animations[id] and weaponProfiles.fists.Animations[id] then
 		key, weapon, source = "fists", weaponProfiles.fists, "shared-fists/equipped-tool"
 	end
@@ -4769,7 +4786,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield,ScytheSlot,FrostbladeBoots,FoxBearClaws,MOSGauntlets,StoneBeast,TwinBladeBoss mappedWeaponAnimations=108 duration=90")
+	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield,ScytheSlot,FrostbladeBoots,FoxBearClaws,MOSGauntlets,StoneBeast,TwinBladeBoss,CrimsonGreatsword mappedWeaponAnimations=113 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

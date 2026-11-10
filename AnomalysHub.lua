@@ -4056,7 +4056,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v30. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v31. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -4265,7 +4265,10 @@ local weaponProfiles = {
 		-- final window. Preserve the earlier seeds and add only this late contact.
 		-- Latest v27: an idle opening tap at.250 preceded damage.404 by154ms,
 		-- but got FreshHitStun. Advance only the first seed by60ms as a trial.
-		["73241145651241"] = {Phases = {.34, .50, .63, .75, 1.10, 1.22, 1.35, 1.82, 1.92, 2.06, 2.18, 2.32, 2.40, 3.08}, MinFollowupLead = .08, Reach = 23, MaxDistance = 26, Name = "pistols burst A (test)"},
+		-- v30 confirmed the first parry after .282s with CancelMove=false;
+		-- follow-up damage started after F released. Apply the same bounded,
+		-- confirmation-only guard as the other continuing pistol sequence.
+		["73241145651241"] = {Phases = {.34, .50, .63, .75, 1.10, 1.22, 1.35, 1.82, 1.92, 2.06, 2.18, 2.32, 2.40, 3.08}, MinFollowupLead = .08, GuardThroughPhase = 3.20, GuardMaxDuration = 3.5, GuardIfUncancelled = true, Reach = 23, MaxDistance = 26, Name = "pistols burst A (test)"},
 		-- Two runs: pulses at .800/.825 through1.833/1.883, speed1, range
 		-- 25.05-26.46, facing-.060 to-.337. Final receipt has larger damage;
 		-- these are observed contact windows, not an established shot count.
@@ -4286,9 +4289,32 @@ local weaponProfiles = {
 		["83129479286148"] = {Phase = .43, Reach = 10, MaxDistance = 13, MinFacing = -.95, Name = "pistols close strike (test)"},
 		-- Two isolated contacts at.430/.461, speed1.064, distance4.27/6.23.
 		["126546963227585"] = {Phase = .40, Reach = 10, MaxDistance = 13, Name = "pistols additional close strike (test)"},
+		-- v30 isolated Action contact at .550/speed1.064/distance5.31.
+		-- Single-sample timing trial; no automatic parry confirmation yet.
+		["78460118661143"] = {Phase = .52, Reach = 10, MaxDistance = 13, Name = "pistols additional strike B (test)"},
 		-- One two-hit episode at1.525/2.021, speed1, distance19.46/13.39.
 		-- First facing-.693; exact move identity and parryability unverified.
 		["118856732820265"] = {Phases = {1.49, 1.99}, Reach = 21, MaxDistance = 24, MinFacing = -.75, Name = "pistols two-hit skill (test)"},
+	}},
+	scytheslot = {Label = "Crazy Slots: Scythe (test)", Reach = 13, MaxDistance = 16, Animations = {
+		-- v30: equipped Crazy Slots + CustomWeapon="Scythe Slot", despite
+		-- CombatStyle="Fists". Use only that live equipment combination.
+		-- Isolated Action snapshots at damage, not guaranteed hitbox timings.
+		["90736218580829"] = {Phase = .53, Name = "scythe strike A (test)"}, -- .575/.563
+		["129990102141217"] = {Phase = .56, Name = "scythe strike B (test)"}, -- .596/.617, up to12.39
+		["138539914802533"] = {Phase = .55, Name = "scythe strike C (test)"}, -- .583; early bleed overlaps ignored
+		["105039095790239"] = {Phase = .73, Name = "scythe strike D (test)"}, -- .767
+		["102814449587378"] = {Phase = .42, Name = "scythe strike E (test)"}, -- .458/speed1.144
+		["75666476269159"] = {Phase = 1.00, Name = "scythe fast strike (test)"}, -- 1.052/speed2.5
+		-- 129888330120630/73242758454576 overlap a periodic damage train;
+		-- no timing inferred from those pulses or a different player's swing.
+	}},
+	frostbladeboots = {Label = "Frostblade Boots (test)", Animations = {
+		-- v30: live Tool.WeaponName/BoundWeapon="Frostblade Boots". The old
+		-- Scythe Slot attribute stays behind after swaps and is insufficient.
+		["114735054706255"] = {Phase = 1.03, Reach = 22, MaxDistance = 25, Name = "Frostblade skill A (test)"}, -- 1.067/1.079,7.33/21.16
+		["17003599383"] = {Phase = .64, Reach = 20, MaxDistance = 23, Name = "Frostblade skill B (test)"}, -- .677/speed1.25,19.39
+		["90663188039886"] = {Phase = .73, Reach = 10, MaxDistance = 13, Name = "Frostblade strike (test)"}, -- .767,9.03
 	}},
 	sword = {Label = "Sword (recorded)", Reach = 12, MaxDistance = 15, Animations = {
 		-- User identified "achive sword"; later equipment data says Archive Sword.
@@ -4356,7 +4382,7 @@ local targetModes = {"NPCs", "Players", "Both"}
 local savedTargets = controller.State and controller.State.BeyondNenParryTargets
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {},
 	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "NPCs"}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v30", "Fox Bear: continuing-combo guard and distance checks. Choose NPCs, Players, or Both below.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v31", "Scythe, Frostblade Boots and pistol updates. Choose NPCs, Players, or Both below.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -4369,10 +4395,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v30 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v31 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
+		.. "\nv31: unmatched block-key UP ends an internal burst hold, allowing later timed contacts through normal gates; it does not identify who released the key. Pistol burstA now waits up to.30s for a matched CancelMove=false parry, then guards through3.20 with3.5s cap. New pistol78460118661143 trial seed.52. Six Scythe and three Frostblade trial animations require explicit matching Weapon, or generic player Fists plus current equipped Tool.WeaponName/BoundWeapon. Crazy Slots also requires current CustomWeapon=Scythe Slot. Stale subweapon metadata, backpack tools and overlapping periodic damage do not select a profile. Live speed/geometry/cooldown/own-skill rules remain. Timings are damage-receipt estimates; no guaranteed parry or hitbox claim."
 		.. "\nFox Bear v30 overrides prior geometry notes: A projected20/current22; B facing-.75; ordinary strike phases unchanged. Rapid skill guard through2.48/cap2s, extended guard through3.82/cap3s only after matched CancelMove=false parry. Extended second seed1.86->1.78 after receipts1.808/1.821; other contacts unchanged. Additional skill97452490480378 now current/projected60 and adds clamp((distance-20)/200,0,.20) seconds to phase ETA, using current distance and live track speed. This empirical trial follows hits at39.58/40.54/59.12; no measured projectile speed or guaranteed hitbox implied. Close-range timing, elevation, cooldown, own-skill rules and other weapons stay unchanged."
 		.. "\nShockwork Pistols v29: six mapped animations. BurstA first seed.40->.34 after a ready opening tap at.250 still got FreshHitStun; later contacts unchanged. Multi-hit76637609852449 retains phases, expands reach18/current21/close radius13 after damage at16.15 and rear11.09. Initial F lasts up to.30; only matched ParryResult with CancelMove=false extends guard through phase3.45, capped3.5s. Accepted, cancelled or ambiguous results do not extend it. This is held-block protection after a parry, not repeated perfect parries; live benefit unverified. New126546963227585 phase.40/reach10/max13 from two close hits;118856732820265 phases1.49/1.99/reach21/max24/facing-.75 from one two-hit episode. No boss-name filter or own-skill bypass."
 		.. "\nDagger v28: only113521135913624 expands to current/projected distance32 at the existing phase.52. v26/v27 non-periodic contacts reached15.23/19.32; v27 skipped atcurrent28.36/projected31.41 before closing to19.32 in.202s. This is an approach-detection trial, not a32-stud hitbox claim. Facing.15, height8, other Dagger timings/ranges and own-skill handling remain unchanged. Periodic damage and single uncertain skill associations do not create new profiles. No eligible targets now gets an explicit status; the selected mode is never changed automatically."
@@ -4482,6 +4509,13 @@ local function blockEvent(direction, input, processed)
 	note("BLOCK_EVENT " .. direction .. " key=" .. input.KeyCode.Name .. " input=" .. (attempt and tostring(attempt.Serial) or "unmatched")
 		.. " processed=" .. tostring(processed == true) .. " delay=" .. (matched and string.format("%.3f", now - matched.At) or "n/a")
 		.. " send=" .. (matched and tostring(matched.Sequence) or "none"))
+	-- A release can arrive without one of our sends (source is unknown).
+	-- v30 kept the internal hold until the burst ended, suppressing later
+	-- contacts after this event. Invalidate it; do not force another press.
+	if direction == "UP" and not matched and state.Held and state.Held.GuardThroughPhase then
+		state.Held.ReleaseObserved = true
+		note("BURST_GUARD interrupted input=" .. state.Held.Attempt.Serial .. " reason=unmatched-key-up")
+	end
 end
 local function auditRequests(now, reason)
 	for serial, attempt in pairs(state.PendingInputs or {}) do
@@ -4532,6 +4566,26 @@ local function weaponOf(rig)
 	if key == "achivesword" or key == "archivesword" then key = "sword" end
 	if key == "phantomgoonsdagger" then key = "dagger" end
 	if key == "jager'sbat" or key == "jagersbat" then key = "bat" end
+	if rig.Owner and source == "Player.CombatStyle" and key == "fists" then
+		-- Read equipped children each time: neither inventory ownership nor
+		-- CustomWeapon alone proves the active weapon after a swap.
+		local selected
+		for _, tool in ipairs(rig.Model:GetChildren()) do
+			if not tool:IsA("Tool") then continue end
+			local name, bound = tool:GetAttribute("WeaponName"), tool:GetAttribute("BoundWeapon")
+			local candidate
+			if name == "Frostblade Boots" or (tool:GetAttribute("WeaponLinked") == true and bound == "Frostblade Boots") then
+				candidate = "frostbladeboots"
+			elseif name == "Crazy Slots" and rig.Model:GetAttribute("CustomWeapon") == "Scythe Slot" then
+				candidate = "scytheslot"
+			end
+			if candidate then
+				if selected and selected ~= candidate then return key, weaponProfiles[key], source end
+				selected = candidate
+			end
+		end
+		if selected then key, source = selected, "equipped-tool/Player.CombatStyle=Fists" end
+	end
 	return key, weaponProfiles[key], source
 end
 local function attackOf(rig, id)
@@ -4787,7 +4841,7 @@ local function step()
 	local held = state.Held
 	if held and held.GuardThroughPhase then
 		local rig = state.Rigs[held.Model]
-		if not alive(held.Model) or not rig or rig.Tracks[held.Track] ~= held.Swing
+		if held.ReleaseObserved or not alive(held.Model) or not rig or rig.Tracks[held.Track] ~= held.Swing
 			or not held.Track.IsPlaying or held.Track.Looped or held.Track.Speed <= 0 or now >= held.GuardDeadline then
 			held.Until = now
 		elseif held.GuardConfirmed then
@@ -4943,7 +4997,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield mappedWeaponAnimations=82 duration=90")
+	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield,ScytheSlot,FrostbladeBoots mappedWeaponAnimations=92 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

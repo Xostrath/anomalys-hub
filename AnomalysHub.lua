@@ -99,7 +99,7 @@ local state = {
 	EspSettings = {Name = true, Level = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
 	NpcEspEnabled = false,
 	NpcEspDistance = 2500,
-	BeyondNenParryTargets = "NPCs",
+	BeyondNenParryTargets = "Auto",
 	BeyondNenChestSelection = {All = true, Types = {}},
 	NpcEspSettings = {Name = true, Distance = true, Box = true,
 		Quest = true, Enemy = true, Boss = true, Other = true},
@@ -153,7 +153,10 @@ local function loadConfig()
 	state.InfiniteJump = decoded.InfiniteJump == true
 	state.NpcEspEnabled = decoded.NpcEspEnabled == true
 	state.NpcEspDistance = math.clamp(tonumber(decoded.NpcEspDistance) or 2500, 100, 10000)
-	if decoded.BeyondNenParryTargets == "NPCs" or decoded.BeyondNenParryTargets == "Players" or decoded.BeyondNenParryTargets == "Both" then
+	-- Existing fixed-scope settings predate automatic boss targeting. Upgrade
+	-- them once; later explicit choices retain their saved mode.
+	if decoded.BeyondNenParryTargetingVersion == 2 and (decoded.BeyondNenParryTargets == "Auto"
+		or decoded.BeyondNenParryTargets == "NPCs" or decoded.BeyondNenParryTargets == "Players" or decoded.BeyondNenParryTargets == "Both") then
 		state.BeyondNenParryTargets = decoded.BeyondNenParryTargets
 	end
 	if type(decoded.NpcEspSettings) == "table" then
@@ -177,6 +180,7 @@ local function saveConfig()
 		NpcEspEnabled = state.NpcEspEnabled,
 		NpcEspDistance = state.NpcEspDistance,
 		BeyondNenParryTargets = state.BeyondNenParryTargets,
+		BeyondNenParryTargetingVersion = 2,
 		BeyondNenChestSelection = state.BeyondNenChestSelection,
 		NpcEspSettings = table.clone(state.NpcEspSettings),
 		InfiniteJump = state.InfiniteJump,
@@ -4057,7 +4061,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v32. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v33. Automatic boss targeting + weapon profiles.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -4392,26 +4396,37 @@ for _, key in ipairs({"sword", "dagger", "bat"}) do
 		end
 	end
 end
-local targetModes = {"NPCs", "Players", "Both"}
+local targetModes = {"Auto", "NPCs", "Players", "Both"}
 local savedTargets = controller.State and controller.State.BeyondNenParryTargets
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {},
-	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "NPCs"}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v32", "Scythe, Frostblade Boots and pistol updates. Choose NPCs, Players, or Both below.", 268)
+	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "Auto"}
+state.EffectiveTargetMode = state.TargetMode == "Auto" and "Both" or state.TargetMode
+local function targetLabel()
+	return "Targets: " .. (state.TargetMode == "Auto" and ("Auto / " .. state.EffectiveTargetMode .. (state.BossModel and " (boss)" or "")) or state.TargetMode)
+end
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v33", "Auto watches players and NPCs, switching to NPC-only during a detected boss fight.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
 	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
 }, card)
-local button, stop
+local button, stop, targetButton
+local function resetTargetScope()
+	state.BossModel, state.BossThreatAt, state.BossAnimation = nil, nil, nil
+	state.EffectiveTargetMode = state.TargetMode == "Auto" and "Both" or state.TargetMode
+	if targetButton then targetButton.Text = targetLabel() end
+end
 local function note(message)
 	if #state.Lines >= 1500 then table.remove(state.Lines, 1) end
 	table.insert(state.Lines, string.format("%.4f %s", os.clock() - state.Started, message))
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v32 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v33 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
+		.. "\nEFFECTIVE_TARGETS=" .. state.EffectiveTargetMode
+		.. "\nv33 Auto targeting: Both normally; NPCs while a catalog-classified boss has a mapped threatening attack within60 studs. Detection uses current attack phase/speed plus the existing per-attack range/facing/height checks, up to .8s before contact. Boss itself is prioritized before the nearest-eight limit; player characters never count as bosses. Return to Both when the boss dies/leaves60 studs or no threat has been seen for6s. This is a combat-proximity heuristic, not server-confirmed aggro; an idle nearby boss does not trigger it. Unknown attacks cannot establish engagement. Explicit NPCs/Players/Both modes remain available."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
 		.. "\nv32 overrides earlier pistol notes: burstB73875507755468 gets matched CancelMove=false guard through1.99/cap2s, reach/current40, facing-.45 after hits at35-39.59 and a projected37.72 skip. New separate Shockwork mapping113521135913624 seed.54/reach12/current15; Dagger timing/range unchanged. Shared animation IDs no longer infer Dagger from generic Fists; current equipped Shockwork Pistols or Phantom Goons Dagger resolves the family. Skill118856732820265 adds trial first seed.39 from one isolated .421 receipt, retains1.49/1.99 and range21/current24, adds close10/facing-.90 after rear hits9.01/13.34. Existing v31 weapon and interrupted-hold fixes retained. Latest source test was v30, not evidence of v31 performance. InvalidTimestamp responses are logged without changing game-generated timestamps. All new timings/bounds need live testing."
 		.. "\nv31: unmatched block-key UP ends an internal burst hold, allowing later timed contacts through normal gates; it does not identify who released the key. Pistol burstA now waits up to.30s for a matched CancelMove=false parry, then guards through3.20 with3.5s cap. New pistol78460118661143 trial seed.52. Six Scythe and three Frostblade trial animations require explicit matching Weapon, or generic player Fists plus current equipped Tool.WeaponName/BoundWeapon. Crazy Slots also requires current CustomWeapon=Scythe Slot. Stale subweapon metadata, backpack tools and overlapping periodic damage do not select a profile. Live speed/geometry/cooldown/own-skill rules remain. Timings are damage-receipt estimates; no guaranteed parry or hitbox claim."
@@ -4568,6 +4583,7 @@ stop = function(reason)
 	button.Text, button.BackgroundColor3 = "Run Test (90s)", ui.Colors.AccentSoft
 	if state.Started then note("STOP " .. reason) end
 	local saved = save(reason)
+	resetTargetScope()
 	show(reason .. (saved and (state.HistorySaved and ". Test + history saved." or ". Latest test saved; history failed.") or ". File save unavailable; use Copy Test."))
 end
 controller.StopBeyondNenAutoParry = function() if state.Enabled then stop("Manual recorder opened") end end
@@ -4709,8 +4725,69 @@ local function watchTrack(rig, track)
 	end
 end
 local function targetAllowed(owner)
-	return state.TargetMode == "Both" or (state.TargetMode == "Players" and owner ~= nil)
-		or (state.TargetMode == "NPCs" and owner == nil)
+	return state.EffectiveTargetMode == "Both" or (state.EffectiveTargetMode == "Players" and owner ~= nil)
+		or (state.EffectiveTargetMode == "NPCs" and owner == nil)
+end
+local function attackGeometry(weapon, profile, root, localRoot, remaining, contact)
+	local delta = localRoot.Position - root.Position
+	local distance = delta.Magnitude
+	local projected = delta + (localRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity) * math.max(0, remaining)
+	local facing = distance < 1 and 1 or root.CFrame.LookVector:Dot(delta.Unit)
+	local radial = contact > 1 and profile.FollowupRadius
+	local close = profile.CloseRangeRadius and distance <= profile.CloseRangeRadius
+	local mode = radial and "nearby-followup" or (close and "nearby-strike" or "directional")
+	local minimumFacing = (contact > 1 and profile.FollowupMinFacing) or profile.MinFacing or .15
+	local ok = distance <= (profile.MaxDistance or weapon.MaxDistance or 12)
+		and projected.Magnitude <= (profile.Reach or weapon.Reach or 9) and facing >= minimumFacing
+	if radial then ok = distance <= radial elseif close then ok = true end
+	return ok and math.abs(delta.Y) <= (profile.MaxVertical or 8), mode, projected, facing
+end
+local function bossThreat(entry, localRoot)
+	if entry.Owner or not controller.ClassifyBeyondNenNpc
+		or controller.ClassifyBeyondNenNpc(entry.Model, entry.Humanoid) ~= "Boss" then return end
+	for index, track in ipairs(entry.Animator:GetPlayingAnimationTracks()) do
+		if index > 16 then break end
+		if not track.IsPlaying or track.Looped or track.Speed <= 0 or track.TimePosition < 0 then continue end
+		local id = track.Animation and tostring(track.Animation.AnimationId):match("%d+")
+		local _, weapon, profile = attackOf(entry, id)
+		if not profile then continue end
+		local timing = profile.DistanceTiming
+		local delay = timing and math.clamp((entry.Distance - timing.Start) / timing.Speed, 0, timing.MaxDelay) or 0
+		for contact, phase in ipairs(profile.Phases or {profile.Phase}) do
+			local eta = (phase - track.TimePosition) / track.Speed + delay
+			if eta >= -.1 and eta <= .8 and attackGeometry(weapon, profile, entry.Root, localRoot, math.min(.2, eta), contact) then return id end
+		end
+	end
+end
+local function updateAutoTargets(pool, localRoot)
+	local previous, previousBoss = state.EffectiveTargetMode, state.BossModel
+	if state.TargetMode == "Auto" then
+		local threat, animation
+		for _, entry in ipairs(pool) do
+			local id = bossThreat(entry, localRoot)
+			if id and (not threat or entry.Distance < threat.Distance) then threat, animation = entry, id end
+		end
+		if threat then
+			state.BossModel, state.BossThreatAt, state.BossAnimation = threat.Model, os.clock(), animation
+		end
+		local root = state.BossModel and alive(state.BossModel)
+		if not root or state.PlayerModels[state.BossModel] or (root.Position - localRoot.Position).Magnitude > 60
+			or os.clock() - (state.BossThreatAt or 0) >= 6 then
+			state.BossModel, state.BossThreatAt, state.BossAnimation = nil, nil, nil
+		end
+		state.EffectiveTargetMode = state.BossModel and "NPCs" or "Both"
+	else
+		state.BossModel, state.BossThreatAt, state.BossAnimation = nil, nil, nil
+		state.EffectiveTargetMode = state.TargetMode
+	end
+	if previous ~= state.EffectiveTargetMode or previousBoss ~= state.BossModel then
+		note("TARGET_SCOPE mode=" .. state.TargetMode .. " effective=" .. state.EffectiveTargetMode
+			.. " boss=" .. tostring(state.BossModel and state.BossModel.Name) .. " animation=" .. tostring(state.BossAnimation))
+		-- Stop holding for a player who has just become ineligible. Later NPC
+		-- inputs still pass the ordinary cooldown and local recovery checks.
+		if state.Held and state.EffectiveTargetMode == "NPCs" and state.PlayerModels[state.Held.Model or state.Held.Attempt.Model] then release() end
+	end
+	if targetButton then targetButton.Text = targetLabel() end
 end
 local function syncRigs(localRoot)
 	local pool, seen, owners, wanted = {}, {}, {}, {}
@@ -4725,13 +4802,12 @@ local function syncRigs(localRoot)
 		if not model:IsA("Model") or model == player.Character then return end
 		local owner = state.PlayerModels[model]
 		if owner and owner.Character ~= model then return end
-		-- Filter before the nearest-eight cap so helping players cannot crowd
-		-- out the NPC being fought. Names and weapon labels do not imply ownership.
-		if not targetAllowed(owner) then return end
 		local root = alive(model)
 		if root then
 			local distance = (root.Position - localRoot.Position).Magnitude
-			if distance <= 60 then table.insert(pool, {Model = model, Distance = distance}) end
+			local humanoid = model:FindFirstChildOfClass("Humanoid")
+			local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+			if distance <= 60 and animator then table.insert(pool, {Model = model, Owner = owner, Root = root, Humanoid = humanoid, Animator = animator, Distance = distance}) end
 		end
 	end
 	for model in pairs(owners) do candidate(model) end
@@ -4740,7 +4816,16 @@ local function syncRigs(localRoot)
 	for _, container in ipairs(containers) do
 		for index, model in ipairs(container:GetChildren()) do if index > 500 then break end; candidate(model) end
 	end
-	table.sort(pool, function(a, b) return a.Distance < b.Distance end)
+	-- Detect the boss before ownership filtering and the nearest-eight cap,
+	-- so nearby helping players cannot prevent boss-fight recognition.
+	updateAutoTargets(pool, localRoot)
+	local eligible = {}
+	for _, entry in ipairs(pool) do if targetAllowed(entry.Owner) then table.insert(eligible, entry) end end
+	pool = eligible
+	table.sort(pool, function(a, b)
+		if (a.Model == state.BossModel) ~= (b.Model == state.BossModel) then return a.Model == state.BossModel end
+		return a.Distance < b.Distance
+	end)
 	for index = 1, math.min(#pool, 8) do
 		local model = pool[index].Model
 		local humanoid = model:FindFirstChildOfClass("Humanoid")
@@ -4879,7 +4964,7 @@ local function step()
 	local model = player.Character
 	local localRoot = alive(model)
 	if model ~= state.Character then
-		release(); clearRigs(); state.Character, state.LastAttempt = model, nil; state.Attempts = {}; state.NextSync = 0; state.LastHealth = nil
+		release(); clearRigs(); resetTargetScope(); state.Character, state.LastAttempt = model, nil; state.Attempts = {}; state.NextSync = 0; state.LastHealth = nil
 	end
 	if not localRoot then gate("character-unavailable"); release(); show("Waiting for your character"); return end
 	local health = model:GetAttribute("Health")
@@ -4944,15 +5029,8 @@ local function step()
 			if remaining > state.Lead then continue end
 			-- Re-evaluate geometry at the moment of the tap, including a short
 			-- velocity projection for closing attacks, instead of a fixed timer.
-			local projected = delta + (localRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity) * math.max(0, remaining)
-			local facingDot = distance < 1 and 1 or root.CFrame.LookVector:Dot(delta.Unit)
-			local radialFollowup = contact > 1 and profile.FollowupRadius
-			local closeThreat = profile.CloseRangeRadius and distance <= profile.CloseRangeRadius
-			local geometryMode = radialFollowup and "nearby-followup" or (closeThreat and "nearby-strike" or "directional")
-			local minimumFacing = (contact > 1 and profile.FollowupMinFacing) or profile.MinFacing or .15
-			local geometryOk = distance <= (profile.MaxDistance or weapon.MaxDistance or 12) and projected.Magnitude <= (profile.Reach or weapon.Reach or 9) and facingDot >= minimumFacing
-			if radialFollowup then geometryOk = distance <= radialFollowup elseif closeThreat then geometryOk = true end
-			if geometryOk and math.abs(delta.Y) <= (profile.MaxVertical or 8) then
+			local geometryOk, geometryMode, projected, facingDot = attackGeometry(weapon, profile, root, localRoot, remaining, contact)
+			if geometryOk then
 				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, DistanceDelay = distanceDelay, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1, GuardThroughPhase = profile.GuardThroughPhase, GuardMaxDuration = profile.GuardMaxDuration, GuardIfUncancelled = profile.GuardIfUncancelled, GeometryMode = geometryMode} end
 			elseif swing.GeometryContact ~= contact then
 				swing.GeometryContact = contact
@@ -4963,12 +5041,12 @@ local function step()
 	if not best then
 		if next(state.Rigs) == nil then
 			gate("no-eligible-targets")
-			local message = state.TargetMode == "Players" and "No nearby players detected. Select NPCs for NPC fights."
-				or (state.TargetMode == "NPCs" and "No nearby NPCs detected. Select Players for player fights."
+			local message = state.EffectiveTargetMode == "Players" and "No nearby players detected. Select NPCs for NPC fights."
+				or (state.EffectiveTargetMode == "NPCs" and "No nearby NPCs detected. Select Players for player fights."
 				or "No nearby targets detected.")
 			show(message)
 		else
-			gate("ready"); show("Watching mapped weapon attacks | Targets: " .. state.TargetMode)
+			gate("ready"); show("Watching mapped weapon attacks | " .. targetLabel())
 		end
 		return
 	end
@@ -5003,6 +5081,7 @@ local function start()
 	if not manager then status.Text = "Block input unavailable in this executor."; return end
 	if controller.IsBeyondNenParryRecording and controller.IsBeyondNenParryRecording() then status.Text = "Stop + Save the manual recording before running this test."; return end
 	state.Started, state.Enabled = os.clock(), true
+	resetTargetScope()
 	-- Keep ownership for old player bodies still in Workspace across test
 	-- restarts; otherwise a respawn could make one look like an NPC.
 	state.Lines, state.Unknown, state.Attempts, state.Results, state.PendingInputs = {}, {}, {}, {}, {}
@@ -5026,12 +5105,12 @@ ui.FitColumn(ui.Button(card, "Copy Test", 0, 0, 180, function()
 	if state.Enabled then save("RUNNING") end
 	if state.Report and type(setclipboard) == "function" then pcall(setclipboard, state.Report) end
 end), 1, 72)
-local targetButton = ui.Button(card, "Targets: " .. state.TargetMode, 14, 116, 180, function(object)
+targetButton = ui.Button(card, targetLabel(), 14, 116, 180, function(object)
 	if state.Closed or controller.IsUnloaded() then return end
 	if state.Enabled or state.Held then stop("Targets changed") end
 	if state.Held then return end
 	state.TargetMode = targetModes[(table.find(targetModes, state.TargetMode) or 1) % #targetModes + 1]
-	object.Text = "Targets: " .. state.TargetMode
+	resetTargetScope()
 	local saved = true
 	if controller.State then
 		controller.State.BeyondNenParryTargets = state.TargetMode

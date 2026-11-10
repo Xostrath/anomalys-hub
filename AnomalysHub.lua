@@ -5957,6 +5957,25 @@ function progress.ReelGeometry(rail)
 	return x, center, half
 end
 
+-- Ko's Charge uses a separate ScreenGui. Never substitute a fishing/Reel rail.
+-- Read absolute centers: the recorded Target is left-anchored, whereas Cursor
+-- is centered, so comparing their Position.X values would release too early.
+function progress.ChargeGeometry(pg)
+	local screen = pg and pg:FindFirstChild("MeditationBar")
+	local root = screen and screen:FindFirstChild("Root")
+	local panel = root and root:FindFirstChild("Panel")
+	local rail = panel and panel:FindFirstChild("Rail")
+	local caption = panel and panel:FindFirstChild("ProgressText")
+	if not caption or not progress.Visible(caption) then return nil end
+	local text = textOf(caption)
+	local phase = text == "Hold, then release in the gold zone" and "Ready"
+		or text == "Release in the gold zone!" and "Holding"
+	if not phase then return nil end
+	local x, center, half = progress.ReelGeometry(rail)
+	if not x then return nil end
+	return x, center, half, phase, rail
+end
+
 function progress.DiagnosticRoots(pg)
 	local roots, seen = {}, {}
 	local function add(root) if root and not seen[root] then seen[root] = true; table.insert(roots, root) end end
@@ -5990,7 +6009,7 @@ controller.BeyondNenMeditationProgress = progress
 
 end)()
 ;(function()
--- Auto Meditation v4: Ken key prompts alongside Circles, Reel and limit rotation.
+-- Auto Meditation v5: Ko Charge, Ken keys, Circles, Reel and limit rotation.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -6014,7 +6033,7 @@ end
 local function save()
 	if not state.Started or type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	pcall(writefile, path, "BEYOND NEN AUTO MEDITATION v4 // TRAINING ROTATION\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n"))
+	pcall(writefile, path, "BEYOND NEN AUTO MEDITATION v5 // TRAINING ROTATION\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n"))
 end
 local function show(message)
 	local text = message .. "\nConfirmed hits: " .. state.Hits .. " | Misses: " .. state.Misses
@@ -6039,18 +6058,24 @@ local function snapshotUI(section, pg)
 		if count > 300 then break end
 	end
 	state.UIReports[section] = table.concat(lines, "\n")
-	local reports = {"BEYOND NEN AUTO MEDITATION v4 // SCOPED UI"}
+	local reports = {"BEYOND NEN AUTO MEDITATION v5 // SCOPED UI"}
 	for _, text in pairs(state.UIReports) do table.insert(reports, text) end
 	pcall(writefile, "AnomalyHub/universal/beyond_nen_automeditation_ui.txt", table.concat(reports, "\n\n"))
 end
 local function release()
 	local held = state.Held
 	if not held then return true end
+	if held.Releasing then return true end -- A synchronous result may also ask to release.
+	held.Releasing = true
 	local ok = pcall(function()
 		if held.Key then inputManager:SendKeyEvent(false, held.Key, false, game)
 		else inputManager:SendMouseButtonEvent(held.X, held.Y, 0, false, game, 0) end
 	end)
-	if ok then state.Held = nil; note("INPUT UP " .. (held.Key and held.Key.Name or "M1")) end
+	held.Releasing = nil
+	if ok then
+		if state.Held == held then state.Held = nil end
+		note("INPUT UP " .. (held.Key and held.Key.Name or "M1"))
+	end
 	return ok
 end
 local function stop(reason)
@@ -6196,12 +6221,13 @@ local function confirmed(pending, result)
 	if result.hit then state.Hits += 1 else state.Misses += 1 end
 	note("CONFIRMED id=" .. tostring(pending.Id) .. " mode=" .. tostring(pending.Mode) .. " hit=" .. tostring(result.hit) .. " gained=" .. tostring(result.gained))
 	if state.Pending == pending then
-		if pending.Mode == "Reel" or pending.Mode == "Keys" then release() end
+		if pending.Mode == "Reel" or pending.Mode == "Keys" or pending.Mode == "Charge" then release() end
 		state.Pending = nil
 	end
 	show(result.hit and "Hit confirmed." or "Miss confirmed."); save()
 end
 local function beginSession()
+	release()
 	state.Epoch += 1; state.Pending = nil; state.Prompts, state.ResultRequests = {}, {}
 	state.Phase, state.NextAction, state.Attempts, state.EnterAttempts = "Training", os.clock() + 3, 0, 0
 	state.NextCheck = state.NextCheck or os.clock() + 120
@@ -6228,7 +6254,7 @@ local function observe(name, direction, args, requestStart)
 		-- is chosen by the client and must be read from its visible prompt.
 		if name == "KeyPrompt" then mode, data = "Keys", {Window = args[2]} end
 		syncTechnique()
-		if mode ~= "Circles" and mode ~= "Reel" and not (name == "KeyPrompt" and mode == "Keys") then
+		if mode ~= "Circles" and mode ~= "Reel" and mode ~= "Charge" and not (name == "KeyPrompt" and mode == "Keys") then
 			release()
 			state.Pending = nil; show("Unmapped meditation mode: " .. tostring(mode) .. ". Record this mode before automating it.")
 			note("UNSUPPORTED " .. tostring(mode)); return
@@ -6243,10 +6269,15 @@ local function observe(name, direction, args, requestStart)
 		elseif mode == "Reel" then
 			if type(data.Goals) ~= "table" or #data.Goals == 0 or #data.Goals > 16 then return end
 			for _, goal in ipairs(data.Goals) do if type(goal) ~= "number" or not (goal >= 0 and goal <= 1) then return end end
+		elseif mode == "Charge" then
+			if type(data.Target) ~= "number" or not (data.Target >= 0 and data.Target <= 1)
+				or type(data.Width) ~= "number" or not (data.Width > 0 and data.Width <= 1)
+				or type(data.RiseTime) ~= "number" or not (data.RiseTime >= 0.1 and data.RiseTime <= 10) then return end
 		end
 		release()
 		state.Phase = "Training"
 		state.Pending = {Id = id, Mode = mode, Born = requestStart, Window = data.Window, X = data.X, Y = data.Y, Sent = false,
+			Target = data.Target, Width = data.Width, RiseTime = data.RiseTime,
 			Deadline = requestStart + (mode == "Reel" and 45 or data.Window + 1)}
 		for oldId, prompt in pairs(state.Prompts) do
 			if os.clock() - prompt.Born > 60 then state.Prompts[oldId] = nil end
@@ -6258,13 +6289,17 @@ local function observe(name, direction, args, requestStart)
 		note(string.format("PROMPT id=%s mode=%s window=%.3f", tostring(id), mode, data.Window))
 	elseif name == "GameInput" and direction:sub(1, 3) == "OUT" then
 		local pending = state.Pending
-		if pending and pending.Mode == "Reel" and args[1] == pending.Id then
+		if pending and (pending.Mode == "Reel" or pending.Mode == "Charge") and args[1] == pending.Id and requestStart >= pending.Born then
 			pending.ObservedInputs = (pending.ObservedInputs or 0) + 1
-			note("REEL INPUT id=" .. tostring(args[1]) .. " held=" .. tostring(args[2]))
+			if pending.Mode == "Charge" then
+				if args[2] == true and not pending.Sent then pending.Manual = true end
+				if args[2] == false then pending.Responded = true end
+			end
+			note(pending.Mode:upper() .. " INPUT id=" .. tostring(args[1]) .. " held=" .. tostring(args[2]))
 		end
 	elseif name == "GameResult" and direction == "IN event" then
 		local pending = args[1] ~= nil and state.Prompts[args[1]]
-		if pending and pending.Mode == "Reel" and requestStart >= pending.Born then confirmed(pending, args[2]) end
+		if pending and (pending.Mode == "Reel" or pending.Mode == "Charge") and requestStart >= pending.Born then confirmed(pending, args[2]) end
 	elseif name == "KeyPromptResult" and direction:sub(1, 3) == "OUT" then
 		local pending = args[1] ~= nil and state.Prompts[args[1]]
 		if pending and requestStart >= pending.Born then
@@ -6279,7 +6314,7 @@ local function observe(name, direction, args, requestStart)
 	end
 end
 
-local card = ui.Card(ui.Pages.Auto, "AUTO MEDITATION // v4", "Circles, Reel and Ken key presses. Checks technique limits every 2 minutes and switches when capped. Hide the hub with Right Alt if it covers a click target.", 218)
+local card = ui.Card(ui.Pages.Auto, "AUTO MEDITATION // v5", "Circles, Reel, Ken keys and Ko charge. Checks technique limits every 2 minutes and switches when capped. Hide the hub with Right Alt if it covers a click target.", 218)
 card.LayoutOrder = 20
 status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
@@ -6325,6 +6360,63 @@ local function keyStep(pending, meditation, pg, now)
 	show("Training " .. tostring(state.Technique) .. " · Press " .. key.Name)
 	if not pressKey(key, 0.05) then stop("Meditation key input unavailable."); return end
 	if not pending.Captured then pending.Captured = true; pcall(snapshotUI, "Keys", pg) end
+end
+
+local function chargeStep(pending, pg, now)
+	local held = state.Held and state.Held.Charge == pending
+	if pending.Manual or pending.Responded or (pending.Sent and not held) then
+		if held then release() end
+		return
+	end
+	local x, center, half, phase, rail = progress.ChargeGeometry(pg)
+	if not x then
+		if held then release(); note("CHARGE interrupted: bar hidden or no longer charging") end
+		pending.ReadyAt = nil
+		show("Waiting for Ko's charge bar.")
+		return
+	end
+	if not pending.Sent then
+		if state.Held or now >= pending.Born + pending.Window then return end
+		-- Match the reset cursor to THIS event's gold zone. Width gives the
+		-- displayed travel scale without assuming a resolution or GUI padding.
+		local travel = half * 2 / pending.Width
+		local reset = center - half - pending.Target * travel
+		local keyOK, manualSpace = pcall(function() return UserInputService:IsKeyDown(Enum.KeyCode.Space) end)
+		if phase ~= "Ready" or (keyOK and manualSpace) or not (travel > 0 and travel <= 1.1)
+			or math.abs(x - reset) > 0.01 or x > 0.15 then pending.ReadyAt = nil; return end
+		if pending.Rail ~= rail or pending.Center ~= center or pending.Half ~= half or not pending.ReadyAt then
+			pending.Rail, pending.Center, pending.Half, pending.ReadyAt = rail, center, half, now + 0.035
+			return
+		end
+		if now < pending.ReadyAt then return end
+		pending.Sent, pending.ChargeStarted, pending.LastX, pending.LastTime = true, now, x, now
+		note(string.format("CHARGE DOWN id=%s x=%.3f target=%.3f half=%.3f rise=%.3f",
+			tostring(pending.Id), x, center, half, pending.RiseTime))
+		local duration = math.min(pending.RiseTime + 0.35, pending.Born + pending.Window - now)
+		if not pressKey(Enum.KeyCode.Space, duration) then stop("Ko charge input unavailable."); return end
+		if state.Held then state.Held.Charge = pending end
+		if not pending.Captured then pending.Captured = true; pcall(snapshotUI, "Charge", pg) end
+		show("Training " .. tostring(state.Technique) .. " · Charging")
+		return
+	end
+	-- Once Space is released (including an interruption), never press it a
+	-- second time for the same prompt. The release submits that attempt.
+	if rail ~= pending.Rail or math.abs(center - pending.Center) > 0.01 or math.abs(half - pending.Half) > 0.01 then
+		release(); note("CHARGE interrupted: target changed"); return
+	end
+	local dt = now - pending.LastTime
+	local velocity = dt > 0 and dt <= 0.2 and math.clamp((x - pending.LastX) / dt, 0, 2) or 0
+	pending.LastX, pending.LastTime = x, now
+	-- Aim near the middle, with at most one short frame of lead, bounded to
+	-- 20% of the half-width. Live bar position controls release, not a guessed
+	-- server timer or fixed hold duration. Long frame gaps get no prediction.
+	local lead = math.min(velocity * math.min(dt, 0.035), half * 0.2)
+	if x + lead >= center then
+		note(string.format("CHARGE RELEASE id=%s x=%.3f target=%.3f half=%.3f velocity=%.3f held=%.3f inputs=%d",
+			tostring(pending.Id), x, center, half, velocity, now - pending.ChargeStarted, pending.ObservedInputs or 0))
+		if not release() then stop("Unable to release Ko charge."); return end
+		show("Ko charge released. Waiting for the result.")
+	end
 end
 
 local function reelStep(pending, pg, now)
@@ -6407,6 +6499,7 @@ local function step()
 		end
 		if pending.Mode == "Reel" then reelStep(pending, pg, now); return end
 		if pending.Mode == "Keys" then keyStep(pending, meditation, pg, now); return end
+		if pending.Mode == "Charge" then chargeStep(pending, pg, now); return end
 		if pending.Sent or pending.Responded or state.Held then return end
 		local circle, approach = meditation:FindFirstChild("AuraCircle"), meditation:FindFirstChild("AuraCircleApproach")
 		if not circle or not approach or not circle.Visible or not approach.Visible or circle.AbsoluteSize.X <= 0 then return end
@@ -6424,7 +6517,7 @@ local function step()
 		if not pressMouse(x, y, 0.035) then stop("Meditation mouse input unavailable.") end
 		return
 	end
-	if state.Held and state.Held.Reel then release() end
+	if state.Held and (state.Held.Reel or state.Held.Charge) then release() end
 	if state.Held or now < state.NextAction then return end
 	if state.Phase == "Training" then state.Pending = nil; state.Phase = "Idle" end
 	local parts = Workspace:FindFirstChild("MeditationParts")

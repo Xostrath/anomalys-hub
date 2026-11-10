@@ -257,7 +257,6 @@ local pageMeta = {
 	ESP = {"ESP", "Player and NPC overlays together, with independent controls"},
 	Auto = {"AUTO", "Automatic activities and setup controls"},
 	Combat = {"COMBAT", "Combat recording and defense tools"},
-	Shops = {"SHOPS", "Browse the merchant from wherever you are"},
 	Movement = {"MOVEMENT", "Character movement and collision utilities"},
 	Servers = {"SERVER NAVIGATION", "Rejoin or move to another public server"},
 	Settings = {"SETTINGS", "Persistence, keybind, reload, and cleanup"},
@@ -274,7 +273,7 @@ local function makePage(name)
 	return page
 end
 for _, name in ipairs({"Home", "Players", "ESP", "Movement", "Servers", "Settings"}) do makePage(name) end
-if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto"); makePage("Combat"); makePage("Shops") end
+if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto"); makePage("Combat") end
 
 local function selectTab(name)
 	if not pages[name] then return end
@@ -295,7 +294,6 @@ end
 local tabNames = {{"Home", "[D]  Dashboard"}, {"Players", "[P]  Players"}, {"ESP", "[E]  ESP"}, {"Movement", "[M]  Movement"}, {"Servers", "[S]  Servers"}, {"Settings", "[=]  Settings"}}
 if pages.Auto then table.insert(tabNames, 4, {"Auto", "[A]  Auto"}) end
 if pages.Combat then table.insert(tabNames, 4, {"Combat", "[C]  Combat"}) end
-if pages.Shops then table.insert(tabNames, 6, {"Shops", "[$]  Shops"}) end
 tabBar.Size = UDim2.new(1, -20, 0, #tabNames * 40)
 for order, definition in ipairs(tabNames) do
 	local name, text = definition[1], definition[2]
@@ -2636,7 +2634,7 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Shared passive observations for mapped activity, combat and merchant remotes.
+-- Shared passive observations for mapped fishing, meditation and combat remotes.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -2649,8 +2647,6 @@ local definitions = {
 	},
 	NenMasteryService = {RF = {"SetMeditationTechnique"}},
 	MovementService = {RF = {"Dash", "TpDash"}},
-	MerchantService = {RF = {"purchase", "sellGear", "sellItem"}},
-	BlackMerchantService = {RF = {"Buy", "GetOffer"}, RE = {"OfferChanged"}},
 }
 -- Exact client-visible paths from the Beyond Nen fingerprint. Both Block
 -- remotes keep distinct names; UnreliableRemoteEvents use their own method hook.
@@ -2798,547 +2794,9 @@ function controller.WatchBeyondNenCombat(callback)
 	local movement = watch("MovementService", callback)
 	return function() combat(); movement() end
 end
-function controller.WatchBeyondNenMerchant(callback)
-	if type(callback) ~= "function" then return function() end end
-	local merchant = watch("MerchantService", function(name, ...) callback("MerchantService." .. name, ...) end)
-	local blackMerchant = watch("BlackMerchantService", function(name, ...) callback("BlackMerchantService." .. name, ...) end)
-	return function() merchant(); blackMerchant() end
-end
 controller.RegisterCleanup(function()
 	closed = true; table.clear(listeners); sync()
 end)
-
-end)()
-;(function()
--- Observe one normal merchant interaction before implementing remote shop access.
-local env = (getgenv and getgenv()) or shared
-local controller = env.__AnomalyUniversalController
-if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
-local player = game:GetService("Players").LocalPlayer
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local ui = controller.UI
-local folder = "AnomalyHub/universal/"
-local capture = {Active = false, Closed = false, Lines = {}, Bytes = 0, LastUI = {}, Buttons = {}, Connections = {}, Serial = 0}
-
-local function sample(value, depth, seen)
-	depth, seen = depth or 0, seen or {}
-	if typeof(value) == "Instance" then return "<" .. value.ClassName .. ":" .. value:GetFullName() .. ">" end
-	if type(value) == "string" then return string.format("%q", value:sub(1, 600)) end
-	if type(value) ~= "table" then return tostring(value) end
-	if seen[value] then return "<cycle>" end
-	if depth >= 3 then return "<depth limit>" end
-	seen[value] = true
-	local parts, count = {}, 0
-	for key, item in pairs(value) do
-		count += 1; if count > 20 then table.insert(parts, "<field limit>"); break end
-		table.insert(parts, sample(key, depth + 1, seen) .. "=" .. sample(item, depth + 1, seen))
-	end
-	seen[value] = nil
-	return "{" .. table.concat(parts, ",") .. "}"
-end
-local function log(message)
-	if not capture.Active then return end
-	local line = string.format("%.3fs\t%s", os.clock() - capture.Started, tostring(message):sub(1, 7000))
-	if #capture.Lines >= 5000 or capture.Bytes + #line > 750000 then capture.Limited = true; return end
-	table.insert(capture.Lines, line); capture.Bytes += #line + 1
-end
-local function save(reason)
-	capture.Report = "BEYOND NEN MERCHANT CAPTURE // v1\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
-		.. "\nObserves normal merchant calls/returns, shop/dialog UI and manual interaction inputs. Sends no inputs or remote requests."
-		.. "\nCaptures up to six matching client merchant/dialog controllers if decompilation is available; never requires or executes them."
-		.. "\nDecompiled client code may be incomplete and cannot establish server distance validation. No chat or typed text is recorded."
-		.. "\nOutgoing calls are logged after returning; requestStart preserves call time. Hook paths may duplicate calls."
-		.. "\nLimits: 120s, 5000 lines/750KB, 1200 UI objects, six sources at 2MB/4s each."
-		.. "\n" .. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason .. (capture.Limited and "\nREPORT LIMIT REACHED" or "")
-	if type(writefile) ~= "function" then return false end
-	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	local ok = pcall(writefile, folder .. "beyond_nen_merchant_capture.txt", capture.Report)
-	if capture.Stem then pcall(writefile, folder .. capture.Stem .. ".txt", capture.Report) end
-	return ok
-end
-local function effectiveVisible(object)
-	while object and object ~= player do
-		if object:IsA("GuiObject") and not object.Visible then return false end
-		if object:IsA("LayerCollector") and not object.Enabled then return false end
-		object = object.Parent
-	end
-	return true
-end
-local function roots()
-	local pg = player:FindFirstChildOfClass("PlayerGui")
-	local found = {}
-	if not pg then return found end
-	local main = pg:FindFirstChild("Main")
-	local function add(object) if object then table.insert(found, object) end end
-	-- Current and legacy merchant views, plus the observed dialogue views.
-	add(main and main:FindFirstChild("MerchantShop"))
-	add(pg:FindFirstChild("BetterDialog")); add(pg:FindFirstChild("Dialog"))
-	add(main and main:FindFirstChild("NpcInteractHud"))
-	add(pg:FindFirstChild("OreSell"))
-	for _, parent in ipairs({pg, main or pg}) do
-		for _, object in ipairs(parent:GetChildren()) do
-			if string.lower(object.Name):find("merchant", 1, true) then add(object) end
-		end
-	end
-	return found
-end
-local function snapshot()
-	local current, seen, count = {}, {}, 0
-	for _, root in ipairs(roots()) do
-		local objects = {root}
-		for _, object in ipairs(root:GetDescendants()) do table.insert(objects, object) end
-		for _, object in ipairs(objects) do
-			if seen[object] then continue end
-			seen[object] = true; count += 1
-			if count > 1200 then current["GUI LIMIT"] = "1200 objects; remaining omitted"; break end
-			local detail = object.ClassName
-			if object:IsA("LayerCollector") then detail ..= " enabled=" .. tostring(object.Enabled) end
-			if object:IsA("GuiObject") then
-				detail ..= " visible=" .. tostring(object.Visible) .. " effective=" .. tostring(effectiveVisible(object))
-					.. " pos=" .. tostring(object.Position) .. " size=" .. tostring(object.Size)
-				if object:IsA("TextLabel") or object:IsA("TextButton") then detail ..= " text=" .. sample(object.Text) end
-			end
-			local attributes = object:GetAttributes()
-			if next(attributes) then detail ..= " attrs=" .. sample(attributes) end
-			current[object:GetFullName()] = detail
-			if object:IsA("GuiButton") and not capture.Buttons[object] then
-				capture.Buttons[object] = object.Activated:Connect(function()
-					log("BUTTON " .. object:GetFullName() .. " visible=" .. tostring(effectiveVisible(object)))
-				end)
-			end
-		end
-		if count > 1200 then break end
-	end
-	for object, connection in pairs(capture.Buttons) do
-		if not seen[object] or not object.Parent then connection:Disconnect(); capture.Buttons[object] = nil end
-	end
-	if count == 0 then current["SHOP UI"] = "No merchant/dialog GUI loaded" end
-	for key, value in pairs(current) do if capture.LastUI[key] ~= value then log("STATE " .. key .. " " .. value) end end
-	for key in pairs(capture.LastUI) do if current[key] == nil then log("REMOVED " .. key) end end
-	capture.LastUI = current
-end
-local function captureSources(serial)
-	local scripts = player:FindFirstChild("PlayerScripts")
-	local client = scripts and scripts:FindFirstChild("Client")
-	local controllers = client and client:FindFirstChild("Controllers")
-	if not controllers then log("SOURCES Client.Controllers not loaded"); return end
-	local selected, queue, index = {}, {controllers}, 1
-	while index <= #queue and index <= 500 do
-		local object = queue[index]; index += 1
-		local name = string.lower(object.Name):gsub("[^%w]", "")
-		local isScript = object:IsA("ModuleScript") or object:IsA("LocalScript")
-		if object.Parent == controllers then log("CONTROLLER " .. object.ClassName .. " " .. object:GetFullName()) end
-		if isScript and (name:find("merchant", 1, true) or name == "npccontroller" or name == "npcscontroller"
-			or name == "npcinteractcontroller" or name == "interactioncontroller" or name == "dialogcontroller"
-			or name == "dialoguecontroller") then table.insert(selected, object) end
-		for _, child in ipairs(object:GetChildren()) do
-			if #queue >= 500 then log("SOURCES controller inventory limited to 500 objects"); break end
-			table.insert(queue, child)
-		end
-	end
-	table.sort(selected, function(a, b)
-		local aMerchant, bMerchant = a.Name:lower():find("merchant", 1, true) ~= nil, b.Name:lower():find("merchant", 1, true) ~= nil
-		if aMerchant ~= bMerchant then return aMerchant end
-		return a:GetFullName() < b:GetFullName()
-	end)
-	local decompiler = env.decompile or decompile
-	if type(decompiler) ~= "function" or type(writefile) ~= "function" then
-		log("SOURCES unavailable: " .. (type(decompiler) ~= "function" and "no decompiler" or "no file writer")); return
-	end
-	log("SOURCES candidates=" .. #selected)
-	for index, object in ipairs(selected) do
-		if index > 6 then log("SOURCES remaining candidates omitted (six source limit)"); break end
-		if not capture.Active or capture.Serial ~= serial then return end
-		local done, success, source = false, false, nil
-		local job = task.spawn(function() success, source = pcall(decompiler, object); done = true end)
-		local deadline = os.clock() + 4
-		while not done and os.clock() < deadline and capture.Active and capture.Serial == serial do task.wait(0.05) end
-		if not done and type(task.cancel) == "function" then pcall(task.cancel, job) end
-		if not capture.Active or capture.Serial ~= serial then return end
-		local label = object:GetFullName()
-		if not done then log("SOURCE TIMEOUT " .. label)
-		elseif not success or type(source) ~= "string" then log("SOURCE UNAVAILABLE " .. label .. " " .. sample(source))
-		elseif #source == 0 or #source > 2000000 then log("SOURCE SIZE REJECTED " .. label .. " bytes=" .. #source)
-		else
-			local sourcePath = folder .. capture.Stem .. "_" .. index .. "_" .. object.Name:gsub("[^%w_]", "_") .. ".lua"
-			local saved = pcall(writefile, sourcePath, source)
-			log((saved and "SOURCE SAVED " or "SOURCE WRITE FAILED ") .. label .. " bytes=" .. #source .. " file=" .. sourcePath)
-		end
-	end
-end
-
-local card = ui.Card(ui.Pages.Settings, "MERCHANT SETUP // v1", "Record talking to the merchant and opening the shop so remote access can be mapped.", 210)
-card.LayoutOrder = 25
-local status = ui.Create("TextLabel", {
-	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 78), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Start recording near the merchant, talk normally, open the shop, then close it and Stop + Save. No purchase is needed.",
-	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-}, card)
-local recordButton
-local function stop(reason)
-	if not capture.Active then return end
-	pcall(snapshot); capture.Active = false
-	if capture.Unwatch then capture.Unwatch(); capture.Unwatch = nil end
-	for _, connection in pairs(capture.Buttons) do connection:Disconnect() end
-	for _, connection in ipairs(capture.Connections) do connection:Disconnect() end
-	table.clear(capture.Buttons); table.clear(capture.Connections)
-	local saved = save(reason)
-	recordButton.Text = "Record Merchant"
-	status.Text = saved and "Merchant recording saved. Ready to review." or "File saving unavailable. Use Copy Recording."
-end
-local function start()
-	if capture.Closed then return end
-	if capture.Active then stop("STOPPED"); return end
-	capture.Serial += 1
-	capture.Lines, capture.Bytes, capture.LastUI, capture.Limited = {}, 0, {}, false
-	capture.Started, capture.LastSaved, capture.Active = os.clock(), os.clock(), true
-	capture.Stem = "beyond_nen_merchant_" .. os.time() .. "_" .. math.floor(os.clock() * 1000) .. "_" .. capture.Serial
-	local serial = capture.Serial
-	capture.Unwatch = controller.WatchBeyondNenMerchant(function(name, direction, args, requestStart)
-		if capture.Active and capture.Serial == serial and requestStart >= capture.Started then
-			log(name .. " " .. direction .. " requestStart=" .. string.format("%.3f", requestStart - capture.Started) .. " args=" .. sample(args))
-		end
-	end)
-	local probe = env.__AnomalyBeyondFishingProbe
-	log("Coverage: " .. (probe and #probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "UI only; outgoing hooks unavailable"))
-	for remote, definition in pairs(probe and probe.Targets or {}) do
-		if definition.Service == "MerchantService" or definition.Service == "BlackMerchantService" then log("REMOTE " .. definition.Service .. "." .. definition.Name .. " " .. remote:GetFullName()) end
-	end
-	table.insert(capture.Connections, UserInputService.InputBegan:Connect(function(input, processed)
-		if UserInputService:GetFocusedTextBox() then return end
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.KeyCode == Enum.KeyCode.T or input.KeyCode == Enum.KeyCode.E then
-			log("INTERACT " .. tostring(input.UserInputType) .. " " .. tostring(input.KeyCode) .. " processed=" .. tostring(processed) .. " pointer=" .. tostring(UserInputService:GetMouseLocation()))
-		end
-	end))
-	pcall(snapshot); save("RECORDING")
-	recordButton.Text = "Stop + Save"
-	status.Text = "Recording for up to 2 minutes. Talk to the merchant, open the shop, select an item to view it, close the shop, then Stop + Save."
-	task.spawn(function()
-		local ok, err = pcall(captureSources, serial)
-		if capture.Active and capture.Serial == serial then
-			if not ok then log("SOURCES ERROR " .. tostring(err)) end
-			save("RECORDING")
-		end
-	end)
-end
-recordButton = ui.FitColumn(ui.Button(card, "Record Merchant", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
-ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()
-	if capture.Active then save("RECORDING") end
-	if capture.Report and type(setclipboard) == "function" then pcall(setclipboard, capture.Report) end
-end), 1, 72)
-local elapsed = 0
-controller.Connect(RunService.Heartbeat, function(delta)
-	if not capture.Active then return end
-	elapsed += delta
-	if elapsed >= 0.2 then
-		elapsed = 0
-		local ok, err = pcall(snapshot)
-		if not ok then log("SNAPSHOT ERROR " .. tostring(err)) end
-	end
-	if capture.Limited then stop("LIMIT_REACHED")
-	elseif os.clock() - capture.Started >= 120 then stop("COMPLETE")
-	elseif os.clock() - capture.LastSaved >= 5 then save("RECORDING"); capture.LastSaved = os.clock() end
-end)
-controller.Connect(player.OnTeleport, function() stop("TELEPORT") end)
-controller.RegisterCleanup(function() stop("UNLOAD"); capture.Closed = true end)
-controller.CaptureBeyondNenMerchant = start
-
-end)()
-;(function()
--- General merchant catalog and purchase signature observed in MerchantController.
--- An independent view avoids the native shop's 14-stud walk-away UI closure.
--- Native and hub requests match. Live tests charged only beside the merchant.
--- Browsing remotely does not establish server permission to buy remotely.
-local env = (getgenv and getgenv()) or shared
-local controller = env.__AnomalyUniversalController
-if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
-local ui = controller.UI
-if not ui or not ui.Pages.Shops then return end
-local player = game:GetService("Players").LocalPlayer
-local storage = game:GetService("ReplicatedStorage")
-local runService = game:GetService("RunService")
-local world = game:GetService("Workspace")
-local state = {Closed = false, Open = false, Loading = false, Busy = false, Epoch = 0, NextBuy = 0, Rows = {}, Lines = {}}
-local catalog, reputation, talents, items
-
-local function finite(value)
-	return type(value) == "number" and value == value and value >= 0 and value < math.huge
-end
-local function log(message)
-	table.insert(state.Lines, string.format("%.3f %s", os.clock(), tostring(message):sub(1, 700)))
-	if #state.Lines > 80 then table.remove(state.Lines, 1) end
-	if type(writefile) ~= "function" then return end
-	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	pcall(writefile, "AnomalyHub/universal/beyond_nen_shop_test.txt", "BEYOND NEN REMOTE MERCHANT v2\nOnly explicit Buy clicks send one purchase(itemName) request. No movement or repeated requests.\nBalance observations do not prove an inventory grant; proximity threshold is not established.\n"
-		.. table.concat(state.Lines, "\n"))
-end
-local function getModule(parent, name)
-	local object = parent and parent:FindFirstChild(name)
-	if not object or not object:IsA("ModuleScript") then return nil, name .. " is not loaded" end
-	local ok, value = pcall(require, object)
-	if not ok or type(value) ~= "table" then return nil, "Could not read " .. name .. ": " .. tostring(value) end
-	return value
-end
-local function loadData()
-	local sharedFolder = storage:FindFirstChild("Shared")
-	local data = sharedFolder and sharedFolder:FindFirstChild("Data")
-	local a, err = getModule(data, "BasicMerchantData")
-	if not a then return nil, err end
-	local b; b, err = getModule(data, "ReputationPerks")
-	if not b then return nil, err end
-	local c; c, err = getModule(data, "Talents")
-	if not c then return nil, err end
-	if type(b.ApplyDiscount) ~= "function" or type(c.Reduction) ~= "function" then return nil, "Shop price functions are unavailable" end
-	local d = getModule(data and data:FindFirstChild("InventoryItems"), "ItemList")
-	return {Catalog = a, Reputation = b, Talents = c, Items = d}
-end
-local function priceFor(entry)
-	if type(entry) ~= "table" or not finite(entry.price) then return nil end
-	local ok, value = pcall(function()
-		local discounted = reputation.ApplyDiscount(entry.price, player:GetAttribute("Reputation"))
-		if not finite(discounted) then return nil end
-		if discounted > 0 then
-			local multiplier = talents.Reduction(player, "ShopDiscount")
-			if not finite(multiplier) then return nil end
-			discounted = math.max(1, math.floor(discounted * multiplier))
-		end
-		return discounted
-	end)
-	return ok and finite(value) and value or nil
-end
-local function purchaseRemote()
-	local packages = storage:FindFirstChild("Packages")
-	local index = packages and packages:FindFirstChild("_Index")
-	local found
-	for _, package in ipairs(index and index:GetChildren() or {}) do
-		if not package.Name:match("^sleitnick_knit@") then continue end
-		local knit = package:FindFirstChild("knit")
-		local services = knit and knit:FindFirstChild("Services")
-		local merchant = services and services:FindFirstChild("MerchantService")
-		local rf = merchant and merchant:FindFirstChild("RF")
-		local remote = rf and rf:FindFirstChild("purchase")
-		if remote and remote:IsA("RemoteFunction") then
-			if found and found ~= remote then return nil end
-			found = remote
-		end
-	end
-	return found
-end
-
-local function merchantDistance()
-	local character = player.Character
-	local origin = character and character:FindFirstChild("HumanoidRootPart")
-	if not origin or not origin:IsA("BasePart") then return nil end
-	local map = world:FindFirstChild("World")
-	local merchants = map and map:FindFirstChild("MerchantStore")
-	local nearest, name
-	for i, npc in ipairs(merchants and merchants:GetChildren() or {}) do
-		if i > 150 then break end
-		if npc:IsA("Model") and npc.Name ~= "Black Merchant" then
-			local root = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
-			if root and root:IsA("BasePart") then
-				local distance = (origin.Position - root.Position).Magnitude
-				if finite(distance) and (not nearest or distance < nearest) then nearest, name = distance, npc.Name end
-			end
-		end
-	end
-	return nearest, name
-end
-local entryCard = ui.Card(ui.Pages.Shops, "REMOTE MERCHANT // v2", "Browse the catalog anywhere. Use Buy beside the general merchant; distant purchases have not worked in testing.", 190)
-entryCard.LayoutOrder = 10
-local status = ui.Create("TextLabel", {
-	Name = "ShopStatus", Position = UDim2.fromOffset(14, 116), Size = UDim2.new(1, -28, 0, 36), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Ready to open the merchant.", TextColor3 = ui.Colors.Muted, TextSize = 11,
-	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-}, entryCard)
-local distanceLabel = ui.Create("TextLabel", {
-	Name = "MerchantDistance", Position = UDim2.fromOffset(14, 157), Size = UDim2.new(1, -28, 0, 20), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Merchant distance is shown when the catalog is open.", TextColor3 = ui.Colors.Muted, TextSize = 10,
-	TextXAlignment = Enum.TextXAlignment.Left,
-}, entryCard)
-local shopCard = ui.Card(ui.Pages.Shops, "MERCHANT INVENTORY", "Prices include your current reputation and shop discounts.", 458)
-shopCard.LayoutOrder, shopCard.Visible = 20, false
-local list = ui.Create("ScrollingFrame", {
-	Name = "MerchantItems", Position = UDim2.fromOffset(14, 68), Size = UDim2.new(1, -28, 0, 232), BackgroundColor3 = ui.Colors.Surface,
-	BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageColor3 = ui.Colors.Accent, AutomaticCanvasSize = Enum.AutomaticSize.Y,
-	CanvasSize = UDim2.new(),
-}, shopCard)
-ui.Create("UIListLayout", {Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder}, list)
-ui.Create("UIPadding", {PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5), PaddingLeft = UDim.new(0, 5)}, list)
-local detail = ui.Create("TextLabel", {
-	Name = "ItemDetail", Position = UDim2.fromOffset(14, 309), Size = UDim2.new(1, -28, 0, 78), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Select an item to see its details.", TextColor3 = ui.Colors.Text, TextSize = 11,
-	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-}, shopCard)
-local openButton, buyButton
-local function setStatus(text, color)
-	if state.Closed then return end
-	status.Text, status.TextColor3 = text, color or ui.Colors.Muted
-end
-local function clearRows()
-	for _, row in ipairs(state.Rows) do row.Connection:Disconnect(); row.Button:Destroy() end
-	table.clear(state.Rows)
-end
-local function updateSelection()
-	if state.Closed then return end
-	local name = state.Selected
-	local entry = catalog and name and catalog[name]
-	local price = priceFor(entry)
-	state.QuotedPrice = price
-	for _, row in ipairs(state.Rows) do
-		local rowEntry = catalog and catalog[row.Name]
-		local rowPrice = priceFor(rowEntry)
-		local stock = type(rowEntry) == "table" and rowEntry.stock
-		row.Button.Text = row.Name .. "    |    " .. (rowPrice and string.format("%s Jenni", rowPrice) or "Price unavailable")
-			.. (type(stock) == "number" and (stock <= 0 and "    SOLD OUT" or "    x" .. stock) or "")
-		row.Button.BackgroundColor3 = row.Name == name and ui.Colors.AccentSoft or ui.Colors.Surface
-	end
-	if not entry then
-		detail.Text = "Select an item to see its details."
-	else
-		local description = ""
-		for _, item in pairs(items or {}) do
-			if type(item) == "table" and item.ItemName == name then
-				description = type(item.Description) == "string" and item.Description:sub(1, 420) or ""; break
-			end
-		end
-		detail.Text = name .. "\n" .. (price and (tostring(price) .. " Jenni") or "Price unavailable") .. (description ~= "" and "\n" .. description or "")
-	end
-	buyButton.Text = state.Busy and "Waiting for response..." or (name and price and ("Buy 1 - " .. price .. " Jenni") or "Select an item")
-	buyButton.Active = state.Open and not state.Busy and price ~= nil
-end
-local function updateDistance()
-	local distance, name = merchantDistance()
-	distanceLabel.Text = distance and string.format("%s: %.0f studs away", name, distance) or "Merchant position is not loaded. Visit the general merchant to buy."
-end
-local function finishPurchase(attempt, outcome, message, warning)
-	if state.Pending ~= attempt then return end
-	state.Pending = nil; state.Busy = false
-	if state.Closed then return end
-	log("OUTCOME " .. outcome .. " item=" .. attempt.Name .. " expected=" .. attempt.Price .. " JenniBefore=" .. attempt.Funds
-		.. " JenniNow=" .. tostring(player:GetAttribute("Jenni")) .. " distanceAtRequest=" .. tostring(attempt.Distance))
-	if not state.Open or attempt.Epoch ~= state.Epoch then return end
-	updateSelection(); setStatus(message, warning and ui.Colors.Warning or nil)
-end
-local function checkPayment()
-	local attempt = state.Pending
-	if not attempt or not attempt.Returned then return end
-	local current = tonumber(player:GetAttribute("Jenni"))
-	if finite(current) and attempt.Price > 0 and math.abs(attempt.Funds - current - attempt.Price) < 0.001 then
-		finishPurchase(attempt, "EXPECTED_DEBIT_OBSERVED", tostring(attempt.Price) .. " Jenni deducted. Check your inventory for " .. attempt.Name .. ".")
-	elseif os.clock() >= attempt.Deadline then
-		finishPurchase(attempt, "UNCONFIRMED", "Purchase unconfirmed. Check your inventory; try beside the merchant if nothing arrived.", true)
-	end
-end
-local function render()
-	clearRows()
-	local rows = {}
-	for name, entry in pairs(catalog) do
-		if type(name) == "string" and #name <= 160 and type(entry) == "table" and finite(entry.price) then
-			table.insert(rows, {Name = name, Entry = entry})
-		end
-	end
-	table.sort(rows, function(a, b)
-		local aFeatured, bFeatured = a.Entry.featured == true, b.Entry.featured == true
-		if aFeatured ~= bFeatured then return aFeatured end
-		if a.Entry.price ~= b.Entry.price then return a.Entry.price < b.Entry.price end
-		return a.Name < b.Name
-	end)
-	for i, row in ipairs(rows) do
-		if i > 200 then break end
-		local button = ui.Create("TextButton", {
-			Name = "MerchantItem", LayoutOrder = i, Size = UDim2.new(1, -12, 0, 36), BackgroundColor3 = ui.Colors.Surface,
-			BorderSizePixel = 0, Font = Enum.Font.Gotham, Text = row.Name, TextSize = 11, TextColor3 = ui.Colors.Text,
-			TextWrapped = true, AutoButtonColor = false,
-		}, list)
-		local connection = button.Activated:Connect(function()
-			if state.Closed or not state.Open or state.Loading then return end
-			state.Selected = row.Name; updateSelection()
-		end)
-		table.insert(state.Rows, {Name = row.Name, Button = button, Connection = connection})
-	end
-	if state.Selected and not catalog[state.Selected] then state.Selected = nil end
-	updateSelection()
-	return #rows
-end
-local function openShop()
-	if state.Closed or state.Loading or state.Busy then return end
-	state.Epoch += 1
-	local epoch = state.Epoch
-	state.Loading = true
-	setStatus("Reading the merchant catalog...")
-	task.spawn(function()
-		local data, err = loadData()
-		state.Loading = false
-		if state.Closed or epoch ~= state.Epoch then return end
-		if not data then setStatus("Merchant unavailable. Try opening again.", ui.Colors.Warning); log("LOAD FAILED " .. tostring(err)); return end
-		catalog, reputation, talents, items = data.Catalog, data.Reputation, data.Talents, data.Items
-		state.Open = true; shopCard.Visible = true; openButton.Text = "Refresh Merchant"
-		local count = render()
-		setStatus(count > 0 and (tostring(math.min(count, 200)) .. " items. Select one below.") or "The merchant catalog is empty.")
-		updateDistance()
-		log("OPEN entries=" .. count .. " purchaseRemote=" .. tostring(purchaseRemote() ~= nil) .. " distance=" .. tostring(merchantDistance()))
-	end)
-end
-local function closeShop()
-	state.Epoch += 1; state.Open = false; state.Selected = nil
-	shopCard.Visible = false; openButton.Text = "Open Merchant"
-	clearRows(); setStatus(state.Busy and "Shop closed. An existing purchase request is still pending." or "Merchant closed.")
-end
-local function buy()
-	if state.Closed or not state.Open or state.Loading or state.Busy or os.clock() < state.NextBuy then return end
-	local name, quoted = state.Selected, state.QuotedPrice
-	local entry = name and catalog and catalog[name]
-	local price = priceFor(entry)
-	if not price then setStatus("Select an item with an available price.", ui.Colors.Warning); return end
-	if type(entry.stock) == "number" and entry.stock <= 0 then setStatus("This item is sold out.", ui.Colors.Warning); return end
-	if price ~= quoted then updateSelection(); setStatus("The price changed. Review it, then click Buy again.", ui.Colors.Warning); return end
-	local funds = tonumber(player:GetAttribute("Jenni"))
-	if not finite(funds) then setStatus("Your Jenni balance is unavailable.", ui.Colors.Warning); return end
-	if funds < price then setStatus("Not enough Jenni for this item.", ui.Colors.Warning); return end
-	local remote = purchaseRemote()
-	if not remote then setStatus("The merchant service is unavailable. Try again after it loads.", ui.Colors.Warning); log("NO PURCHASE REMOTE"); return end
-	state.Busy = true; state.NextBuy = os.clock() + 0.8
-	local epoch = state.Epoch
-	local attempt = {Name = name, Price = price, Funds = funds, Epoch = epoch, Distance = merchantDistance()}
-	state.Pending = attempt
-	updateSelection(); setStatus("Requesting " .. name .. "...")
-	log("PURCHASE item=" .. name .. " price=" .. price .. " JenniBefore=" .. funds .. " distance=" .. tostring(attempt.Distance))
-	task.spawn(function()
-		-- Exactly the captured client signature: MerchantService.purchase(itemName).
-		-- No cost/quantity/location override, no retry, and no purchase on selection.
-		if state.Closed or not state.Open or epoch ~= state.Epoch then state.Busy = false; state.Pending = nil; return end
-		local result = table.pack(pcall(remote.InvokeServer, remote, name))
-		if state.Closed then return end
-		log("RETURN ok=" .. tostring(result[1]) .. " first=" .. tostring(result[2]) .. " second=" .. tostring(result[3])
-			.. " JenniAfter=" .. tostring(player:GetAttribute("Jenni")))
-		if not result[1] then finishPurchase(attempt, "REQUEST_ERROR", "Purchase request failed. Check your inventory before retrying.", true)
-		elseif result[2] == false then finishPurchase(attempt, "DECLINED", "The server declined the purchase. Check the game's notification.", true)
-		elseif price == 0 then finishPurchase(attempt, "FREE_ITEM_UNCONFIRMED", "Request returned for " .. name .. ". Check your inventory for the free item.")
-		else
-			attempt.Returned, attempt.Deadline = true, os.clock() + 3
-			if state.Open and epoch == state.Epoch then setStatus("Waiting for the purchase to appear...") end
-			checkPayment()
-		end
-	end)
-end
-openButton = ui.FitColumn(ui.Button(entryCard, "Open Merchant", 0, 0, 180, openShop, ui.Colors.AccentSoft), 0, 72)
-ui.FitColumn(ui.Button(entryCard, "Close Merchant", 0, 0, 180, closeShop), 1, 72)
-buyButton = ui.Button(shopCard, "Select an item", 14, 402, 220, buy, ui.Colors.AccentSoft)
-buyButton.Size = UDim2.new(1, -28, 0, 36)
-local elapsed = 0
-controller.Connect(runService.Heartbeat, function(delta)
-	if state.Closed then return end
-	checkPayment()
-	if not state.Open then return end
-	elapsed += delta
-	if elapsed >= 1 then elapsed = 0; updateSelection(); updateDistance() end
-end)
-controller.RegisterCleanup(function()
-	state.Closed = true; state.Open = false; state.Pending = nil; state.Busy = false; state.Epoch += 1; clearRows()
-end)
-controller.OpenBeyondNenMerchant = openShop
 
 end)()
 ;(function()
@@ -3658,7 +3116,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v25. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v26. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3700,6 +3158,23 @@ local weaponProfiles = {
 		-- v16: three separate damage snapshots at .887/.904/.871, speed1,
 		-- distances3.76-6.60. Separate from ordinary combo and looping14241195451.
 		["17050689141"] = {Phase = .85, Name = "Fists long-windup strike (test)"},
+	}},
+	olympusshield = {Label = "Olympus Shield", Reach = 10, MaxDistance = 13, Animations = {
+		-- v25 records explicit Character.Weapon/Tool="Olympus Shield".
+		-- These are contact seeds from damage snapshots, not verified hitboxes
+		-- or successful automatic parries. Never select by the NPC's name.
+		-- Three separate swings hit at .431/.449, speed1.036, distance3.21-9.21.
+		-- One rear hit at3.21/facing-.996 gets a narrowly bounded close radius.
+		["73449931119965"] = {Phase = .40, CloseRangeRadius = 4, Name = "shield strike A (test)"},
+		-- Single observed contacts: .557 at6.53/facing.619 and .380 at7.07/-.323.
+		["93672385277810"] = {Phase = .53, Name = "shield strike B (test)"},
+		["88180283191055"] = {Phase = .35, MinFacing = -.4, Name = "shield strike C (test)"},
+		-- Two separate windups hit at .937/.921, speed1, distance15.84/17.01.
+		["105757645584829"] = {Phase = .90, Reach = 18, MaxDistance = 21, Name = "shield windup (test)"},
+		-- Five damage pulses within one track: .871/1.067/1.267/1.500/1.917.
+		-- Do not invent contacts in the unobserved gap or infer them from
+		-- unmatched F/parry events; their source/animation association is unknown.
+		["131524195476030"] = {Phases = {.84, 1.04, 1.24, 1.47, 1.89}, MinFollowupLead = .08, Reach = 17, MaxDistance = 20, Name = "shield multi-hit (test)"},
 	}},
 	bigpitchfork = {Label = "BigPitchfork", Animations = {
 		-- Captured Character.Weapon="BigPitchfork". No actor-name checks.
@@ -3745,7 +3220,9 @@ local weaponProfiles = {
 		-- Per-ID trial geometry, not measured hitboxes. Keep phase seeds.
 		["109115837378623"] = {Phase = .62, Reach = 15, MinFacing = -.85, Name = "Fox Bear strike A"},
 		["120428998246938"] = {Phase = .48, Reach = 17, MaxDistance = 19, MinFacing = -.45, Name = "Fox Bear strike B (test)"},
-		["81775052619110"] = {Phase = .40, Reach = 15, MaxDistance = 18, MinFacing = -.65, Name = "Fox Bear strike C (test)"},
+		-- v25: height-8.65 delayed C until .017s remained, then FreshHitStun
+		-- and damage. Only C and rapid get height9; other Bear bounds stay8.
+		["81775052619110"] = {Phase = .40, Reach = 15, MaxDistance = 18, MaxVertical = 9, MinFacing = -.65, Name = "Fox Bear strike C (test)"},
 		["114094657247629"] = {Phase = .40, Reach = 17, MaxDistance = 19, MinFacing = -.7, Name = "Fox Bear strike D (test)"},
 		["119367900570682"] = {Phase = .62, Name = "Fox Bear strike E (test)"},
 		-- Two v12 sequences capture the rapid skill's first contact at phases
@@ -3758,7 +3235,8 @@ local weaponProfiles = {
 		-- v19: eight matching damage pulses at22.88-26.13 studs, including
 		-- facing-.953. First skip projected26.76. This skill's facing cannot
 		-- identify safety; retain bounded current/projected range and elevation.
-		["85729441475501"] = {Phases = {1.55, 1.67, 1.78, 1.89, 2.01, 2.13, 2.24, 2.36}, MinFollowupLead = .08, Reach = 28, MaxDistance = 30, MinFacing = -1, Name = "Fox Bear rapid skill (test)"},
+		-- v25: height8.14 skipped first chance at .163s lead, delaying it to.033.
+		["85729441475501"] = {Phases = {1.55, 1.67, 1.78, 1.89, 2.01, 2.13, 2.24, 2.36}, MinFollowupLead = .08, Reach = 28, MaxDistance = 30, MaxVertical = 9, MinFacing = -1, Name = "Fox Bear rapid skill (test)"},
 		-- v12 records five contacts at 1.442/1.896/2.246/2.821/3.712, up to
 		-- 13.15 studs. v10 corroborates 1.871/3.708 and elapsed first/fourth
 		-- contacts, but exact move names and automatic outcomes remain unknown.
@@ -3899,7 +3377,7 @@ local targetModes = {"NPCs", "Players", "Both"}
 local savedTargets = controller.State and controller.State.BeyondNenParryTargets
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {},
 	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "NPCs"}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v25", "Close dagger attacks and extended pistol coverage. Choose NPCs, Players, or Both below; changing targets stops the test.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v26", "Olympus Shield trial coverage and two Bear height fixes. Choose NPCs, Players, or Both below; changing targets stops the test.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3912,10 +3390,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v25 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v26 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
+		.. "\nOlympus Shield v26: five exact animations from explicit weapon metadata. Strike A phase.40/reach10/max13/close4 (three damage samples); B phase.53 and C phase.35/facing-.4 (one sample each). Windup phase.90/reach18/max21 (two samples). Multi-hit phases.84/1.04/1.24/1.47/1.89, reach17/max20, follow-up lead.08 (one five-hit episode). Height8, normal input/cooldown gates. No automatic success established, no additional contacts inferred from unmatched inputs/results, and other shield animations remain unmapped."
 		.. "\nFists: 13 animations. Pitchfork: 6. BigPitchfork: 8. Rifle: 6 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
 		.. "\nShockwork Pistols v25: four exact animations from explicit weapon metadata, with 14/10/14/1 candidate contact windows. BurstA includes late phase3.08, reach23/max26/facing.15. BurstB reach30/max31/height30/facing-.4 after repeated damage across vertical25. Multi-hit76637609852449 extends through3.28, reach15/max18, close radius10, otherwise facing-.5. Close strike10/max13/facing-.95. Other height bounds remain8. Repeated contacts require .08s lead and normal cooldowns; no Rifle sustained-guard rule is inherited. These are trial bounds/contact seeds, not measured hitboxes, shot counts or proof every contact is parryable. Other pistol animations stay unmapped."
 		.. "\nFists v20: alternate first strike reach12/max15, close radius10; second reach11/max14, close radius2; third reach11/max14. Close radius uses current distance without facing/velocity prediction, while retaining exact animation timing and elevation8. Trial bounds from observed damage, not measured hitboxes. Phase seeds and other Fists variants unchanged."
@@ -3923,7 +3402,7 @@ local function save(reason)
 		.. "\nRifle v18 confirmed6 close-attack and3 burst parries. v19 burst-only guard trial: initial F hold up to.30s; a matched ParryResult extends it through phase1.65, capped at2s total. Accepted alone never extends guard. Rejection, stopped/reused/paused track, target loss, focus/menu/chat/death/travel/unload release normally. Sustained block is not counted as another parry; whether it protects later bullets needs in-game testing."
 		.. "\nFists17050689141 uses a new .85 phase seed from three damage samples. Looping14241195451 remains unmapped: repeating damage alone does not establish its parry windows."
 		.. "\nWhen a player's CombatStyle still says Fists, exact recorded sword/dagger/bat IDs select their profile per swing. Explicit conflicting Character.Weapon is never overridden. Default reach9; Sword12; Bat11; Dagger repeated strike18/long-windup13. BigPitchfork multi-hit facing minimum0; unspecified directional attacks .15."
-		.. "\nBear v21 geometry trials: strikes A/B/C/D/E reach15/17/15/17/13, max16/19/18/19/16, facing minimum-.85/-.45/-.65/-.7/.15. Rapid reach28/max30 accepts every facing after eight matching damage pulses at23-26 studs, including rear angles. Extended reach20/max23/facing-.8. Ranged45/max48 and additional28/max32/facing-.8 unchanged. All retain elevation8, timing, input backoff and game cooldown checks. These are response bounds from observed misses, not measured hitboxes or proof of parryability."
+		.. "\nBear geometry trials: strikes A/B/C/D/E reach15/17/15/17/13, max16/19/18/19/16, facing minimum-.85/-.45/-.65/-.7/.15. Rapid reach28/max30 accepts every facing after eight matching damage pulses at23-26 studs, including rear angles. Extended reach20/max23/facing-.8. Ranged45/max48 and additional28/max32/facing-.8 unchanged. v26 gives only C/rapid height9 after vertical-8.65/+8.14 delayed inputs until.017/.033s lead; other Bear heights remain8. Timing, input backoff and cooldown checks remain. These are trial response bounds, not measured hitboxes or proof of parryability."
 		.. "\nBear rapid/extended skills require at least .08s before a follow-up contact; otherwise skip it and consider later contacts without bypassing cooldown. This experimental cutoff does not promise escape from hitstun. First contacts and other weapon timings retain their previous rules."
 		.. "\nBigPitchfork v15:16 confirmed parries/18 inputs; missing attacks and later multi-hit contacts accounted for most damage. New timings are test seeds, and the third multi-hit phase is inferred from a matched result between direct phase samples."
 		.. "\nLOCAL_RECOVERY v22: own first/second/third Fists animations72916536471630/82905481242246/83801701641510 defer below phases.37/.40/.42. New tests include missing requests at.342/.358 for first, .342 for second and .280 for third; observed requests at.373/.416/.440, including confirmed parries after second/third. These are trial thresholds, not proven unlock boundaries: later-phase misses also exist. Track speed updates remaining wait. No action is cancelled; the pending contact stays available and expired contacts are skipped normally. Other punches and skills are not gated by inference."
@@ -4467,7 +3946,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear mappedWeaponAnimations=72 duration=90")
+	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield mappedWeaponAnimations=77 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

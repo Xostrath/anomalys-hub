@@ -4061,7 +4061,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v34. Pistol burst retries + automatic boss targeting.
+-- Beyond Nen auto-parry test v35. Close pistol threats + result attribution.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -4273,7 +4273,9 @@ local weaponProfiles = {
 		-- v30 confirmed the first parry after .282s with CancelMove=false;
 		-- follow-up damage started after F released. Apply the same bounded,
 		-- confirmation-only guard as the other continuing pistol sequence.
-		["73241145651241"] = {Phases = {.34, .50, .63, .75, 1.10, 1.22, 1.35, 1.82, 1.92, 2.06, 2.18, 2.32, 2.40, 3.08}, MinFollowupLead = .08, GuardThroughPhase = 3.20, GuardMaxDuration = 3.5, GuardIfUncancelled = true, Reach = 23, MaxDistance = 26, Name = "pistols burst A (test)"},
+		-- v34 skipped its opener at1.89/facing-.727, then received hits at
+		-- 2.02,2.49,3.18,4.86 (last two behind). Add only a6-stud close response.
+		["73241145651241"] = {Phases = {.34, .50, .63, .75, 1.10, 1.22, 1.35, 1.82, 1.92, 2.06, 2.18, 2.32, 2.40, 3.08}, MinFollowupLead = .08, GuardThroughPhase = 3.20, GuardMaxDuration = 3.5, GuardIfUncancelled = true, CloseRangeRadius = 6, Reach = 23, MaxDistance = 26, Name = "pistols burst A (test)"},
 		-- Two runs: pulses at .800/.825 through1.833/1.883, speed1, range
 		-- 25.05-26.46, facing-.060 to-.337. Final receipt has larger damage;
 		-- these are observed contact windows, not an established shot count.
@@ -4302,9 +4304,11 @@ local weaponProfiles = {
 		-- angle-.923. Geometry and timing seeds still require an automatic test.
 		["83129479286148"] = {Phase = .43, Reach = 10, MaxDistance = 13, MinFacing = -.95, Name = "pistols close strike (test)"},
 		-- Two isolated contacts at.430/.461, speed1.064, distance4.27/6.23.
-		["126546963227585"] = {Phase = .40, Reach = 10, MaxDistance = 13, Name = "pistols additional close strike (test)"},
+		-- v34 hit at4.68/facing-.281 after a5.08/facing-.192 geometry skip.
+		-- Keep the phase that parried three times; allow close6 for this ID.
+		["126546963227585"] = {Phase = .40, Reach = 10, MaxDistance = 13, CloseRangeRadius = 6, Name = "pistols additional close strike (test)"},
 		-- v30 isolated Action contact at .550/speed1.064/distance5.31.
-		-- Single-sample timing trial; no automatic parry confirmation yet.
+		-- v34 matched an uncancelled parry after .165s at this timing.
 		["78460118661143"] = {Phase = .52, Reach = 10, MaxDistance = 13, Name = "pistols additional strike B (test)"},
 		-- Shared ID, separately observed under explicit Shockwork Pistols:
 		-- v27 .572 and latest .576/.589, speed1.04, distances7.72/10.62.
@@ -4410,7 +4414,7 @@ state.EffectiveTargetMode = state.TargetMode == "Auto" and "Both" or state.Targe
 local function targetLabel()
 	return "Targets: " .. (state.TargetMode == "Auto" and ("Auto / " .. state.EffectiveTargetMode .. (state.BossModel and " (boss)" or "")) or state.TargetMode)
 end
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v34", "Auto watches players and NPCs, switching to NPC-only during a detected boss fight.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v35", "Auto watches players and NPCs, switching to NPC-only during a detected boss fight.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -4428,10 +4432,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v34 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v35 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nEFFECTIVE_TARGETS=" .. state.EffectiveTargetMode
+		.. "\nv35: two v34/Auto captures show boss-only transitions and return to Both; nine unconflicted matched results across them, plus one result after a rejected request and intervening unmatched F-DOWN. BurstB retries occurred but remain unproven: later requests were rejected FreshHitStun. Keep v34 timing/cooldown behavior. Only burstA73241145651241 and strike126546963227585 add close radius6 after recorded facing skips at1.89/5.08 studs then nearby damage. No new timing seeds or weapon IDs. Results after rejection or an intervening unmatched key DOWN are counted separately as uncertain, never extending a guard; a later rejection reclassifies earlier matches. Source of unmatched inputs is unknown."
 		.. "\nv34 overrides burstB73875507755468 extended-guard notes below: v32 matched the opening parry, then seven4.967 damage ticks arrived with HoldingBlock=true, the same amount as unheld ticks in that run. Keep its .30s first tap and existing phase seeds; later contacts use normal .16s taps through all existing cooldown, live geometry and own-punch recovery gates. A matched result no longer extends this ID's hold. Only final contact10 gets close radius6 after a3.59/facing-.975 skip then damage5.42/facing-.726; other contacts retain facing-.45. This is a retry/geometry trial, not proven repeat parries or a measured hitbox. Other burst guards remain unchanged. Latest capture was v32/NPCs and does not validate v33 automatic targeting."
 		.. "\nv33 Auto targeting: Both normally; NPCs while a catalog-classified boss has a mapped threatening attack within60 studs. Detection uses current attack phase/speed plus the existing per-attack range/facing/height checks, up to .8s before contact. Boss itself is prioritized before the nearest-eight limit; player characters never count as bosses. Return to Both when the boss dies/leaves60 studs or no threat has been seen for6s. This is a combat-proximity heuristic, not server-confirmed aggro; an idle nearby boss does not trigger it. Unknown attacks cannot establish engagement. Explicit NPCs/Players/Both modes remain available."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
@@ -4463,9 +4468,9 @@ local function save(reason)
 		.. "\nKEY_SEND records this test's calls. BLOCK_EVENT consumes at most one same-direction/key send within1s; unmatched means no pending send, not manual input. Timing correlation is not proof of origin. processed=true is the engine flag, not a confirmed rejection. SELF_ACTIONS records bounded local animation IDs/phases; no action is cancelled or replayed."
 		.. "\nDAMAGE_NEARBY includes the bounded watched rigs allowed by TARGETS within 60 studs and up to 12 playing tracks each, of any priority/loop state, with totalTracks to expose the sampling limit. Excluded player/NPC rigs are not watched. Proximity is not proof of damage attribution. Unmapped/looping tracks remain diagnostic only."
 		.. "\nUnknown weapons and animation variants are logged and skipped; a Fists label alone does not establish every fist animation's timing."
-		.. "\nConfirmed counts require ParryResult with local Parrier, matching attacker and a recent test input. Accepted is only an input acknowledgment."
+		.. "\nMatched counts require ParryResult with local Parrier, matching attacker and a recent test input, without a rejected request or intervening unmatched key DOWN. This remains temporal attribution, not proof of causation. Conflicting results are retained separately as uncertain. Accepted is only an input acknowledgment."
 		.. "\n" .. table.concat(state.Lines, "\n") .. "\nSTATUS=" .. tostring(reason)
-		.. string.format("\nTOTAL inputs=%d parryResults=%d rejected=%d damageEvents=%d", state.Presses, state.Parries, state.Rejected, state.DamageEvents)
+		.. string.format("\nTOTAL inputs=%d parryResults=%d rejected=%d damageEvents=%d uncertainParryResults=%d", state.Presses, state.Parries, state.Rejected, state.DamageEvents, state.UncertainParries)
 	if type(writefile) ~= "function" then return false end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
 	local saved = pcall(writefile, path, state.Report)
@@ -4474,6 +4479,7 @@ local function save(reason)
 end
 local function show(message)
 	status.Text = message .. "\nInputs: " .. (state.Presses or 0) .. " | Parry results: " .. (state.Parries or 0) .. " | Rejected: " .. (state.Rejected or 0)
+		.. ((state.UncertainParries or 0) > 0 and ("\nUncertain results: " .. state.UncertainParries) or "")
 end
 local function gate(reason)
 	if state.Gate ~= reason then state.Gate = reason; note("GATE " .. reason) end
@@ -4539,6 +4545,11 @@ local function blockEvent(direction, input, processed)
 		end
 	end
 	local attempt = matched and matched.Attempt
+	if direction == "DOWN" and not matched and state.LastAttempt and now - state.LastAttempt.At <= .8 then
+		-- No pending send identifies this event. Do not assign its source or
+		-- attribute subsequent results to the earlier automatic press.
+		state.LastAttempt.UnmatchedDownAfter = now
+	end
 	if attempt then
 		if direction == "DOWN" then attempt.EngineDownAt, attempt.EngineDownProcessed = now, processed == true
 		else attempt.EngineUpAt, attempt.EngineUpProcessed = now, processed == true end
@@ -4885,12 +4896,18 @@ local function feedback(name, direction, args, started)
 			end
 		elseif direction == "IN event" and args[1] == "ParryDecision" then
 			local attempt = state.Attempts[args[2]]
-			if not attempt or attempt.Decision then return end
+			if not attempt or attempt.Decision == "Rejected" or attempt.Decision == args[3] then return end
+			if attempt.Decision == "Accepted" and args[3] ~= "Rejected" then return end
 			attempt.Decision = args[3]
 			note("DECISION id=" .. tostring(args[2]) .. " " .. tostring(args[3]) .. " reason=" .. tostring(args[4])
 				.. " requestDelay=" .. string.format("%.3f", now - (attempt.RequestAt or attempt.At)))
 			if args[3] == "Rejected" then
 				state.Rejected += 1
+				for _, resultId in ipairs(attempt.CountedResults or {}) do
+					state.Parries -= 1; state.UncertainParries += 1
+					note("PARRY_RECLASSIFIED id=" .. tostring(resultId) .. " input=" .. attempt.Serial .. " reason=late-rejected-request")
+				end
+				attempt.CountedResults = nil
 				combatSnapshot("rejected input=" .. attempt.Serial .. " reason=" .. tostring(args[4]), player.Character)
 				if state.Held and state.Held.Attempt == attempt and state.Held.GuardThroughPhase then release() end
 				local delay = args[4] == "Cooldown" and tonumber(args[5]) or .12
@@ -4904,7 +4921,15 @@ local function feedback(name, direction, args, started)
 		if not id or state.Results[id] then return end; state.Results[id] = true
 		local attempt = state.LastAttempt
 		if attempt and attempt.Model == data.Attacker and now - attempt.At <= .8 then
+			local uncertain = attempt.Decision == "Rejected" and "rejected-request" or (attempt.UnmatchedDownAfter and "intervening-key-down")
+			if uncertain then
+				state.UncertainParries += 1
+				note("UNCERTAIN_PARRY_RESULT id=" .. tostring(id) .. " input=" .. attempt.Serial .. " actor=" .. data.Attacker.Name
+					.. " after=" .. string.format("%.3f", now - attempt.At) .. " reason=" .. uncertain)
+				return
+			end
 			state.Parries += 1
+			attempt.CountedResults = attempt.CountedResults or {}; table.insert(attempt.CountedResults, id)
 			local held = state.Held
 			if held and held.Attempt == attempt and held.GuardThroughPhase and not held.GuardConfirmed
 				and (not held.GuardIfUncancelled or data.CancelMove == false) then
@@ -5096,7 +5121,7 @@ local function start()
 	state.NextSync, state.NextPing, state.NextSave, state.Backoff = 0, 0, 0, 0
 	state.Gate, state.LastStep, state.RigSerial = nil, nil, 0
 	state.KeySends, state.SendSequence = {}, 0
-	state.Presses, state.Parries, state.Rejected, state.DamageEvents, state.Lead = 0, 0, 0, 0, .145
+	state.Presses, state.Parries, state.Rejected, state.DamageEvents, state.UncertainParries, state.Lead = 0, 0, 0, 0, 0, .145
 	state.Epoch = (state.Epoch or 0) + 1
 	local ok, nonce = pcall(function() return HttpService:GenerateGUID(false) end)
 	if not ok then nonce = tostring(math.floor(os.clock() * 1000000)) .. "_" .. state.Epoch end

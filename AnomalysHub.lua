@@ -3116,7 +3116,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v28. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v29. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3313,7 +3313,9 @@ local weaponProfiles = {
 		-- speed1, range7.65-20.79. Missing pulses are not invented between them.
 		-- Three later runs also hit at phases3.108/3.121/3.133 after the old
 		-- final window. Preserve the earlier seeds and add only this late contact.
-		["73241145651241"] = {Phases = {.40, .50, .63, .75, 1.10, 1.22, 1.35, 1.82, 1.92, 2.06, 2.18, 2.32, 2.40, 3.08}, MinFollowupLead = .08, Reach = 23, MaxDistance = 26, Name = "pistols burst A (test)"},
+		-- Latest v27: an idle opening tap at.250 preceded damage.404 by154ms,
+		-- but got FreshHitStun. Advance only the first seed by60ms as a trial.
+		["73241145651241"] = {Phases = {.34, .50, .63, .75, 1.10, 1.22, 1.35, 1.82, 1.92, 2.06, 2.18, 2.32, 2.40, 3.08}, MinFollowupLead = .08, Reach = 23, MaxDistance = 26, Name = "pistols burst A (test)"},
 		-- Two runs: pulses at .800/.825 through1.833/1.883, speed1, range
 		-- 25.05-26.46, facing-.060 to-.337. Final receipt has larger damage;
 		-- these are observed contact windows, not an established shot count.
@@ -3324,10 +3326,19 @@ local weaponProfiles = {
 		-- Previously only .48/.98 were mapped. Independent v24 runs show a
 		-- continuing train at1.104-2.450 plus a final hit3.312/3.337 (speed1).
 		-- Rear hits at3.77-6.09 studs justify a close radius for this ID only.
-		["76637609852449"] = {Phases = {.48, .98, 1.10, 1.23, 1.36, 1.49, 1.62, 1.75, 1.88, 2.02, 2.17, 2.30, 2.43, 3.28}, MinFollowupLead = .08, Reach = 15, MaxDistance = 18, CloseRangeRadius = 10, MinFacing = -.5, Name = "pistols multi-hit strike (test)"},
+		-- Latest v27 confirmed the opener with CancelMove=false, then damage
+		-- continued after F released. Only a matched, uncancelled parry extends
+		-- this guard through3.45 (3.5s hard cap); Accepted alone never does.
+		-- Later damage reached16.15, with a rear hit11.09/facing-.573.
+		["76637609852449"] = {Phases = {.48, .98, 1.10, 1.23, 1.36, 1.49, 1.62, 1.75, 1.88, 2.02, 2.17, 2.30, 2.43, 3.28}, MinFollowupLead = .08, GuardThroughPhase = 3.45, GuardMaxDuration = 3.5, GuardIfUncancelled = true, Reach = 18, MaxDistance = 21, CloseRangeRadius = 13, MinFacing = -.5, Name = "pistols multi-hit strike (test)"},
 		-- Two samples .452/.465 at speed1.064, distances8.62/5.28; one rear
 		-- angle-.923. Geometry and timing seeds still require an automatic test.
 		["83129479286148"] = {Phase = .43, Reach = 10, MaxDistance = 13, MinFacing = -.95, Name = "pistols close strike (test)"},
+		-- Two isolated contacts at.430/.461, speed1.064, distance4.27/6.23.
+		["126546963227585"] = {Phase = .40, Reach = 10, MaxDistance = 13, Name = "pistols additional close strike (test)"},
+		-- One two-hit episode at1.525/2.021, speed1, distance19.46/13.39.
+		-- First facing-.693; exact move identity and parryability unverified.
+		["118856732820265"] = {Phases = {1.49, 1.99}, Reach = 21, MaxDistance = 24, MinFacing = -.75, Name = "pistols two-hit skill (test)"},
 	}},
 	sword = {Label = "Sword (recorded)", Reach = 12, MaxDistance = 15, Animations = {
 		-- User identified "achive sword"; later equipment data says Archive Sword.
@@ -3395,7 +3406,7 @@ local targetModes = {"NPCs", "Players", "Both"}
 local savedTargets = controller.State and controller.State.BeyondNenParryTargets
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {},
 	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "NPCs"}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v28", "Dagger approach detection and clearer target status. Choose NPCs, Players, or Both below; changing targets stops the test.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v29", "Shockwork Pistols: new attacks and guard after a confirmed burst parry. Choose NPCs, Players, or Both below.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3408,14 +3419,15 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v28 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v29 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
+		.. "\nShockwork Pistols v29: six mapped animations. BurstA first seed.40->.34 after a ready opening tap at.250 still got FreshHitStun; later contacts unchanged. Multi-hit76637609852449 retains phases, expands reach18/current21/close radius13 after damage at16.15 and rear11.09. Initial F lasts up to.30; only matched ParryResult with CancelMove=false extends guard through phase3.45, capped3.5s. Accepted, cancelled or ambiguous results do not extend it. This is held-block protection after a parry, not repeated perfect parries; live benefit unverified. New126546963227585 phase.40/reach10/max13 from two close hits;118856732820265 phases1.49/1.99/reach21/max24/facing-.75 from one two-hit episode. No boss-name filter or own-skill bypass."
 		.. "\nDagger v28: only113521135913624 expands to current/projected distance32 at the existing phase.52. v26/v27 non-periodic contacts reached15.23/19.32; v27 skipped atcurrent28.36/projected31.41 before closing to19.32 in.202s. This is an approach-detection trial, not a32-stud hitbox claim. Facing.15, height8, other Dagger timings/ranges and own-skill handling remain unchanged. Periodic damage and single uncertain skill associations do not create new profiles. No eligible targets now gets an explicit status; the selected mode is never changed automatically."
 		.. "\nOlympus Shield v27: eight exact animations from explicit weapon metadata. A phase.40/reach10/max13/close4 retains v26's matched parry. B advances.53 to.42 after two damage receipts at.449; C stays.35/facing-.4. Windup stays.90, expands to reach32/max35 after damage at23.74/31.52. Multi-hit phases.84/1.00/1.22/1.41/1.62/1.89, reach20/max23, follow-up lead.08 after a second episode reached18.94 and revealed the1.650 contact. New D phase.44, ranged skill1.13/reach32/max35 (two samples), additional strike.76 (one sample). Height8 and normal input/cooldown gates remain. These are trial timings/bounds, not guaranteed hitboxes or parryability. Overlapping71522785988111/84503197252950 stay unmapped; unmatched inputs/results do not establish timing or success."
 		.. "\nFists: 13 animations. Pitchfork: 6. BigPitchfork: 8. Rifle: 6 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
-		.. "\nShockwork Pistols v25: four exact animations from explicit weapon metadata, with 14/10/14/1 candidate contact windows. BurstA includes late phase3.08, reach23/max26/facing.15. BurstB reach30/max31/height30/facing-.4 after repeated damage across vertical25. Multi-hit76637609852449 extends through3.28, reach15/max18, close radius10, otherwise facing-.5. Close strike10/max13/facing-.95. Other height bounds remain8. Repeated contacts require .08s lead and normal cooldowns; no Rifle sustained-guard rule is inherited. These are trial bounds/contact seeds, not measured hitboxes, shot counts or proof every contact is parryable. Other pistol animations stay unmapped."
+		.. "\nShockwork Pistols v25 baseline (overridden by v29 above): four exact animations from explicit weapon metadata, with 14/10/14/1 candidate contact windows. BurstA includes late phase3.08, reach23/max26/facing.15. BurstB reach30/max31/height30/facing-.4 after repeated damage across vertical25. Multi-hit76637609852449 extends through3.28, reach15/max18, close radius10, otherwise facing-.5. Close strike10/max13/facing-.95. Other height bounds remain8. Repeated contacts require .08s lead and normal cooldowns; v29 adds confirmed-parry guard only to the multi-hit strike. These are trial bounds/contact seeds, not measured hitboxes, shot counts or proof every contact is parryable. Other pistol animations stay unmapped."
 		.. "\nFists v20: alternate first strike reach12/max15, close radius10; second reach11/max14, close radius2; third reach11/max14. Close radius uses current distance without facing/velocity prediction, while retaining exact animation timing and elevation8. Trial bounds from observed damage, not measured hitboxes. Phase seeds and other Fists variants unchanged."
 		.. "\nRifle v16 had zero automatic inputs because it was unmapped. v18 added trial strike timings and eleven burst contact windows, not an established shot count. Burst reach35/max38 and strike A reach14/max17 are separate from default melee bounds. Burst follow-ups need .08s lead and respect game cooldown. Projectile speed/distance delay and full attack coverage remain unverified."
 		.. "\nRifle v18 confirmed6 close-attack and3 burst parries. v19 burst-only guard trial: initial F hold up to.30s; a matched ParryResult extends it through phase1.65, capped at2s total. Accepted alone never extends guard. Rejection, stopped/reused/paused track, target loss, focus/menu/chat/death/travel/unload release normally. Sustained block is not counted as another parry; whether it protects later bullets needs in-game testing."
@@ -3777,7 +3789,8 @@ local function feedback(name, direction, args, started)
 		if attempt and attempt.Model == data.Attacker and now - attempt.At <= .8 then
 			state.Parries += 1
 			local held = state.Held
-			if held and held.Attempt == attempt and held.GuardThroughPhase and not held.GuardConfirmed then
+			if held and held.Attempt == attempt and held.GuardThroughPhase and not held.GuardConfirmed
+				and (not held.GuardIfUncancelled or data.CancelMove == false) then
 				held.GuardConfirmed = true
 				note("BURST_GUARD confirmed input=" .. attempt.Serial .. " untilPhase=" .. held.GuardThroughPhase)
 			end
@@ -3867,7 +3880,7 @@ local function step()
 	if state.Held then
 		gate("auto-key-held")
 		local weapon = weaponProfiles[state.LastAttempt.Weapon]
-		show(state.Held.GuardConfirmed and "Guarding the remaining Rifle burst (test)" or ("Block tap: " .. (weapon and weapon.Label or "Unknown weapon"))); return
+		show(state.Held.GuardConfirmed and ("Guarding remaining burst: " .. (weapon and weapon.Label or "Unknown weapon")) or ("Block tap: " .. (weapon and weapon.Label or "Unknown weapon"))); return
 	end
 	if Input:IsKeyDown(key) or model:GetAttribute("HoldingBlock") == true then
 		gate(Input:IsKeyDown(key) and "physical-key-held" or "game-block-held"); show("Block key/game block active; waiting for release"); return
@@ -3914,7 +3927,7 @@ local function step()
 			local geometryOk = distance <= (profile.MaxDistance or weapon.MaxDistance or 12) and projected.Magnitude <= (profile.Reach or weapon.Reach or 9) and facingDot >= minimumFacing
 			if radialFollowup then geometryOk = distance <= radialFollowup elseif closeThreat then geometryOk = true end
 			if geometryOk and math.abs(delta.Y) <= (profile.MaxVertical or 8) then
-				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1, GuardThroughPhase = profile.GuardThroughPhase, GeometryMode = geometryMode} end
+				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1, GuardThroughPhase = profile.GuardThroughPhase, GuardMaxDuration = profile.GuardMaxDuration, GuardIfUncancelled = profile.GuardIfUncancelled, GeometryMode = geometryMode} end
 			elseif swing.GeometryContact ~= contact then
 				swing.GeometryContact = contact
 				note(string.format("SKIP actorId=%d weapon=%s animation=%s contact=%d reason=geometry phase=%.3f eta=%.3f distance=%.2f projected=%.2f vertical=%.2f facing=%.3f mode=%s", rig.Id, weaponKey, swing.Asset, contact, phase, remaining, distance, projected.Magnitude, delta.Y, facingDot, geometryMode))
@@ -3947,7 +3960,8 @@ local function step()
 	state.LastAttempt = {At = now, Key = key, Self = model, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
 	state.PendingInputs[state.LastAttempt.Serial] = state.LastAttempt
 	state.Held = {Key = key, Until = now + (best.GuardThroughPhase and .30 or .16), Attempt = state.LastAttempt,
-		Track = best.Track, Swing = best.Swing, Model = best.Model, GuardThroughPhase = best.GuardThroughPhase, GuardDeadline = now + 2}
+		Track = best.Track, Swing = best.Swing, Model = best.Model, GuardThroughPhase = best.GuardThroughPhase,
+		GuardIfUncancelled = best.GuardIfUncancelled, GuardDeadline = now + math.clamp(best.GuardMaxDuration or 2, .3, 3.5)}
 	state.Backoff = now + .25
 	combatSnapshot("input=" .. state.LastAttempt.Serial, model)
 	local ok = sendBlockKey(true, key)
@@ -3976,7 +3990,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield mappedWeaponAnimations=80 duration=90")
+	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield mappedWeaponAnimations=82 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

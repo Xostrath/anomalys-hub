@@ -100,6 +100,7 @@ local state = {
 	NpcEspEnabled = false,
 	NpcEspDistance = 2500,
 	BeyondNenParryTargets = "NPCs",
+	BeyondNenChestSelection = {All = true, Types = {}},
 	NpcEspSettings = {Name = true, Distance = true, Box = true,
 		Quest = true, Enemy = true, Boss = true, Other = true},
 	Noclip = false,
@@ -127,6 +128,18 @@ local function loadConfig()
 	local ok, decoded = pcall(function() return HttpService:JSONDecode(readfile(state.ConfigPath)) end)
 	if not ok or type(decoded) ~= "table" then return end
 	state.EspEnabled = decoded.EspEnabled == true
+	if type(decoded.BeyondNenChestSelection) == "table" then
+		state.BeyondNenChestSelection.All = decoded.BeyondNenChestSelection.All ~= false
+		if type(decoded.BeyondNenChestSelection.Types) == "table" then
+			local count = 0
+			for name, enabled in pairs(decoded.BeyondNenChestSelection.Types) do
+				if type(name) == "string" and #name <= 120 and type(enabled) == "boolean" then
+					state.BeyondNenChestSelection.Types[name] = enabled; count += 1
+					if count >= 100 then break end
+				end
+			end
+		end
+	end
 	state.EspDistance = math.clamp(tonumber(decoded.EspDistance) or 2500, 100, 10000)
 	if type(decoded.EspSettings) == "table" then
 		-- Carry the old identity-field toggle forward when upgrading a saved profile.
@@ -164,6 +177,7 @@ local function saveConfig()
 		NpcEspEnabled = state.NpcEspEnabled,
 		NpcEspDistance = state.NpcEspDistance,
 		BeyondNenParryTargets = state.BeyondNenParryTargets,
+		BeyondNenChestSelection = state.BeyondNenChestSelection,
 		NpcEspSettings = table.clone(state.NpcEspSettings),
 		InfiniteJump = state.InfiniteJump,
 		SpeedEnabled = state.SpeedEnabled,
@@ -3184,6 +3198,418 @@ function controller.IsBeyondNenChestRecording() return capture.Active end
 
 end)()
 ;(function()
+-- Beyond Nen Auto Chests v1. Owned inventory only; serial, acknowledged actions.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local RS = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local Input = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local ui, settings = controller.UI, controller.State
+settings.BeyondNenChestSelection = settings.BeyondNenChestSelection or {All = true, Types = {}}
+local selection = settings.BeyondNenChestSelection
+local state = {Enabled = false, Closed = false, Epoch = 0, Phase = "Off", Lines = {}, Rows = {}, Done = {}, Failed = {}, Focused = true}
+local toggle, status, list, refresh
+local services = {}
+local function note(message)
+	if #state.Lines >= 1200 then table.remove(state.Lines, 1) end
+	table.insert(state.Lines, string.format("%.3f %s", os.clock(), message))
+end
+local function save()
+	if not state.Archive or type(writefile) ~= "function" then return end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	local report = "BEYOND NEN AUTO CHESTS v1\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n")
+	pcall(writefile, "AnomalyHub/universal/beyond_nen_autochests_test.txt", report)
+	pcall(writefile, state.Archive, report)
+end
+local function show(message)
+	status.Text = message .. string.format("\nOpened: %d | Loot pickups: %d | Skipped items: %d", state.Opened or 0, state.Collected or 0, state.Skipped or 0)
+end
+local function remote(service, name)
+	local folder = services[service]
+	if not folder or not folder:IsDescendantOf(RS) then
+		folder = nil
+		for _, object in ipairs(RS:GetDescendants()) do
+			if object.Name == service and object:FindFirstChild("RF") then folder = object; break end
+		end
+		services[service] = folder
+	end
+	local rf = folder and folder:FindFirstChild("RF")
+	local result = rf and rf:FindFirstChild(name)
+	return result and result:IsA("RemoteFunction") and result or nil
+end
+local function activeData()
+	local data = player:FindFirstChild("Data")
+	local sharedData = data and data:FindFirstChild("SharedData")
+	local saves = data and data:FindFirstChild("SavesSlot")
+	local slotId
+	for _, root in ipairs({player, data or player, sharedData or player}) do
+		for _, key in ipairs({"CurrentSlot", "ActiveSlot", "SelectedSlot", "SaveSlot", "Slot"}) do
+			local child = root:FindFirstChild(key)
+			local value = root:GetAttribute(key) or (child and child:IsA("ValueBase") and child.Value)
+			if type(value) == "string" or type(value) == "number" then slotId = tostring(value); break end
+		end
+		if slotId then break end
+	end
+	local slot = saves and slotId and saves:FindFirstChild(slotId)
+	if saves and not slotId then
+		local choices = {}; for _, child in ipairs(saves:GetChildren()) do if child:FindFirstChild("CharacterData") then table.insert(choices, child) end end
+		if #choices == 1 then slot = choices[1] end
+	end
+	return slot and slot:FindFirstChild("PlayerData"), slot
+end
+local function chestName(value)
+	return type(value) == "string" and value:lower():match("chest$") ~= nil
+end
+local function toolName(tool)
+	return tool:GetAttribute("item_name") or tool.Name
+end
+local function findTool(name, uuid)
+	for _, root in ipairs({player.Character or player, player:FindFirstChildOfClass("Backpack") or player}) do
+		for _, object in ipairs(root:GetChildren()) do
+			if object:IsA("Tool") and toolName(object) == name and (not uuid or object:GetAttribute("UUID") == uuid) then return object end
+		end
+	end
+end
+local function inventory()
+	local entries, byId = {}, {}
+	local data, slot = activeData()
+	local folder = data and data:FindFirstChild("Inventory")
+	for _, item in ipairs(folder and folder:GetChildren() or {}) do
+		local name = item:GetAttribute("item_name") or item.Name
+		local quantity = tonumber(item:GetAttribute("quantity") or item:GetAttribute("Quantity") or item:GetAttribute("Amount"))
+		if chestName(name) and (quantity == nil or quantity > 0) then
+			local uuid = item:GetAttribute("uuid") or item.Name
+			local entry = {Name = name, Id = uuid, Object = item, Quantity = quantity, Tool = findTool(name, uuid)}
+			table.insert(entries, entry); byId[uuid] = true
+		end
+	end
+	for _, root in ipairs({player.Character or player, player:FindFirstChildOfClass("Backpack") or player}) do
+		for _, tool in ipairs(root:GetChildren()) do
+			local name = toolName(tool)
+			local uuid = tool:GetAttribute("UUID")
+			if not folder and tool:IsA("Tool") and chestName(name) and uuid and not byId[uuid] then
+				table.insert(entries, {Name = name, Id = uuid, Tool = tool}); byId[uuid] = true
+			end
+		end
+	end
+	table.sort(entries, function(a, b) return a.Name == b.Name and a.Id < b.Id or a.Name < b.Name end)
+	return entries, slot
+end
+local function selected(name) return selection.All or selection.Types[name] == true end
+local function character()
+	local char = player.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+	if char and root and humanoid and humanoid.Health > 0 then return char, root, humanoid end
+end
+local function chestFolder()
+	local world = Workspace:FindFirstChild("World")
+	return world and world:FindFirstChild("Chests")
+end
+local function owned(chest)
+	return chest:GetAttribute("Owner") == player.UserId
+end
+local function chestRoot(chest) return chest and chest:FindFirstChild("HumanoidRootPart") end
+local function release()
+	if not state.Held then return true end
+	local ok = pcall(function() state.Held:InputHoldEnd() end)
+	if ok then state.Held = nil end
+	return ok
+end
+local function cancelMove()
+	if state.MoveHumanoid then
+		local _, root = character()
+		pcall(function() if root then state.MoveHumanoid:MoveTo(root.Position) end; state.MoveHumanoid:Move(Vector3.zero, false) end)
+		state.MoveHumanoid, state.MoveUntil, state.MoveOrigin = nil, nil, nil
+	end
+end
+local function stop(reason)
+	state.Enabled = false; state.Epoch += 1
+	for _ = 1, 3 do if release() then break end end
+	cancelMove()
+	if state.Unwatch then state.Unwatch(); state.Unwatch = nil end
+	state.Phase = "Off"
+	toggle.Text, toggle.BackgroundColor3 = "Auto Chests: OFF", ui.Colors.Surface
+	show(reason or "Off."); note("STOP " .. (reason or "toggle")); save()
+end
+local function call(service, name, args, done)
+	if not state.Enabled or state.Pending then return false end
+	local target = remote(service, name)
+	if not target then stop("Missing " .. service .. "." .. name .. ". Reload after the game finishes loading."); return false end
+	local epoch = state.Epoch
+	local pending = {Started = os.clock(), Name = service .. "." .. name}
+	state.Pending = pending
+	note("REQUEST " .. pending.Name)
+	task.spawn(function()
+		if not state.Enabled or state.Epoch ~= epoch then if state.Pending == pending then state.Pending = nil end; return end
+		local result = table.pack(pcall(function() return target:InvokeServer(table.unpack(args, 1, args.n)) end))
+		if state.Pending == pending then state.Pending = nil end
+		if not state.Enabled or state.Closed or state.Epoch ~= epoch then return end
+		note("RETURN " .. pending.Name .. " ok=" .. tostring(result[1]) .. " value=" .. tostring(result[2]))
+		if not result[1] then stop("Chest request failed. Stopped to avoid repeating an uncertain action."); return end
+		local ok, err = pcall(done, result[2])
+		if not ok then note("CALLBACK_ERROR " .. tostring(err)); stop("Chest processing stopped after an error.") end
+	end)
+	return true
+end
+local function rayParams(chest)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = chest and {player.Character, chest} or {player.Character}
+	return params
+end
+local function floorPoint(root, offset, chest)
+	local point = root.Position + offset
+	local params = rayParams(chest)
+	if Workspace:Raycast(root.Position, offset, params) then return end
+	local hit = Workspace:Raycast(point + Vector3.new(0, 2, 0), Vector3.new(0, -10, 0), params)
+	if not hit or hit.Normal.Y < .65 or hit.Material == Enum.Material.Water or math.abs(hit.Position.Y - root.Position.Y) > 6 then return end
+	return hit.Position
+end
+local function smallStep()
+	if not state.Enabled or not state.Focused or Input:GetFocusedTextBox() then return end
+	local char, root, humanoid = character()
+	local _, slot = activeData()
+	if not root or char ~= state.Character or slot ~= state.Slot then return end
+	local direction = state.StepAxis * ((state.Opened % 2 == 1) and 1 or -1)
+	direction = Vector3.new(direction.X, 0, direction.Z)
+	if direction.Magnitude < .1 then return end
+	local offset = direction.Unit * 1.25
+	if not floorPoint(root, offset, state.Chest) then note("STEP skipped: edge or obstruction"); return end
+	state.MoveHumanoid, state.MoveOrigin, state.MoveUntil = humanoid, root.Position, os.clock() + .45
+	humanoid:MoveTo(root.Position + offset)
+	note("STEP distance=1.25")
+end
+local function finishChest()
+	local id = state.ChestId
+	state.Done[id] = true
+	state.Phase = "Closing"
+	call("ChestService", "CloseChest", table.pack(id), function()
+		smallStep(); state.Phase, state.NextAction = "Between", os.clock() + .8
+		show("Finished chest. Moving slightly before the next one.")
+	end)
+end
+local function beginOpen(chest)
+	state.Chest, state.ChestId = chest, chest:GetAttribute("ChestId")
+	state.AttemptedItems, state.OpenAttempts, state.OpenConfirmed = {}, 0, false
+	state.Phase, state.NextAction = "Opening", os.clock()
+	note("CHEST " .. tostring(state.ChestId) .. " type=" .. tostring(chest:GetAttribute("PickupItem")))
+end
+local function confirmOpen()
+	if state.OpenConfirmed then return end
+	state.OpenConfirmed = true; state.Opened += 1
+	state.Phase, state.NextAction, state.ItemsWait = "Looting", os.clock() + .4, os.clock() + 3
+	note("OPEN confirmed id=" .. tostring(state.ChestId))
+end
+local function requestInventoryTool(entry)
+	-- Captured successful path: UUID -> backpack -> equip. No numbered slot replacement.
+	state.Phase = "AddingTool"
+	call("InventoryService", "put_in_hotbar_backpack", table.pack(entry.Id), function(ok)
+		if ok ~= true then
+			state.Failed[entry.Id] = true; state.Phase, state.NextAction = "Select", os.clock() + .6
+			show("Inventory rejected " .. entry.Name .. "; trying the next available stack."); return
+		end
+		state.Phase, state.ToolDeadline = "AwaitTool", os.clock() + 3
+	end)
+end
+local function choose()
+	local entries, slot = inventory()
+	if slot ~= state.Slot then stop("Character save slot changed."); return end
+	-- Use already available chest tools before needing another hotbar slot.
+	table.sort(entries, function(a, b)
+		if (a.Tool ~= nil) ~= (b.Tool ~= nil) then return a.Tool ~= nil end
+		return a.Name == b.Name and a.Id < b.Id or a.Name < b.Name
+	end)
+	for _, entry in ipairs(entries) do
+		if selected(entry.Name) and not state.Failed[entry.Id] then
+			state.Entry, state.Phase, state.NextAction = entry, "AwaitTool", os.clock() + .2
+			state.ToolDeadline = os.clock() + 3
+			local tool = entry.Tool
+			if not tool then requestInventoryTool(entry); return end
+			show("Preparing " .. entry.Name); return
+		end
+	end
+	stop("Finished all selected available chests.")
+end
+local function step()
+	local now = os.clock()
+	if state.Held and (not state.Enabled or now >= state.ReleaseAt) then if not release() then stop("Could not release the chest key."); return end end
+	if state.MoveUntil then
+		local _, root = character()
+		if not state.Enabled or now >= state.MoveUntil or not root or (root.Position - state.MoveOrigin).Magnitude >= 1.5 then cancelMove() end
+	end
+	if not state.Enabled then return end
+	if now >= (state.NextSave or 0) then state.NextSave = now + 3; save() end
+	local char, root = character()
+	if not char or char ~= state.Character then stop("Stopped for respawn or character change."); return end
+	local _, slot = activeData(); if slot ~= state.Slot then stop("Character save slot changed."); return end
+	if controller.IsBeyondNenChestRecording and controller.IsBeyondNenChestRecording() then stop("Paused for chest recording."); return end
+	if state.Pending then
+		if now - state.Pending.Started > 8 then stop("Chest request timed out. Wait before enabling again.") end
+		return
+	end
+	if not state.Focused or Input:GetFocusedTextBox() then release(); cancelMove(); show("Paused while typing or outside Roblox."); return end
+	if state.MoveUntil or state.Held or now < state.NextAction then return end
+	if state.Phase == "Select" or state.Phase == "Between" then choose(); return end
+	if state.Phase == "AwaitTool" then
+		local tool = findTool(state.Entry.Name, state.Entry.Id)
+		if not tool then if now >= state.ToolDeadline then stop("Chest transfer returned, but its tool did not appear.") end; return end
+		if tool.Parent == char then state.Phase, state.NextAction = "Equipping", now + .2; return end
+		state.Phase = "RequestEquip"
+		call("InventoryService", "equip", table.pack(state.Entry.Id), function(ok)
+			if ok ~= true then stop("The game rejected equipping this chest."); return end
+			state.Phase, state.ToolDeadline = "AwaitEquipped", os.clock() + 3
+		end)
+	elseif state.Phase == "AwaitEquipped" then
+		local tool = findTool(state.Entry.Name, state.Entry.Id)
+		if tool and tool.Parent == char then state.Phase, state.NextAction = "Equipping", now + .2
+		elseif now >= state.ToolDeadline then stop("Chest equip was not confirmed. No chest was placed.") end
+	elseif state.Phase == "Equipping" then
+		local tool = findTool(state.Entry.Name, state.Entry.Id)
+		if not tool or tool.Parent ~= char then stop("Chest did not equip. No chest was placed."); return end
+		local forward = root.CFrame.LookVector; forward = Vector3.new(forward.X, 0, forward.Z)
+		if forward.Magnitude < .1 then stop("Unable to choose a nearby chest position."); return end
+		local ground = floorPoint(root, forward.Unit * 5)
+		if not ground then stop("Stand on clear, solid ground with space in front of you."); return end
+		state.Before, state.PlacePoint = {}, ground
+		local folder = chestFolder()
+		for _, chest in ipairs(folder and folder:GetChildren() or {}) do state.Before[chest] = true end
+		state.Phase = "Placing"
+		call("ChestService", "PlaceChest", table.pack(CFrame.new(ground)), function(ok)
+			if ok ~= true then
+				state.Failed[state.Entry.Id] = true; state.Phase, state.NextAction = "Select", os.clock() + 1
+				show("Could not place " .. state.Entry.Name .. "; continuing with other chest types."); return
+			end
+			state.Phase, state.SpawnDeadline = "AwaitChest", os.clock() + 4
+		end)
+	elseif state.Phase == "AwaitChest" then
+		local folder = chestFolder()
+		for _, chest in ipairs(folder and folder:GetChildren() or {}) do
+			local part = chestRoot(chest)
+			if not state.Before[chest] and owned(chest) and part and type(chest:GetAttribute("ChestId")) == "string"
+				and chest:GetAttribute("PickupItem") == state.Entry.Name and (part.Position - state.PlacePoint).Magnitude <= 8 then
+				beginOpen(chest); return
+			end
+		end
+		if now >= state.SpawnDeadline then stop("Placement returned, but the new chest was not found. Stopped to avoid wasting chests.") end
+	elseif state.Phase == "Opening" then
+		local chest, part = state.Chest, chestRoot(state.Chest)
+		if not chest or not chest.Parent or not part or not owned(chest) then stop("The placed chest is no longer available."); return end
+		if chest:GetAttribute("OwnerOpened") == true and chest:GetAttribute("OpenedBy") == player.UserId then confirmOpen(); return end
+		local prompt = part:FindFirstChild("OpenChestPrompt")
+		if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then stop("Chest opening prompt unavailable."); return end
+		if (root.Position - part.Position).Magnitude > math.min(12, prompt.MaxActivationDistance) then stop("Move within the chest's normal opening range."); return end
+		if state.OpenAttempts >= 2 then stop("Chest opening was not confirmed. The chest is still there for you to open."); return end
+		state.OpenAttempts += 1; state.NextAction = now + 1.5
+		-- The captured 90ms press/release opens; holding 1s picks the chest up.
+		-- Target this prompt so a nearer vehicle/NPC sharing T cannot intercept it.
+		state.Held, state.ReleaseAt = prompt, now + .09
+		prompt:InputHoldBegin()
+		show("Opening " .. state.Entry.Name); note("OPEN_PROMPT short tap id=" .. tostring(state.ChestId))
+	elseif state.Phase == "Looting" then
+		local chest = state.Chest
+		if not chest.Parent then finishChest(); return end
+		local part = chestRoot(chest)
+		if not part or (root.Position - part.Position).Magnitude > 12 then stop("Moved away from the open chest."); return end
+		local items = chest:FindFirstChild("Items")
+		if not items then if now >= state.ItemsWait then finishChest() end; return end
+		for _, item in ipairs(items:GetChildren()) do
+			if not state.AttemptedItems[item.Name] then
+				local name = item.Name
+				state.AttemptedItems[name] = true
+				show("Collecting " .. name)
+				call("ChestService", "TakeItem", table.pack(state.ChestId, name), function(ok)
+					if ok == true then state.Collected += 1; note("COLLECT " .. name)
+					else state.Skipped += 1; note("SKIP rejected/unavailable " .. name) end
+					state.NextAction = os.clock() + .3
+				end)
+				return
+			end
+		end
+		finishChest()
+	end
+end
+local card = ui.Card(ui.Pages.Auto, "AUTO CHESTS // v1", "Choose owned chest types. Opens and collects each in turn, skips rejected items, then takes a small step.", 390)
+card.LayoutOrder = 35
+status = ui.Create("TextLabel", {Position = UDim2.fromOffset(14, 310), Size = UDim2.new(1, -28, 0, 66), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Off. Select chest types below.", TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left}, card)
+list = ui.Create("ScrollingFrame", {Position = UDim2.fromOffset(14, 156), Size = UDim2.new(1, -28, 0, 145), BackgroundColor3 = ui.Colors.Surface,
+	BorderSizePixel = 0, ScrollBarThickness = 4, CanvasSize = UDim2.new(0, 0, 0, 0)}, card)
+local function render()
+	local entries = inventory()
+	local groups = {}
+	for _, entry in ipairs(entries) do
+		local group = groups[entry.Name] or {Quantity = 0, Known = true}; groups[entry.Name] = group
+		group.Quantity += entry.Quantity or 0; group.Known = group.Known and entry.Quantity ~= nil
+	end
+	local names = {}; for name in pairs(groups) do table.insert(names, name) end; table.sort(names)
+	for name, row in pairs(state.Rows) do if not groups[name] then row:Destroy(); state.Rows[name] = nil end end
+	for index, name in ipairs(names) do
+		local row = state.Rows[name]
+		if not row then
+			row = ui.Button(list, "", 4, 0, 200, function()
+				if selection.All then
+					selection.All = false; selection.Types = {}
+					for _, entry in ipairs(inventory()) do selection.Types[entry.Name] = true end
+				end
+				selection.Types[name] = not selection.Types[name]; controller.SaveConfig(); render()
+			end)
+			state.Rows[name] = row
+		end
+		row.Position, row.Size = UDim2.fromOffset(4, (index - 1) * 36 + 4), UDim2.new(1, -12, 0, 32)
+		row.Text = (selected(name) and "[ON] " or "[OFF] ") .. name .. (groups[name].Known and " x" .. groups[name].Quantity or "")
+		row.BackgroundColor3 = selected(name) and ui.Colors.AccentSoft or ui.Colors.Surface
+	end
+	list.CanvasSize = UDim2.new(0, 0, 0, #names * 36 + 8)
+end
+local function enable(value)
+	if not value then stop("Off."); return end
+	if state.Closed or state.Enabled or controller.IsUnloaded() then return end
+	if state.Pending then show("Waiting for the previous chest request to finish."); return end
+	if controller.IsBeyondNenChestRecording and controller.IsBeyondNenChestRecording() then show("Stop the chest recorder before opening automatically."); return end
+	local char, root = character(); if not char then show("Wait for your character to load."); return end
+	local entries, slot = inventory(); if #entries == 0 then show("No owned chest items found. Open inventory once, then Refresh Chests."); return end
+	local selectedAny = false; for _, entry in ipairs(entries) do if selected(entry.Name) then selectedAny = true end end
+	if not selectedAny then show("Select at least one chest type."); return end
+	if controller.SetBeyondNenAutoFishing then controller.SetBeyondNenAutoFishing(false) end
+	if controller.SetBeyondNenAutoMeditation then controller.SetBeyondNenAutoMeditation(false) end
+	state.Enabled, state.Character, state.Slot, state.Phase = true, char, slot, "Select"
+	state.StepAxis = root.CFrame.RightVector
+	state.Epoch += 1; state.Done, state.Failed, state.Lines = {}, {}, {}
+	state.Opened, state.Collected, state.Skipped, state.NextAction = 0, 0, 0, os.clock() + .3
+	local ok, guid = pcall(function() return HttpService:GenerateGUID(false) end)
+	state.Archive = "AnomalyHub/universal/beyond_nen_autochests_" .. os.time() .. "_" .. (ok and guid or tostring(state.Epoch)) .. ".txt"
+	state.Unwatch = controller.WatchBeyondNenChests(function(name, direction, args)
+		if state.Enabled and name == "OpenedChest" and direction == "IN event" and args[1] == state.ChestId and state.Phase == "Opening" then confirmOpen() end
+	end)
+	toggle.Text, toggle.BackgroundColor3 = "Auto Chests: ON", ui.Colors.AccentSoft
+	note("START owned selection"); show("Starting selected chests.")
+end
+toggle = ui.FitColumn(ui.Button(card, "Auto Chests: OFF", 0, 0, 180, function() enable(not state.Enabled) end), 0, 72)
+refresh = ui.FitColumn(ui.Button(card, "Refresh Chests", 0, 0, 180, function() render() end), 1, 72)
+ui.FitColumn(ui.Button(card, "Select All", 0, 0, 180, function() selection.All, selection.Types = true, {}; controller.SaveConfig(); render() end), 0, 114)
+ui.FitColumn(ui.Button(card, "Clear Selection", 0, 0, 180, function() selection.All, selection.Types = false, {}; controller.SaveConfig(); render() end), 1, 114)
+controller.Connect(RunService.Heartbeat, function()
+	local ok, err = pcall(function()
+		if os.clock() >= (state.NextRefresh or 0) then state.NextRefresh = os.clock() + 2; render() end
+		step()
+	end)
+	if not ok then note("ERROR " .. tostring(err)); stop("Auto Chests stopped after an error.") end
+end)
+controller.Connect(Input.WindowFocusReleased, function() state.Focused = false; release(); cancelMove() end)
+controller.Connect(Input.WindowFocused, function() state.Focused = true end)
+controller.Connect(player.OnTeleport, function() if state.Enabled then stop("Stopped for travel.") end end)
+controller.RegisterCleanup(function() stop("Unloaded."); state.Closed = true end)
+controller.SetBeyondNenAutoChests = enable
+render()
+
+end)()
+;(function()
 -- Passive preparation for Beyond Nen auto parry. No automatic combat input.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -4618,6 +5044,7 @@ local function enable(value)
 	if not value then stop(); return end
 	if auto.Enabled then return end
 	if controller.SetBeyondNenAutoMeditation then controller.SetBeyondNenAutoMeditation(false) end
+	if controller.SetBeyondNenAutoChests then controller.SetBeyondNenAutoChests(false) end
 	auto.Enabled, auto.Phase, auto.Catches, auto.Lines, auto.Started = true, "Idle", 0, {}, true
 	auto.Point, auto.Origin, auto.Session, auto.ReleaseAt = nil, nil, nil, nil
 	resetReel()
@@ -5504,6 +5931,7 @@ local function enable(value)
 	if not value then stop(); return end
 	if state.Enabled then return end
 	if controller.SetBeyondNenAutoFishing then controller.SetBeyondNenAutoFishing(false) end
+	if controller.SetBeyondNenAutoChests then controller.SetBeyondNenAutoChests(false) end
 	state.Enabled, state.Started, state.Phase = true, true, "Idle"
 	state.Hits, state.Misses, state.Lines, state.Prompts, state.ResultRequests = 0, 0, {}, {}, {}
 	state.Pending, state.Character, state.GroundPoint = nil, player.Character, nil

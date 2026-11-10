@@ -2596,210 +2596,190 @@ end)
 
 end)()
 ;(function()
--- Talent Recorder v2: prunes the hub/chat before bounded UI discovery.
+-- Jenni-only talent rerolls. Rarity names supplied by the user, with captured
+-- owned-card corrections. Unknown talents are never rerolled speculatively.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
 local player = game:GetService("Players").LocalPlayer
-local RunService = game:GetService("RunService")
-local HttpService = game:GetService("HttpService")
+local rs = game:GetService("ReplicatedStorage")
+local run = game:GetService("RunService")
 local ui = controller.UI
-local state = {Active = false, Closed = false, Lines = {}, Bytes = 0, Epoch = 0}
-local path = "AnomalyHub/universal/beyond_nen_talent_capture.txt"
-local card = ui.Card(ui.Pages.Auto, "TALENT RECORDER // v2", "Capture talent slots, rarities and reroll results. Recording does not roll or spend anything.", 218)
-card.LayoutOrder = 45
-local status = ui.Create("TextLabel", {
-	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Start recording, open your talents and reroll one unwanted low-rarity talent using Jenni. Wait for the result, then Stop + Save.",
-	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-}, card)
-local button
-local function relevant(name)
-	name = name:lower()
-	return name:find("talent", 1, true) or name:find("trait", 1, true)
+local ranks = {Common=1, Uncommon=2, Rare=3, Legendary=4, Extraordinary=5, Mythical=6}
+local known = {}
+local function normalize(name) return name:lower():gsub("[^%w]", "") end
+local function add(rank, names)
+	for name in names:gmatch("[^|]+") do known[normalize(name)] = rank end
 end
-local function excluded(object, pg)
-	while object and object ~= pg do
-		if object == ui.Gui or object:IsA("TextBox") or object.Name:lower():find("chat", 1, true) then return true end
-		object = object.Parent
+add(1, "Conditioned Body|Deep Reserves|Quick Learner|Local Reputation|Meditation Habit")
+add(2, "Aura Control|Firm Guard|Recovery Training|Efficient Cooking|Craftsman's Touch|Resourceful|Traveling Merchant|Strong Carrier|Side Adventurer|Curious Explorer|Duelist's Composure")
+add(3, "Boss Hunter|Hardened Hunter|Final Effort|Counter Pressure|Defensive Instinct|Battle Focus|Preparation|Skilled Harvester|Treasure Sense|Fast Recovery")
+add(4, "Nen Master|Martial Master|Lifesteal|Second Wind|Relentless Spirit|Aura Reversal|Lucky Discovery|Hunter's Intuition")
+add(5, "Heavenly Restriction|Technique Master|Parry God|Iron Will|Warrior Hate|Comeback Spirit")
+local state = {Enabled=false, Closed=false, Epoch=0, Rolls=0, Lines={}}
+local card = ui.Card(ui.Pages.Auto, "AUTO TALENTS // v1", "Jenni only: 3,333 per roll. Replaces Common, then Uncommon, then Rare. Keeps Legendary or higher; stops on unknown results.", 250)
+card.LayoutOrder = 35
+local status = ui.Create("TextLabel", {Position=UDim2.fromOffset(14,150), Size=UDim2.new(1,-28,0,86), BackgroundTransparency=1,
+	Font=Enum.Font.Gotham, Text="Off. Set a roll limit, then enable. Unrecognized talents are protected.", TextColor3=ui.Colors.Muted,
+	TextSize=11, TextWrapped=true, TextXAlignment=Enum.TextXAlignment.Left}, card)
+local limit = ui.ValueBox(card, "Max rolls (1–100)", 14, 110, 180, "10", function() end)
+ui.Create("TextLabel", {Position=UDim2.fromOffset(208,110), Size=UDim2.new(1,-222,0,34), BackgroundTransparency=1,
+	Font=Enum.Font.Gotham, Text="Max rolls · 10 costs up to 33,330 Jenni", TextColor3=ui.Colors.Muted, TextSize=10, TextWrapped=true},card)
+local toggle
+local function note(text)
+	table.insert(state.Lines, string.format("%.3f %s", os.clock(), text))
+	if #state.Lines > 300 then table.remove(state.Lines,1) end
+	if type(writefile)=="function" then
+		if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal") end
+		pcall(writefile,"AnomalyHub/universal/beyond_nen_autotalents_test.txt","AUTO TALENTS v1\n"..table.concat(state.Lines,"\n"))
 	end
-	return false
+end
+local function show(text)
+	status.Text=text.."\nConfirmed rolls: "..state.Rolls.." | Spent: "..(state.Rolls*3333).." Jenni"
+end
+local function stop(reason)
+	state.Enabled=false;state.Epoch+=1;state.Expected=nil
+	toggle.Text,toggle.BackgroundColor3="Auto Talents: OFF",ui.Colors.Surface
+	show(reason);note("STOP "..reason)
 end
 local function visible(object)
-	while object and object ~= player do
+	while object and object~=player do
 		if object:IsA("GuiObject") and not object.Visible then return false end
 		if object:IsA("LayerCollector") and not object.Enabled then return false end
-		object = object.Parent
+		object=object.Parent
 	end
 	return true
 end
-local function sample(value, depth, seen, budget)
-	depth, seen, budget = depth or 0, seen or {}, budget or {Left = 256}
-	budget.Left -= 1
-	if budget.Left < 0 then return "<node limit>" end
-	local kind = typeof(value)
-	if kind == "Instance" then return value.ClassName .. ":" .. value:GetFullName() end
-	if kind == "string" then return string.format("%q", value:sub(1, 1200)) end
-	if kind ~= "table" then return tostring(value) end
-	if seen[value] then return "<cycle>" end
-	if depth >= 5 then return "<depth limit>" end
-	seen[value] = true
-	local parts, n = {}, 0
-	for key, item in pairs(value) do
-		n += 1
-		if n > 64 or budget.Left <= 0 then table.insert(parts, "<field/node limit>"); break end
-		table.insert(parts, sample(key, depth + 1, seen, budget) .. "=" .. sample(item, depth + 1, seen, budget))
-	end
-	seen[value] = nil
-	return "{" .. table.concat(parts, ",") .. "}"
-end
-local function log(message)
-	if not state.Active then return end
-	local line = string.format("%.3fs\t%s", os.clock() - state.Started, message)
-	if #line > 9000 then line = line:sub(1, 9000) .. " <line limit>" end
-	if #state.Lines >= 3000 or state.Bytes + #line > 700000 then state.Limited = true; return end
-	state.Bytes += #line + 1; table.insert(state.Lines, line)
-end
-local function save(reason)
-	state.Report = "BEYOND NEN TALENT CAPTURE v2 // PASSIVE\nplace=" .. game.PlaceId .. " universe=" .. game.GameId
-		.. "\nOnly observes TalentService, local talent/currency values and scoped talent UI. No requests, input, purchases, decompilation or uploads."
-		.. "\nOutgoing calls are observed after return; requestStart is the original start time. Hook paths may duplicate observations."
-		.. "\nLimits: 180s, 3000 lines/700KB; UI discovery 4000 nodes, capture 350; local Data discovery 2500 nodes. Chat and text entry excluded."
-		.. "\n" .. table.concat(state.Lines, "\n") .. "\nSTATUS=" .. reason .. (state.Limited and "\nREPORT LIMIT REACHED" or "")
-	if type(writefile) ~= "function" then return false end
-	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	local latest = pcall(writefile, path, state.Report)
-	local archive = pcall(writefile, state.Archive, state.Report)
-	return latest or archive
-end
-local function snapshot()
-	local nextState = {}
-	local function remember(key, value)
-		nextState[key] = value
-		if state.Previous[key] ~= value then log("STATE " .. key .. " " .. value) end
-	end
-	local function attributes(object, all)
-		local attributes = {}
-		for key, value in pairs(object:GetAttributes()) do
-			if all or relevant(key) or key:lower():find("jenni", 1, true) or key:lower():find("currency", 1, true) or key:lower():find("slot", 1, true) then attributes[key] = value end
-		end
-		remember(object:GetFullName() .. " attributes", sample(attributes))
-	end
-	attributes(player, false)
-	local data = player:FindFirstChild("Data")
-	for index, object in ipairs(data and data:GetDescendants() or {}) do
-		if index > 2500 then remember("DATA_LIMIT", "2500"); break end
-		local node, wanted = object, false
-		while node and node ~= data do
-			if relevant(node.Name) or node.Name:lower():find("jenni", 1, true) or node.Name:lower():find("currency", 1, true) then wanted = true; break end
-			node = node.Parent
-		end
-		if wanted then
-			attributes(object, true)
-			if object:IsA("ValueBase") then remember(object:GetFullName(), "value=" .. sample(object.Value)) end
-		end
-	end
-	local pg = player:FindFirstChildOfClass("PlayerGui")
-	local candidates, roots, queue = {}, {}, {}
-	-- Prune excluded subtrees before counting. A large injected hub previously
-	-- exhausted discovery before the game's talent menu could be reached.
-	for _, child in ipairs(pg and pg:GetChildren() or {}) do
-		if not excluded(child, pg) then table.insert(queue, child) end
-	end
-	table.sort(queue, function(a, b) return (relevant(a.Name) and 0 or 1) < (relevant(b.Name) and 0 or 1) end)
-	local index = 1
-	while index <= #queue do
-		if #candidates >= 4000 then remember("UI_SEARCH_LIMIT", "4000"); break end
-		local object = queue[index]; index += 1
-		if excluded(object, pg) then continue end
-		table.insert(candidates, object)
-		for _, child in ipairs(object:GetChildren()) do
-			if #queue >= 8000 then remember("UI_QUEUE_LIMIT", "8000"); break end
-			if not excluded(child, pg) then table.insert(queue, child) end
-		end
-		if relevant(object.Name) then roots[object] = true end
-		if (object:IsA("TextLabel") or object:IsA("TextButton")) and visible(object) then
-			local text = object.Text:lower():gsub("<[^>]*>", "")
-			if relevant(text) or text:find("3,333", 1, true) or text:find("3333", 1, true) then
-				local root = object.Parent
-				if root and root.Parent and root.Parent ~= pg and not root.Parent:IsA("LayerCollector") then root = root.Parent end
-				if root and root ~= pg then roots[root] = true end
+local function learn()
+	local pg=player:FindFirstChildOfClass("PlayerGui")
+	local inventory=pg and pg:FindFirstChild("Inventory")
+	local tooltip=inventory and inventory:FindFirstChild("StatDescription")
+	local title=tooltip and tooltip:FindFirstChild("Title")
+	local body=tooltip and tooltip:FindFirstChild("Body")
+	if title and body and title:IsA("TextLabel") and body:IsA("TextLabel") and visible(title) and visible(body) then
+		local rarity=body.Text:gsub("<[^>]*>",""):match("^%s*(%a+)%s+Talent")
+		local rank=ranks[rarity]
+		if rank then
+			local key=normalize(title.Text:gsub("<[^>]*>",""))
+			local signature=key..":"..rank
+			if state.Tooltip~=signature then state.Tooltip=signature;state.TooltipAt=os.clock()+.25;return end
+			if os.clock()>=state.TooltipAt then
+				-- Never downgrade a talent already known to meet the stopping tier.
+				known[key]=(known[key] or 0)>=4 and math.max(known[key],rank) or rank
 			end
+			return
 		end
 	end
-	local count = 0
-	for _, object in ipairs(candidates) do
-		local node, wanted = object, false
-		while node and node ~= pg do if roots[node] then wanted = true; break end; node = node.Parent end
-		if not wanted then continue end
-		count += 1
-		if count > 350 then remember("UI_CAPTURE_LIMIT", "350"); break end
-		local detail = object.ClassName .. " visible=" .. tostring(visible(object))
-		if object:IsA("GuiObject") then detail ..= " pos=" .. tostring(object.AbsolutePosition) .. " size=" .. tostring(object.AbsoluteSize) .. " color=" .. tostring(object.BackgroundColor3) end
-		if object:IsA("TextLabel") or object:IsA("TextButton") then detail ..= " text=" .. sample(object.Text) .. " textColor=" .. tostring(object.TextColor3) end
-		if object:IsA("ImageLabel") or object:IsA("ImageButton") then detail ..= " image=" .. sample(object.Image) end
-		remember(object:GetFullName(), detail)
-		attributes(object, true)
-	end
-	for key in pairs(state.Previous) do if nextState[key] == nil then log("GONE " .. key) end end
-	state.Previous = nextState
+	state.Tooltip=nil
 end
-local function stop(reason)
-	if not state.Active then return end
-	log("STOP " .. reason)
-	state.Active = false
-	if state.Unwatch then state.Unwatch(); state.Unwatch = nil end
-	local ok = save(reason)
-	button.Text, button.BackgroundColor3 = "Record Talents", ui.Colors.AccentSoft
-	status.Text = ok and "Saved talent recording. Tell me done so I can review it." or "Could not save. Use Copy Recording before unloading."
-end
-local function start()
-	if state.Closed or controller.IsUnloaded() then return end
-	if state.Active then stop("STOPPED"); return end
-	state.Epoch += 1
-	local ok, nonce = pcall(function() return HttpService:GenerateGUID(false) end)
-	state.Archive = "AnomalyHub/universal/beyond_nen_talent_capture_" .. os.time() .. "_" .. (ok and nonce or tostring(state.Epoch)) .. ".txt"
-	state.Active, state.Started, state.Bytes, state.Limited = true, os.clock(), 0, false
-	state.Lines, state.Previous, state.NextSample, state.NextSave = {}, {}, 0, os.clock() + 3
-	local epoch = state.Epoch
-	local setupOK, err = pcall(function()
-		log("START " .. state.Archive)
-		state.Unwatch = controller.WatchBeyondNenTalents(function(name, direction, args, started)
-			if not state.Active or state.Epoch ~= epoch or started < state.Started then return end
-			log("REMOTE " .. name .. " " .. direction .. " requestStart=" .. string.format("%.3f", started - state.Started) .. " args=" .. sample(args))
-		end)
-		local probe = env.__AnomalyBeyondFishingProbe
-		log("COVERAGE " .. (probe and table.concat(probe.Coverage or {}, ", ") or "no outgoing hook coverage"))
-		local count = 0
-		for remote, definition in pairs(probe and probe.Targets or {}) do
-			if definition.Service == "TalentService" then count += 1; log("WATCH " .. remote:GetFullName()) end
+local function owned()
+	local slot=player:GetAttribute("SelectedSlot")
+	local data=player:FindFirstChild("Data")
+	local saves=data and data:FindFirstChild("SavesSlot")
+	local save=saves and slot and saves:FindFirstChild(tostring(slot))
+	local character=save and save:FindFirstChild("CharacterData")
+	local talents=character and character:FindFirstChild("Talents")
+	if not talents then return nil end
+	local values=talents:GetAttributes()
+	local list={}
+	for id,value in pairs(values) do
+		if value==true then
+			if player:GetAttribute("Talent_"..id)~=true then return nil end
+			table.insert(list,id)
 		end
-		log("WATCH_COUNT " .. count)
-		snapshot()
+	end
+	for key,value in pairs(player:GetAttributes()) do
+		if value==true and key:sub(1,7)=="Talent_" and values[key:sub(8)]~=true then return nil end
+	end
+	table.sort(list)
+	return list,slot,values
+end
+local function remote()
+	local node=rs
+	for _,name in ipairs({"Packages","_Index","sleitnick_knit@1.7.0","knit","Services","TalentService","RF","RerollOwnedJenni"}) do node=node and node:FindFirstChild(name) end
+	return node and node:IsA("RemoteFunction") and node or nil
+end
+local function step()
+	learn()
+	if not state.Enabled then return end
+	local now=os.clock()
+	local character=player.Character
+	local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+	if character~=state.Character or not humanoid or humanoid.Health<=0 or player:GetAttribute("SelectedSlot")~=state.Slot then stop("Character or save slot changed.");return end
+	if state.Pending then
+		if now-state.Pending.Started>10 then stop("Request timed out. No retry; wait for it to finish before enabling again.") end
+		return
+	end
+	local list,slot,values=owned()
+	if state.Expected then
+		local expected=state.Expected
+		if list and slot==state.Slot and values[expected.Old]~=true and values[expected.New]==true
+			and player:GetAttribute("Jenni")==expected.Balance-3333 then
+			state.Expected=nil;state.Rolls+=1;state.Next=now+1;state.Signature=nil
+			note("CONFIRMED "..expected.Old.." -> "..expected.New)
+			if not known[normalize(expected.New)] then stop("Unknown rarity: "..expected.New..". Hover its inventory talent to identify it before continuing.")
+			else show("Received "..expected.New..". Rechecking remaining talents.") end
+		elseif now-expected.At>8 then stop("Ownership or Jenni change was not confirmed. No retry.") end
+		return
+	end
+	if state.Rolls>=state.Max then stop("Roll limit reached.");return end
+	if not list or #list==0 then show("Waiting for matching owned-talent data.");return end
+	local signature=table.concat(list,"|")
+	if state.Signature~=signature then state.Signature=signature;state.Next=now+.5;return end
+	if now<(state.Next or 0) then return end
+	local chosen,rank,unknown=nil,4,{}
+	for _,id in ipairs(list) do
+		local rarity=known[normalize(id)]
+		if not rarity then table.insert(unknown,id)
+		elseif rarity<rank then chosen,rank=id,rarity end
+	end
+	if not chosen then
+		stop(#unknown>0 and ("Unknown talents protected: "..table.concat(unknown,", ")..". Hover them in inventory to identify their rarity.") or "All owned talents are Legendary or higher.")
+		return
+	end
+	-- Unknown owned talents must be classified before spending, otherwise the
+	-- requested lowest-rarity-first ordering cannot be established.
+	if #unknown>0 then stop("Identify rarity first: "..table.concat(unknown,", ")..". Hover those inventory talents, then enable again.");return end
+	local balance=player:GetAttribute("Jenni")
+	if type(balance)~="number" or balance~=balance or balance==math.huge or balance<3333 then stop("Not enough readable Jenni for a 3,333 roll.");return end
+	local target=remote()
+	if not target then stop("Jenni reroll service unavailable.");return end
+	local pending={Started=now};local epoch=state.Epoch
+	state.Pending=pending;show("Rolling "..chosen.." · 3,333 Jenni");note("REQUEST "..chosen.." balance="..balance)
+	task.spawn(function()
+		if not state.Enabled or state.Epoch~=epoch then if state.Pending==pending then state.Pending=nil end;return end
+		local result=table.pack(pcall(function() return target:InvokeServer(chosen) end))
+		if state.Pending==pending then state.Pending=nil end
+		if not state.Enabled or state.Closed or state.Epoch~=epoch then return end
+		local detail=result[3]
+		if not result[1] or result[2]~=true or type(detail)~="table" or detail.Old~=chosen or type(detail.New)~="string" or detail.New==chosen then
+			stop("Roll failed or returned an unexpected result. No retry.");return
+		end
+		state.Expected={Old=chosen,New=detail.New,Balance=balance,At=os.clock()}
 	end)
-	if not setupOK then log("ERROR " .. tostring(err)); stop("START_ERROR"); return end
-	if not save("RECORDING") then stop("SAVE_FAILED"); return end
-	button.Text, button.BackgroundColor3 = "Stop + Save", ui.Colors.Danger
-	status.Text = "Recording up to 3 minutes. Open talents and inspect each owned talent so its name and rarity appear. No reroll needed for this capture. Then Stop + Save."
 end
-button = ui.FitColumn(ui.Button(card, "Record Talents", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
-ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()
-	if state.Active then save("RECORDING") end
-	if state.Report and type(setclipboard) == "function" then pcall(setclipboard, state.Report) end
-end), 1, 72)
-controller.Connect(RunService.Heartbeat, function()
-	if not state.Active then return end
-	local now = os.clock()
-	if state.Limited or now - state.Started >= 180 then stop(state.Limited and "LIMIT_REACHED" or "COMPLETE"); return end
-	if now >= state.NextSample then
-		state.NextSample = now + .2
-		local ok, err = pcall(snapshot)
-		if not ok then log("ERROR " .. tostring(err)); stop("CAPTURE_ERROR"); return end
-	end
-	if now >= state.NextSave then state.NextSave = now + 3; if not save("RECORDING") then stop("SAVE_FAILED") end end
+local function enable()
+	if state.Closed then return end
+	if state.Enabled then stop("Stopped. Any request already sent may still finish.");return end
+	if state.Pending then show("An earlier request is still pending. Do not start another roller.");return end
+	local max=tonumber(limit.Text)
+	if not max or max~=max or max<1 or max>100 or max%1~=0 then show("Set Max rolls to a whole number from 1 to 100.");return end
+	local list,slot=owned()
+	if not list then show("Waiting for readable talent data.");return end
+	state.Enabled=true;state.Epoch+=1;state.Character=player.Character;state.Slot=slot
+	state.Rolls=0;state.Max=max;state.Signature=nil;state.Expected=nil;state.Lines={}
+	toggle.Text,toggle.BackgroundColor3="Auto Talents: ON",ui.Colors.AccentSoft
+	show("Up to "..max.." rolls / "..(max*3333).." Jenni. Checking rarities.");note("START max="..max)
+end
+toggle=ui.FitColumn(ui.Button(card,"Auto Talents: OFF",0,0,180,enable),0,72)
+controller.Connect(run.Heartbeat,function()
+	if state.Closed or os.clock()<(state.Poll or 0) then return end
+	state.Poll=os.clock()+.2
+	local ok,err=pcall(step)
+	if not ok and state.Enabled then stop("Roller stopped after an error.");note(tostring(err)) end
 end)
-controller.Connect(player.OnTeleport, function() stop("TELEPORT") end)
-controller.RegisterCleanup(function() stop("UNLOAD"); state.Closed = true end)
+controller.Connect(player.OnTeleport,function() if state.Enabled then stop("Stopped for travel.") end end)
+controller.RegisterCleanup(function() stop("Unloaded.");state.Closed=true end)
 
 end)()
 ;(function()

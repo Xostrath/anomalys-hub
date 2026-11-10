@@ -2634,12 +2634,17 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Shared passive observations for mapped fishing, meditation and combat remotes.
+-- Shared passive observations for mapped fishing, meditation, combat and chest remotes.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local definitions = {
+	-- Exact ChestService paths from the saved Beyond Nen remote fingerprint.
+	ChestService = {
+		RF = {"CloseChest", "GetScannedChests", "OpenChest", "PlaceChest", "TakeAll", "TakeItem"},
+		RE = {"OpenedChest", "ScanChest", "ScannedChests"},
+	},
 	FishingService = {RF = {"Cast", "Reel"}, RE = {"Bite", "Hold", "Result"}},
 	MeditationService = {
 		RF = {"KeyPromptResult", "PlaceCarpet", "SetPicking", "StartMeditation", "StopMeditation", "UnplaceCarpet", "deleteSphere", "meditationSphreClick"},
@@ -2784,6 +2789,7 @@ local function watch(service, callback)
 	end
 end
 function controller.WatchBeyondNenFishing(callback) return watch("FishingService", callback) end
+function controller.WatchBeyondNenChests(callback) return watch("ChestService", callback) end
 function controller.WatchBeyondNenMeditation(callback)
 	local meditation = watch("MeditationService", callback)
 	local technique = watch("NenMasteryService", callback)
@@ -2797,6 +2803,319 @@ end
 controller.RegisterCleanup(function()
 	closed = true; table.clear(listeners); sync()
 end)
+
+end)()
+;(function()
+-- Passive chest interaction capture. Never opens chests, takes loot or sends input.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
+local player = game:GetService("Players").LocalPlayer
+local RunService = game:GetService("RunService")
+local Input = game:GetService("UserInputService")
+local Prompts = game:GetService("ProximityPromptService")
+local HttpService = game:GetService("HttpService")
+local ui = controller.UI
+local path = "AnomalyHub/universal/beyond_nen_chest_capture.txt"
+local capture = {Active = false, Closed = false, Epoch = 0, Lines = {}, Connections = {}}
+local card = ui.Card(ui.Pages.Auto, "CHEST RECORDER v1", "Record opening and looting a chest so Auto Chests can be mapped.", 218)
+card.LayoutOrder = 40
+local status = ui.Create("TextLabel", {
+	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "Ready. Start nearby, open an unopened chest normally, take loot, and close its window.",
+	TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+}, card)
+local recordButton
+local function log(message)
+	if not capture.Active then return end
+	local line = string.format("%.4fs\t%s", os.clock() - capture.Started, tostring(message):sub(1, 7000))
+	if #capture.Lines >= 3000 or capture.Bytes + #line + 1 > 700000 then capture.Limited = true; return end
+	table.insert(capture.Lines, line); capture.Bytes += #line + 1
+end
+local function position(object)
+	if object:IsA("BasePart") then return object.Position end
+	if object:IsA("Model") then return object:GetPivot().Position end
+	if object:IsA("Attachment") then return object.WorldPosition end
+	if object.Parent and (object:IsA("ProximityPrompt") or object:IsA("ClickDetector")) then return position(object.Parent) end
+	return nil
+end
+local function id(object)
+	if not capture.Ids[object] then capture.NextId += 1; capture.Ids[object] = capture.NextId end
+	return tostring(capture.Ids[object])
+end
+local function describe(object)
+	local result = "#" .. id(object) .. " " .. object.ClassName .. ":" .. object:GetFullName()
+	local point = position(object)
+	if point then result ..= " position=" .. tostring(point) end
+	return result
+end
+local function sample(value, depth, seen, budget)
+	depth, seen, budget = depth or 0, seen or {}, budget or {Left = 256}
+	budget.Left -= 1; if budget.Left < 0 then return "<node limit>" end
+	local kind = typeof(value)
+	if kind == "Instance" then return "<" .. describe(value) .. ">" end
+	if kind == "string" then return string.format("%q", value:sub(1, 600)) end
+	if kind ~= "table" then return tostring(value) end
+	if seen[value] then return "<cycle>" end
+	if depth >= 4 then return "<depth limit>" end
+	seen[value] = true
+	local fields, count = {}, 0
+	for key, item in pairs(value) do
+		if budget.Left <= 0 then table.insert(fields, "<node limit>"); break end
+		count += 1; if count > 32 then table.insert(fields, "<field limit>"); break end
+		table.insert(fields, sample(key, depth + 1, seen, budget) .. "=" .. sample(item, depth + 1, seen, budget))
+	end
+	seen[value] = nil
+	return "{" .. table.concat(fields, ",") .. "}"
+end
+local function save(reason)
+	capture.Report = "BEYOND NEN CHEST CAPTURE v1 // PASSIVE\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
+		.. "\nObserves only mapped ChestService calls/results, nearby chest/prompt state and chest/loot GUI."
+		.. "\nNo inputs, prompt activation, remote requests/replays, decompilation or network uploads are performed by this recorder."
+		.. "\nOutgoing observations occur after return; requestStart preserves start time. Hook paths can duplicate a call."
+		.. "\nMissing streamed objects or signals are not proof of missing chests. Events/returns do not alone prove loot was awarded."
+		.. "\nLimits: 120s, 3000 lines/700KB body, 256 candidates, nearest 8 within 100 studs, 48 objects per chest, 150 GUI objects."
+		.. "\nWorld discovery: 25000 initial objects plus additions. GUI search: 2000 objects. Chat/text-entry excluded."
+		.. "\n" .. table.concat(capture.Lines, "\n") .. "\nSTATUS=" .. reason .. (capture.Limited and "\nREPORT LIMIT REACHED" or "")
+	if type(writefile) ~= "function" then return false end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	local latest = pcall(writefile, path, capture.Report)
+	capture.HistorySaved = pcall(writefile, capture.ArchivePath, capture.Report)
+	return latest or capture.HistorySaved
+end
+local function namedChest(name)
+	name = name:lower()
+	return name:find("chest", 1, true) or name:find("treasure", 1, true) or name:find("loot", 1, true)
+end
+local function localDistance(object)
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	local point = position(object)
+	return root and point and (root.Position - point).Magnitude or math.huge
+end
+local function insideCharacter(object)
+	local ancestor = object
+	while ancestor and ancestor ~= workspace do
+		if ancestor:IsA("Model") and ancestor:FindFirstChildOfClass("Humanoid") then return true end
+		ancestor = ancestor.Parent
+	end
+	return false
+end
+local function candidate(object)
+	if capture.Candidates[object] or insideCharacter(object) then return end
+	local interaction = object:IsA("ProximityPrompt") or object:IsA("ClickDetector")
+	if not interaction and not ((object:IsA("Model") or object:IsA("BasePart")) and namedChest(object.Name)) then return end
+	if capture.CandidateCount >= 256 then
+		if not capture.CandidateLimit then log("DISCOVERY_LIMIT candidate cap 256 reached"); capture.CandidateLimit = true end
+		-- Retain nearby interactions even when the map contains many distant prompts.
+		local furthest, furthestDistance = nil, localDistance(object)
+		for existing in pairs(capture.Candidates) do
+			local distance = existing:IsDescendantOf(workspace) and localDistance(existing) or math.huge
+			if distance > furthestDistance then furthest, furthestDistance = existing, distance end
+		end
+		if not furthest then return end
+		capture.Candidates[furthest] = nil; capture.CandidateCount -= 1
+	end
+	capture.Candidates[object] = true; capture.CandidateCount += 1
+end
+local function visible(object)
+	local node = object
+	while node and node ~= player do
+		if node:IsA("GuiObject") and not node.Visible then return false end
+		if node:IsA("LayerCollector") and not node.Enabled then return false end
+		node = node.Parent
+	end
+	return true
+end
+local function guiRelevant(object, pg)
+	local node = object
+	while node and node ~= pg do
+		if node == ui.Gui then return false end
+		node = node.Parent
+	end
+	node = object
+	while node and node ~= pg do
+		if namedChest(node.Name) then return true end
+		node = node.Parent
+	end
+	-- Catch generically named loot panels without recording unrelated HUD/chat text.
+	if object:IsA("TextButton") then
+		local text = object.Text:lower():gsub("<[^>]+>", ""):gsub("%s+", " ")
+		return text == "take all" or text == "loot all" or text == "open chest"
+	end
+	return false
+end
+local function snapshot()
+	local current, wanted, pool = {}, {}, {}
+	for object in pairs(capture.Candidates) do
+		if not object:IsDescendantOf(workspace) then capture.Candidates[object] = nil; capture.CandidateCount -= 1
+		else
+			local distance = localDistance(object)
+			if distance <= 100 then table.insert(pool, {Object = object, Distance = distance}) end
+		end
+	end
+	table.sort(pool, function(a, b) return a.Distance < b.Distance end)
+	local roots, seenRoots = {}, {}
+	for _, entry in ipairs(pool) do
+		local object = entry.Object
+		-- Group a prompt/part with its nearest named chest model, avoiding duplicate trees.
+		local ancestor = object.Parent
+		while ancestor and ancestor ~= workspace do
+			if ancestor:IsA("Model") and namedChest(ancestor.Name) then object = ancestor; break end
+			ancestor = ancestor.Parent
+		end
+		if not seenRoots[object] then
+			seenRoots[object] = true; table.insert(roots, {Object = object, Distance = entry.Distance})
+			if #roots >= 8 then break end
+		end
+	end
+	for _, entry in ipairs(roots) do
+		local root = entry.Object
+		current["NEAR " .. id(root)] = describe(root) .. " distance=" .. string.format("%.1f", entry.Distance)
+		local objects = {root}
+		for _, object in ipairs(root:GetDescendants()) do
+			if #objects >= 48 then current["WORLD LIMIT " .. id(root)] = "48 objects; remaining descendants omitted"; break end
+			table.insert(objects, object)
+		end
+		for _, object in ipairs(objects) do
+			local detail = describe(object) .. " attrs=" .. sample(object:GetAttributes())
+			if object:IsA("ValueBase") then detail ..= " value=" .. sample(object.Value) end
+			if object:IsA("ProximityPrompt") then
+				detail ..= " action=" .. sample(object.ActionText) .. " object=" .. sample(object.ObjectText)
+					.. " enabled=" .. tostring(object.Enabled) .. " hold=" .. tostring(object.HoldDuration)
+					.. " range=" .. tostring(object.MaxActivationDistance) .. " lineOfSight=" .. tostring(object.RequiresLineOfSight)
+					.. " key=" .. tostring(object.KeyboardKeyCode)
+			elseif object:IsA("ClickDetector") then
+				detail ..= " range=" .. tostring(object.MaxActivationDistance); wanted[object] = "CLICK"
+			end
+			current["WORLD " .. id(object)] = detail
+		end
+	end
+	local pg = player:FindFirstChildOfClass("PlayerGui")
+	local count = 0
+	if pg then
+		for index, object in ipairs(pg:GetDescendants()) do
+			if index > 2000 then current["GUI SEARCH LIMIT"] = "2000 objects"; break end
+			if not (object:IsA("GuiObject") or object:IsA("LayerCollector")) or not guiRelevant(object, pg) then continue end
+			count += 1; if count > 150 then current["GUI LIMIT"] = "150 objects"; break end
+			local detail = describe(object) .. " shown=" .. tostring(visible(object))
+			if object:IsA("GuiObject") then detail ..= " pos=" .. tostring(object.AbsolutePosition) .. " size=" .. tostring(object.AbsoluteSize) end
+			if object:IsA("TextLabel") or object:IsA("TextButton") then detail ..= " text=" .. sample(object.Text) end
+			if object:IsA("ImageLabel") or object:IsA("ImageButton") then detail ..= " image=" .. sample(object.Image) end
+			if object:IsA("GuiButton") then wanted[object] = "GUI_BUTTON" end
+			current["GUI " .. id(object)] = detail
+		end
+	end
+	for _, key in ipairs({"Money", "Jenni", "TitleChestsOpened", "ChestsLooted", "ChestsOpened", "TotalChestsOpened", "TotalChestsLooted"}) do
+		current["Player@" .. key] = tostring(player:GetAttribute(key))
+	end
+	for key, value in pairs(current) do if capture.LastState[key] ~= value then log("STATE " .. key .. " " .. value) end end
+	for key in pairs(capture.LastState) do if current[key] == nil then log("LEFT_SCOPE " .. key) end end
+	capture.LastState = current
+	for object, connection in pairs(capture.ObjectConnections) do
+		if not wanted[object] then connection:Disconnect(); capture.ObjectConnections[object] = nil end
+	end
+	for object, kind in pairs(wanted) do
+		if capture.ObjectConnections[object] then continue end
+		local signal = kind == "CLICK" and object.MouseClick or object.Activated
+		capture.ObjectConnections[object] = signal:Connect(function(who)
+			if Input:GetFocusedTextBox() or (kind == "CLICK" and who and who ~= player) then return end
+			log(kind .. " " .. describe(object))
+		end)
+	end
+	capture.Nearby = #roots
+end
+local function stop(reason)
+	if not capture.Active then return end
+	local ok, err = pcall(snapshot); if not ok then log("SNAPSHOT_ERROR " .. tostring(err)) end
+	log("STOP " .. reason); capture.Active = false
+	if capture.Unwatch then capture.Unwatch(); capture.Unwatch = nil end
+	for _, connection in ipairs(capture.Connections) do connection:Disconnect() end; table.clear(capture.Connections)
+	for _, connection in pairs(capture.ObjectConnections) do connection:Disconnect() end; table.clear(capture.ObjectConnections)
+	local saved = save(reason)
+	capture.Candidates, capture.Ids, capture.LastState = {}, {}, {}
+	recordButton.Text, recordButton.BackgroundColor3 = "Record Chests", ui.Colors.AccentSoft
+	status.Text = saved and ("Chest recording saved. " .. (capture.HistorySaved and "Separate history file kept." or "Latest file only; history save failed."))
+		or "File save failed. Use Copy Recording."
+end
+local function start()
+	if capture.Closed or controller.IsUnloaded() then return end
+	if capture.Active then stop("STOPPED"); return end
+	capture.Epoch += 1
+	local ok, nonce = pcall(function() return HttpService:GenerateGUID(false) end)
+	if not ok then nonce = tostring(math.floor(os.clock() * 1000000)) .. "_" .. capture.Epoch end
+	capture.ArchivePath = "AnomalyHub/universal/beyond_nen_chest_capture_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
+	capture.Active, capture.Started, capture.NextSample, capture.NextSave = true, os.clock(), 0, os.clock() + 3
+	capture.Lines, capture.Bytes, capture.Limited, capture.CandidateLimit = {}, 0, false, false
+	capture.Ids, capture.NextId, capture.Candidates, capture.CandidateCount = {}, 0, {}, 0
+	capture.LastState, capture.ObjectConnections, capture.Nearby = {}, {}, 0
+	local epoch = capture.Epoch
+	local function current() return capture.Active and capture.Epoch == epoch end
+	local setupOk, setupError = pcall(function()
+		log("START session=" .. capture.ArchivePath)
+		if controller.WatchBeyondNenChests then
+			capture.Unwatch = controller.WatchBeyondNenChests(function(name, direction, args, started)
+				if not current() or started < capture.Started then return end
+				log("REMOTE " .. name .. " " .. direction .. " requestStart=" .. string.format("%.4f", started - capture.Started) .. " args=" .. sample(args))
+			end)
+		end
+		local probe = env.__AnomalyBeyondFishingProbe
+		log("COVERAGE " .. (probe and #probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "outgoing hooks unavailable; incoming events/UI only"))
+		local count = 0
+		for remote, definition in pairs(probe and probe.Targets or {}) do
+			if definition.Service == "ChestService" then count += 1; log("WATCH " .. remote:GetFullName()) end
+		end
+		log("WATCH_COUNT " .. count)
+		table.insert(capture.Connections, workspace.DescendantAdded:Connect(function(object) if current() then candidate(object) end end))
+		for index, object in ipairs(workspace:GetDescendants()) do
+			if index > 25000 then log("DISCOVERY_LIMIT initial 25000 objects; later additions still observed"); break end
+			candidate(object)
+		end
+		for _, name in ipairs({"PromptShown", "PromptHidden", "PromptButtonHoldBegan", "PromptButtonHoldEnded", "PromptTriggered", "PromptTriggerEnded"}) do
+			local connected, err = pcall(function()
+				table.insert(capture.Connections, Prompts[name]:Connect(function(prompt, who)
+					if not current() or Input:GetFocusedTextBox() or localDistance(prompt) > 100 then return end
+					if typeof(who) == "Instance" and who:IsA("Player") and who ~= player then return end
+					candidate(prompt); log("PROMPT " .. name .. " " .. describe(prompt) .. " detail=" .. sample(who))
+				end))
+			end)
+			if not connected then log("COVERAGE " .. name .. " unavailable: " .. tostring(err)) end
+		end
+		local function input(direction, value, processed)
+			if not current() or Input:GetFocusedTextBox() then return end
+			local key = value.KeyCode.Name ~= "Unknown" and value.KeyCode.Name or value.UserInputType.Name
+			if key ~= "E" and key ~= "F" and key ~= "MouseButton1" and key ~= "MouseButton2" and key ~= "Touch" and key ~= "ButtonX" and key ~= "ButtonA" then return end
+			log("INPUT " .. direction .. " key=" .. key .. " processed=" .. tostring(processed) .. " pointer=" .. tostring(Input:GetMouseLocation()))
+		end
+		table.insert(capture.Connections, Input.InputBegan:Connect(function(value, processed) input("DOWN", value, processed) end))
+		table.insert(capture.Connections, Input.InputEnded:Connect(function(value, processed) input("UP", value, processed) end))
+		snapshot()
+	end)
+	if not setupOk then log("ERROR " .. tostring(setupError)); stop("START_ERROR"); return end
+	if not save("RECORDING") then stop("SAVE_FAILED"); return end
+	recordButton.Text, recordButton.BackgroundColor3 = "Stop + Save", ui.Colors.Danger
+	status.Text = "Recording for up to 2 minutes. Open a chest, take an item / Take All, close the loot window, then Stop + Save."
+end
+recordButton = ui.FitColumn(ui.Button(card, "Record Chests", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
+ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()
+	if capture.Active then save("RECORDING") end
+	if capture.Report and type(setclipboard) == "function" then
+		local ok = pcall(setclipboard, capture.Report); status.Text = ok and "Chest recording copied." or "Clipboard unavailable."
+	end
+end), 1, 72)
+controller.Connect(RunService.Heartbeat, function()
+	if not capture.Active then return end
+	local now = os.clock()
+	if capture.Limited or now - capture.Started >= 120 then stop(capture.Limited and "LIMIT_REACHED" or "COMPLETE"); return end
+	if now >= capture.NextSample then
+		capture.NextSample = now + .2
+		local ok, err = pcall(snapshot)
+		if not ok then log("ERROR " .. tostring(err)); stop("CAPTURE_ERROR"); return end
+	end
+	if now >= capture.NextSave then capture.NextSave = now + 3; save("RECORDING") end
+end)
+controller.Connect(player.OnTeleport, function() stop("TELEPORT") end)
+controller.RegisterCleanup(function() stop("UNLOAD"); capture.Closed = true end)
+function controller.IsBeyondNenChestRecording() return capture.Active end
 
 end)()
 ;(function()

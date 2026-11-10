@@ -3116,7 +3116,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v27. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v28. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3358,7 +3358,11 @@ local weaponProfiles = {
 		["92183486518214"] = {Phase = .46, Name = "dagger extra strike"},
 		-- Six v6 damage snapshots at phases .537-.611, speed 1.04.
 		-- The exact move name and automatic parry outcome remain unverified.
-		["113521135913624"] = {Phase = .52, Name = "dagger additional strike (test)"},
+		-- v26/v27 player contacts reached15.23/19.32 studs. v27 skipped
+		-- atcurrent28.36/projected31.41, then hit .202s later at19.32 as the
+		-- gap closed. Only this attack gets a32-stud approach window: retain
+		-- facing/height/timing gates. These are trial detection bounds, not reach.
+		["113521135913624"] = {Phase = .52, Reach = 32, MaxDistance = 32, Name = "dagger additional strike (test)"},
 		-- Later hits persist after a confirmed first parry. Two automatic runs
 		-- also show an earlier follow-up at .533/.571, previously unmapped.
 		-- Nearby follow-ups hit after facing/projection rejected them. Treat
@@ -3391,7 +3395,7 @@ local targetModes = {"NPCs", "Players", "Both"}
 local savedTargets = controller.State and controller.State.BeyondNenParryTargets
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {},
 	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "NPCs"}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v27", "Earlier shield strike and expanded shield coverage. Choose NPCs, Players, or Both below; changing targets stops the test.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v28", "Dagger approach detection and clearer target status. Choose NPCs, Players, or Both below; changing targets stops the test.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3404,10 +3408,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v27 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v28 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
+		.. "\nDagger v28: only113521135913624 expands to current/projected distance32 at the existing phase.52. v26/v27 non-periodic contacts reached15.23/19.32; v27 skipped atcurrent28.36/projected31.41 before closing to19.32 in.202s. This is an approach-detection trial, not a32-stud hitbox claim. Facing.15, height8, other Dagger timings/ranges and own-skill handling remain unchanged. Periodic damage and single uncertain skill associations do not create new profiles. No eligible targets now gets an explicit status; the selected mode is never changed automatically."
 		.. "\nOlympus Shield v27: eight exact animations from explicit weapon metadata. A phase.40/reach10/max13/close4 retains v26's matched parry. B advances.53 to.42 after two damage receipts at.449; C stays.35/facing-.4. Windup stays.90, expands to reach32/max35 after damage at23.74/31.52. Multi-hit phases.84/1.00/1.22/1.41/1.62/1.89, reach20/max23, follow-up lead.08 after a second episode reached18.94 and revealed the1.650 contact. New D phase.44, ranged skill1.13/reach32/max35 (two samples), additional strike.76 (one sample). Height8 and normal input/cooldown gates remain. These are trial timings/bounds, not guaranteed hitboxes or parryability. Overlapping71522785988111/84503197252950 stay unmapped; unmatched inputs/results do not establish timing or success."
 		.. "\nFists: 13 animations. Pitchfork: 6. BigPitchfork: 8. Rifle: 6 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
 		.. "\nShockwork Pistols v25: four exact animations from explicit weapon metadata, with 14/10/14/1 candidate contact windows. BurstA includes late phase3.08, reach23/max26/facing.15. BurstB reach30/max31/height30/facing-.4 after repeated damage across vertical25. Multi-hit76637609852449 extends through3.28, reach15/max18, close radius10, otherwise facing-.5. Close strike10/max13/facing-.95. Other height bounds remain8. Repeated contacts require .08s lead and normal cooldowns; no Rifle sustained-guard rule is inherited. These are trial bounds/contact seeds, not measured hitboxes, shot counts or proof every contact is parryable. Other pistol animations stay unmapped."
@@ -3916,7 +3921,18 @@ local function step()
 			end
 		end
 	end
-	if not best then gate("ready"); show("Watching mapped weapon attacks | Targets: " .. state.TargetMode); return end
+	if not best then
+		if next(state.Rigs) == nil then
+			gate("no-eligible-targets")
+			local message = state.TargetMode == "Players" and "No nearby players detected. Select NPCs for NPC fights."
+				or (state.TargetMode == "NPCs" and "No nearby NPCs detected. Select Players for player fights."
+				or "No nearby targets detected.")
+			show(message)
+		else
+			gate("ready"); show("Watching mapped weapon attacks | Targets: " .. state.TargetMode)
+		end
+		return
+	end
 	local recovery = punchRecovery(model)
 	if recovery then
 		if state.Gate ~= "local-punch-recovery" or state.RecoveryAsset ~= recovery.Asset then

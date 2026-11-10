@@ -40,9 +40,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
-local MarketplaceService = game:GetService("MarketplaceService")
 local VirtualUser = game:GetService("VirtualUser")
-local Stats = game:GetService("Stats")
 
 local player = Players.LocalPlayer
 while not player do
@@ -104,12 +102,7 @@ local state = {
 	NpcEspSettings = {Name = true, Distance = true, Box = true,
 		Quest = true, Enemy = true, Boss = true, Other = true},
 	Noclip = false,
-	InfiniteJump = false,
-	SpeedEnabled = false,
-	WalkSpeed = 16,
-	JumpPower = 50,
 	AntiAfk = true,
-	LastJumpAt = 0,
 	EspEntries = {},
 	Collision = {},
 	ChatLog = {},
@@ -150,7 +143,6 @@ local function loadConfig()
 			if type(decoded.EspSettings[key]) == "boolean" then state.EspSettings[key] = decoded.EspSettings[key] end
 		end
 	end
-	state.InfiniteJump = decoded.InfiniteJump == true
 	state.NpcEspEnabled = decoded.NpcEspEnabled == true
 	state.NpcEspDistance = math.clamp(tonumber(decoded.NpcEspDistance) or 2500, 100, 10000)
 	-- Existing fixed-scope settings predate automatic boss targeting. Upgrade
@@ -164,9 +156,6 @@ local function loadConfig()
 			if type(decoded.NpcEspSettings[key]) == "boolean" then state.NpcEspSettings[key] = decoded.NpcEspSettings[key] end
 		end
 	end
-	state.SpeedEnabled = decoded.SpeedEnabled == true
-	state.WalkSpeed = math.clamp(tonumber(decoded.WalkSpeed) or 16, 8, 250)
-	state.JumpPower = math.clamp(tonumber(decoded.JumpPower) or 50, 25, 250)
 	state.AntiAfk = decoded.AntiAfk ~= false
 end
 
@@ -183,10 +172,6 @@ local function saveConfig()
 		BeyondNenParryTargetingVersion = 2,
 		BeyondNenChestSelection = state.BeyondNenChestSelection,
 		NpcEspSettings = table.clone(state.NpcEspSettings),
-		InfiniteJump = state.InfiniteJump,
-		SpeedEnabled = state.SpeedEnabled,
-		WalkSpeed = state.WalkSpeed,
-		JumpPower = state.JumpPower,
 		AntiAfk = state.AntiAfk,
 	}
 	return pcall(writefile, state.ConfigPath, HttpService:JSONEncode(data))
@@ -271,11 +256,10 @@ local content = create("Frame", {
 local pages, tabButtons = {}, {}
 local pageMeta = {
 	Home = {"DASHBOARD", "Game-neutral tools and live session information"},
-	Players = {"PLAYERS", "Find a player and control your spectator camera"},
+	General = {"GENERAL", "Spectate players and control Noclip"},
 	ESP = {"ESP", "Player and NPC overlays together, with independent controls"},
 	Auto = {"AUTO", "Automatic activities and setup controls"},
 	Combat = {"COMBAT", "Combat recording and defense tools"},
-	Movement = {"MOVEMENT", "Character movement and collision utilities"},
 	Servers = {"SERVER NAVIGATION", "Rejoin or move to another public server"},
 	Settings = {"SETTINGS", "Persistence, keybind, reload, and cleanup"},
 }
@@ -290,7 +274,7 @@ local function makePage(name)
 	pages[name] = page
 	return page
 end
-for _, name in ipairs({"Home", "Players", "ESP", "Movement", "Servers", "Settings"}) do makePage(name) end
+for _, name in ipairs({"Home", "General", "ESP", "Servers", "Settings"}) do makePage(name) end
 if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
 
 local function selectTab(name)
@@ -307,9 +291,10 @@ local function selectTab(name)
 	end
 	titleLabel.Text = pageMeta[name][1]
 	subtitleLabel.Text = pageMeta[name][2]
+	if name == "Servers" and state.RefreshServers then state.RefreshServers() end
 end
 
-local tabNames = {{"Home", "[D]  Dashboard"}, {"Players", "[P]  Players"}, {"ESP", "[E]  ESP"}, {"Movement", "[M]  Movement"}, {"Servers", "[S]  Servers"}, {"Settings", "[=]  Settings"}}
+local tabNames = {{"Home", "[D]  Dashboard"}, {"General", "[G]  General"}, {"ESP", "[E]  ESP"}, {"Servers", "[S]  Servers"}, {"Settings", "[=]  Settings"}}
 if pages.Auto then table.insert(tabNames, 4, {"Auto", "[A]  Auto"}) end
 if pages.Combat then table.insert(tabNames, 4, {"Combat", "[C]  Combat"}) end
 tabBar.Size = UDim2.new(1, -20, 0, #tabNames * 40)
@@ -396,31 +381,7 @@ end
 
 -- ESP controls share one scrolling page, with a separate card per actor type.
 
-local gameCard = card(pages.Home, "CURRENT EXPERIENCE", "This profile intentionally avoids game-specific remotes and data models.", 164)
-local gameNameLabel = create("TextLabel", {
-	Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 25), BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBold, Text = "Loading experience name...", TextColor3 = colors.Accent, TextSize = 14,
-	TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
-}, gameCard)
-local sessionLabel = create("TextLabel", {
-	Position = UDim2.fromOffset(14, 101), Size = UDim2.new(1, -28, 0, 48), BackgroundTransparency = 1,
-	Font = Enum.Font.Code, Text = "", TextColor3 = colors.Text, TextSize = 10,
-	TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-}, gameCard)
-
-local safetyCard = card(pages.Home, "PROFILE BOUNDARY", "Universal tools are available here. A future game adapter can add features without changing this core.", 116)
-local adapterLabel = create("TextLabel", {
-	Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 24), BackgroundTransparency = 1,
-	Font = Enum.Font.Code, Text = "ACTIVE ADAPTER  //  " .. string.upper(tostring(env.__AnomalyDetectedProfile or "Universal")), TextColor3 = colors.Success, TextSize = 10,
-	TextXAlignment = Enum.TextXAlignment.Left,
-}, safetyCard)
-
-task.spawn(function()
-	local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, game.PlaceId)
-	if not unloaded and ok and type(info) == "table" and type(info.Name) == "string" then gameNameLabel.Text = info.Name end
-end)
-
-local playerCard = card(pages.Players, "SPECTATE v6", "Choose a player with the arrows or open the list. Right-drag to orbit; scroll to zoom.", 154)
+local playerCard = card(pages.General, "SPECTATE v6", "Choose a player with the arrows or open the list. Right-drag to orbit; scroll to zoom.", 154)
 local spectateBar = create("Frame", {
 	Name = "SpectateControls", Position = UDim2.fromOffset(14, 70), Size = UDim2.new(1, -28, 0, 36),
 	BackgroundColor3 = colors.Surface, BorderSizePixel = 0,
@@ -533,39 +494,35 @@ fitColumn(valueBox(espCard, "ESP range", 0, 0, 180, state.EspDistance, function(
 	saveConfig()
 end), 1, 86)
 
-local movementCard = card(pages.Movement, "CHARACTER MOVEMENT", "These settings use standard Roblox character properties; some games may override them.", 190)
-local noclipToggle = button(movementCard, "Noclip: OFF", 14, 72, 180, function(object)
-	state.Noclip = not state.Noclip
-	object.Text = state.Noclip and "Noclip: ON" or "Noclip: OFF"
-	object.BackgroundColor3 = state.Noclip and colors.AccentSoft or colors.Surface
-end)
-local jumpToggle = button(movementCard, state.InfiniteJump and "Infinite Jump: ON" or "Infinite Jump: OFF", 204, 72, 180, function(object)
-	state.InfiniteJump = not state.InfiniteJump
-	object.Text = state.InfiniteJump and "Infinite Jump: ON" or "Infinite Jump: OFF"
-	object.BackgroundColor3 = state.InfiniteJump and colors.AccentSoft or colors.Surface
-	saveConfig()
-end, state.InfiniteJump and colors.AccentSoft or colors.Surface)
-local speedToggle = button(movementCard, state.SpeedEnabled and "Speed Override: ON" or "Speed Override: OFF", 14, 116, 180, function(object)
-	state.SpeedEnabled = not state.SpeedEnabled
-	object.Text = state.SpeedEnabled and "Speed Override: ON" or "Speed Override: OFF"
-	object.BackgroundColor3 = state.SpeedEnabled and colors.AccentSoft or colors.Surface
-	saveConfig()
-end, state.SpeedEnabled and colors.AccentSoft or colors.Surface)
-valueBox(movementCard, "Walk speed", 204, 116, 86, state.WalkSpeed, function(box)
-	state.WalkSpeed = math.clamp(tonumber(box.Text) or state.WalkSpeed, 8, 250)
-	box.Text = tostring(math.floor(state.WalkSpeed)); saveConfig()
-end)
-valueBox(movementCard, "Jump", 298, 116, 86, state.JumpPower, function(box)
-	state.JumpPower = math.clamp(tonumber(box.Text) or state.JumpPower, 25, 250)
-	box.Text = tostring(math.floor(state.JumpPower)); saveConfig()
+local function restoreCollisions()
+ for part, canCollide in pairs(state.Collision) do
+  if part and part.Parent then pcall(function() part.CanCollide=canCollide end) end
+ end
+ table.clear(state.Collision)
+end
+local movementCard = card(pages.General, "NOCLIP", "Pass through solid objects. Turning this off restores normal collisions.", 118)
+movementCard.LayoutOrder=10
+button(movementCard, "Noclip: OFF", 14, 72, 180, function(object)
+ state.Noclip=not state.Noclip
+ if not state.Noclip then restoreCollisions() end
+ object.Text=state.Noclip and "Noclip: ON" or "Noclip: OFF"
+ object.BackgroundColor3=state.Noclip and colors.AccentSoft or colors.Surface
 end)
 
-local serverCard = card(pages.Servers, "PUBLIC SERVER ROUTES", "Rejoin this instance or ask Roblox for another public server in this place.", 172)
+local serverCard = card(pages.Servers, "PUBLIC SERVERS", "Available public servers for your current place. Refresh to update the list.", 468)
 local serverStatus = create("TextLabel", {
-	Position = UDim2.fromOffset(14, 120), Size = UDim2.new(1, -28, 0, 34), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "Ready", TextColor3 = colors.Muted, TextSize = 9,
-	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-}, serverCard)
+ Position=UDim2.fromOffset(14,112),Size=UDim2.new(1,-28,0,36),BackgroundTransparency=1,
+ Font=Enum.Font.Gotham,Text="Open Servers or press Refresh to load.",TextColor3=colors.Muted,TextSize=10,
+ TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left,
+},serverCard)
+local serverList=create("ScrollingFrame",{
+ Position=UDim2.fromOffset(14,156),Size=UDim2.new(1,-28,0,296),BackgroundColor3=colors.Surface,
+ BorderSizePixel=0,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollBarThickness=4,
+},serverCard)
+create("UIListLayout",{Padding=UDim.new(0,6),SortOrder=Enum.SortOrder.LayoutOrder},serverList)
+local serverRows,serverBusy,serverLoading,serverLoaded,serverLastRefresh={},false,false,false,-math.huge
+local serverRendered={}
+local serverAttempt=0
 
 local function downloadLatestPublicSource()
 	local apiUrl = "https://api.github.com/repos/Xostrath/anomalys-hub/git/ref/heads/main?anomaly_ref=" .. HttpService:GenerateGUID(false)
@@ -592,71 +549,112 @@ local function queueReload()
 	return pcall(queue, queued)
 end
 
+-- SERVER LIST LOGIC START
 local function fetchServers()
-	local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100", game.PlaceId)
-	local ok, body = pcall(function() return game:HttpGet(url) end)
-	if not ok then return nil, tostring(body) end
-	local decodeOk, page = pcall(HttpService.JSONDecode, HttpService, body)
-	if not decodeOk or type(page) ~= "table" then return nil, "Invalid server response" end
-	return page.data
+ local request=env.request or env.http_request or (env.http and env.http.request) or (env.syn and env.syn.request)
+ local rows,seen,cursor={}, {},nil
+ for _=1,3 do
+  local url=string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100",game.PlaceId)
+  if cursor then url..="&cursor="..HttpService:UrlEncode(cursor) end
+  local ok,body=false,nil
+  if type(request)=="function" then
+   local success,response=pcall(request,{Url=url,Method="GET"})
+   if success and type(response)=="table" then
+    local code=tonumber(response.StatusCode or response.Status)
+    if code==429 then return nil,"Roblox rate limit. Wait a little, then Refresh." end
+    if code and code>=200 and code<300 and type(response.Body)=="string" then ok,body=true,response.Body end
+   end
+  end
+  if not ok then ok,body=pcall(function()return game:HttpGet(url)end) end
+  if not ok or type(body)~="string" then return nil,"Server lookup unavailable. Try Refresh again." end
+  local decoded,page=pcall(HttpService.JSONDecode,HttpService,body)
+  if not decoded or type(page)~="table" or type(page.data)~="table" then return nil,"Roblox returned an unreadable server list." end
+  for _,row in ipairs(page.data)do
+   if type(row)=="table" and type(row.id)=="string" and row.id~="" and not seen[row.id] then
+    local playing,maxPlayers=tonumber(row.playing),tonumber(row.maxPlayers)
+    if playing and maxPlayers and playing>=0 and maxPlayers>0 and playing<=maxPlayers and maxPlayers<math.huge then
+     seen[row.id]=true
+     table.insert(rows,{id=row.id,playing=playing,maxPlayers=maxPlayers,ping=tonumber(row.ping)})
+    end
+   end
+  end
+  local nextCursor=page.nextPageCursor
+  if #rows>=100 or type(nextCursor)~="string" or nextCursor=="" or nextCursor==cursor then break end
+  cursor=nextCursor
+ end
+ table.sort(rows,function(a,b)if a.playing==b.playing then return a.id<b.id end;return a.playing<b.playing end)
+ return rows
 end
-
-local serverBusy = false
+local function joinServer(id)
+ if unloaded or serverBusy then return end
+ serverBusy=true
+ serverAttempt+=1
+ local attempt=serverAttempt
+ local queued=queueReload()
+ serverStatus.Text="Joining server..."..(queued and "" or " Re-run your loader after arrival.")
+ local ok=pcall(TeleportService.TeleportToPlaceInstance,TeleportService,game.PlaceId,id,player)
+ if not ok then serverBusy=false;serverStatus.Text="Join request failed. Try another server.";return end
+ task.delay(12,function()
+  if unloaded or not serverBusy or serverAttempt~=attempt then return end
+  serverBusy=false;serverStatus.Text="Still here? Refresh the list and try another server."
+ end)
+end
+local function renderServers()
+ for _,row in ipairs(serverRendered)do row:Destroy()end
+ serverRendered={}
+ for index,server in ipairs(serverRows)do
+  local frame=create("Frame",{LayoutOrder=index,Size=UDim2.new(1,-6,0,48),BackgroundColor3=colors.Raised,BorderSizePixel=0},serverList)
+  table.insert(serverRendered,frame)
+  local current=server.id==game.JobId
+  local ping=server.ping and server.ping>=0 and server.ping<100000 and (" · "..math.floor(server.ping).." ms") or ""
+  create("TextLabel",{Position=UDim2.fromOffset(10,5),Size=UDim2.new(1,-106,0,38),BackgroundTransparency=1,
+   Text=(current and "Current server" or "Server "..index).." · "..server.playing.."/"..server.maxPlayers.." players"..ping,
+   TextColor3=colors.Text,TextSize=11,Font=Enum.Font.Gotham,TextXAlignment=Enum.TextXAlignment.Left,TextWrapped=true},frame)
+  local join=button(frame,current and "HERE" or (server.playing>=server.maxPlayers and "FULL" or "JOIN"),0,7,80,function()
+   if not current and server.playing<server.maxPlayers then joinServer(server.id)end
+  end,current and colors.Surface or colors.AccentSoft)
+  join.Position=UDim2.new(1,-90,0,7)
+ end
+end
+local function refreshServers(after,force)
+ if unloaded or serverLoading or serverBusy then return end
+ if not force and serverLoaded and os.clock()-serverLastRefresh<30 then if after then after()end;return end
+ if os.clock()-serverLastRefresh<5 then serverStatus.Text="Wait a few seconds before refreshing again.";return end
+ serverLoading=true;serverLastRefresh=os.clock();serverStatus.Text="Loading public servers..."
+ task.spawn(function()
+  local ok,rows,err=pcall(fetchServers)
+  if unloaded then return end
+  serverLoading=false
+  if not ok or not rows then serverStatus.Text=ok and err or "Server lookup failed. Try Refresh again.";return end
+  serverRows,serverLoaded=rows,true;renderServers()
+  serverStatus.Text=#rows>0 and (#rows.." public servers loaded. Select Join or use a route above.") or "No public servers were returned. Rejoin is still available."
+  if after then after()end
+ end)
+end
 local function hopServer(lowest)
-	if serverBusy then return end
-	serverBusy = true
-	serverStatus.Text = "Finding an available server..."
-	task.spawn(function()
-		local rows, err = fetchServers()
-		if unloaded then return end
-		if type(rows) ~= "table" then
-			serverStatus.Text = "Server lookup failed: " .. tostring(err)
-			serverStatus.TextColor3 = colors.Warning
-			serverBusy = false
-			return
-		end
-		local candidates = {}
-		for _, row in ipairs(rows) do
-			if type(row) == "table" and type(row.id) == "string" and row.id ~= game.JobId and (tonumber(row.playing) or 0) < (tonumber(row.maxPlayers) or 0) then
-				table.insert(candidates, row)
-			end
-		end
-		if #candidates == 0 then
-			serverStatus.Text = "No other open server was returned."
-			serverStatus.TextColor3 = colors.Warning
-			serverBusy = false
-			return
-		end
-		local target = lowest and candidates[1] or candidates[math.random(1, #candidates)]
-		if lowest then
-			for _, row in ipairs(candidates) do if (row.playing or math.huge) < (target.playing or math.huge) then target = row end end
-		end
-		queueReload()
-		serverStatus.Text = "Joining " .. tostring(target.playing or "?") .. "/" .. tostring(target.maxPlayers or "?") .. " players..."
-		local teleported = pcall(TeleportService.TeleportToPlaceInstance, TeleportService, game.PlaceId, target.id, player)
-		if not teleported then serverStatus.Text = "Teleport request failed."; serverStatus.TextColor3 = colors.Warning end
-		serverBusy = false
-	end)
+ refreshServers(function()
+  local candidates={}
+  for _,row in ipairs(serverRows)do if row.id~=game.JobId and row.playing<row.maxPlayers then table.insert(candidates,row)end end
+  if #candidates==0 then serverStatus.Text="No other open server returned. Refresh or Rejoin.";return end
+  local target=lowest and candidates[1] or candidates[math.random(1,#candidates)]
+  joinServer(target.id)
+ end,false)
 end
-
-button(serverCard, "Rejoin", 14, 72, 118, function()
-	queueReload(); serverStatus.Text = "Rejoining current server..."
-	pcall(TeleportService.TeleportToPlaceInstance, TeleportService, game.PlaceId, game.JobId, player)
+for index,definition in ipairs({
+ {"Rejoin",function()joinServer(game.JobId)end},
+ {"Random",function()hopServer(false)end},
+ {"Lowest",function()hopServer(true)end},
+ {"Refresh",function()refreshServers(nil,true)end},
+})do
+ local control=button(serverCard,definition[1],0,72,100,definition[2],colors.AccentSoft)
+ control.Position=UDim2.new((index-1)*.25,14,0,72);control.Size=UDim2.new(.25,-20,0,34)
+end
+state.RefreshServers=function()refreshServers(nil,false)end
+connect(TeleportService.TeleportInitFailed,function(who,result,message)
+ if unloaded or who~=player or not serverBusy then return end
+ serverBusy=false;serverStatus.Text="Join failed: "..tostring(message):sub(1,160)..". Refresh and try another server."
 end)
-button(serverCard, "Random", 142, 72, 118, function() hopServer(false) end)
-button(serverCard, "Lowest Population", 270, 72, 160, function() hopServer(true) end)
-
-local configCard = card(pages.Settings, "UNIVERSAL CONFIG", "Settings are saved separately for each Roblox universe.", 126)
-local configStatus = create("TextLabel", {
-	Position = UDim2.fromOffset(204, 78), Size = UDim2.new(1, -218, 0, 28), BackgroundTransparency = 1,
-	Font = Enum.Font.Code, Text = state.ConfigPath, TextColor3 = colors.Muted, TextSize = 8,
-	TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-}, configCard)
-button(configCard, "Save Config", 14, 72, 180, function()
-	local saved = saveConfig()
-	configStatus.Text = saved and "Saved: " .. state.ConfigPath or "Executor file access unavailable"
-	configStatus.TextColor3 = saved and colors.Success or colors.Warning
-end, colors.AccentSoft)
+-- SERVER LIST LOGIC END
 
 local fingerprintCard = card(pages.Settings, "GAME ADAPTER DISCOVERY", "Exports client-visible remote names and paths so a new game can receive its own exact profile detector.", 148)
 local fingerprintStatus = create("TextLabel", {
@@ -713,7 +711,7 @@ local function unload()
 	end
 	table.clear(controller.CleanupCallbacks)
 	stopSpectating()
-	for part, canCollide in pairs(state.Collision) do if part and part.Parent then pcall(function() part.CanCollide = canCollide end) end end
+	restoreCollisions()
 	for _, entry in pairs(state.EspEntries) do
 		if entry.HealthBinding then entry.HealthBinding.Disconnect() end
 		if entry.Gui then entry.Gui:Destroy() end
@@ -1011,28 +1009,16 @@ connect(RunService.Heartbeat, function(delta)
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local root = character and character:FindFirstChild("HumanoidRootPart")
-	if state.SpeedEnabled and humanoid then
-		humanoid.WalkSpeed = state.WalkSpeed
-		if humanoid.UseJumpPower then humanoid.JumpPower = state.JumpPower else humanoid.JumpHeight = math.max(7.2, state.JumpPower / 7) end
-	end
 	if elapsed >= 0.15 then
 		elapsed = 0
 		for _, target in ipairs(Players:GetPlayers()) do updateEsp(target, root) end
 		for target in pairs(state.EspEntries) do if not target.Parent then removeEsp(target) end end
-		local ping = "Unavailable"
-		local network = Stats:FindFirstChild("Network")
-		local items = network and network:FindFirstChild("ServerStatsItem")
-		local dataPing = items and items:FindFirstChild("Data Ping")
-		if dataPing then
-			local ok, value = pcall(function() return dataPing:GetValueString() end)
-			if ok then ping = value end
-		end
-		sessionLabel.Text = string.format("PLACE  %s\nUNIVERSE  %s\nPLAYERS  %d/%d    PING  %s", tostring(game.PlaceId), tostring(game.GameId), #Players:GetPlayers(), Players.MaxPlayers, ping)
+
 	end
 end)
 
 connect(RunService.Stepped, function()
-	if not state.Noclip then return end
+	if unloaded or not state.Noclip then return end
 	local character = player.Character
 	if not character then return end
 	for _, descendant in ipairs(character:GetDescendants()) do
@@ -1043,12 +1029,6 @@ connect(RunService.Stepped, function()
 	end
 end)
 
-connect(UserInputService.JumpRequest, function()
-	if not state.InfiniteJump or os.clock() - state.LastJumpAt < 1 then return end
-	state.LastJumpAt = os.clock()
-	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-	if humanoid then humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end
-end)
 
 connect(UserInputService.InputBegan, function(input, processed)
 	if processed or UserInputService:GetFocusedTextBox() then return end

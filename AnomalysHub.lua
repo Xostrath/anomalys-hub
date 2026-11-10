@@ -3116,7 +3116,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v29. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v30. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3232,8 +3232,10 @@ local weaponProfiles = {
 		-- hit after range/angle skips: B projected16.50 or facing-.402;
 		-- C projected14.68 or facing-.577; D projected16.26 or facing-.662.
 		-- Per-ID trial geometry, not measured hitboxes. Keep phase seeds.
-		["109115837378623"] = {Phase = .62, Reach = 15, MinFacing = -.85, Name = "Fox Bear strike A"},
-		["120428998246938"] = {Phase = .48, Reach = 17, MaxDistance = 19, MinFacing = -.45, Name = "Fox Bear strike B (test)"},
+		-- Two clearer v27 runs: A hit16.60/15.74 after projected19.62/16.05
+		-- skips; B hit12.47 atfacing-.680 after a same-angle skip. Keep phases.
+		["109115837378623"] = {Phase = .62, Reach = 20, MaxDistance = 22, MinFacing = -.85, Name = "Fox Bear strike A"},
+		["120428998246938"] = {Phase = .48, Reach = 17, MaxDistance = 19, MinFacing = -.75, Name = "Fox Bear strike B (test)"},
 		-- v25: height-8.65 delayed C until .017s remained, then FreshHitStun
 		-- and damage. Only C and rapid get height9; other Bear bounds stay8.
 		["81775052619110"] = {Phase = .40, Reach = 15, MaxDistance = 18, MaxVertical = 9, MinFacing = -.65, Name = "Fox Bear strike C (test)"},
@@ -3250,7 +3252,9 @@ local weaponProfiles = {
 		-- facing-.953. First skip projected26.76. This skill's facing cannot
 		-- identify safety; retain bounded current/projected range and elevation.
 		-- v25: height8.14 skipped first chance at .163s lead, delaying it to.033.
-		["85729441475501"] = {Phases = {1.55, 1.67, 1.78, 1.89, 2.01, 2.13, 2.24, 2.36}, MinFollowupLead = .08, Reach = 28, MaxDistance = 30, MaxVertical = 9, MinFacing = -1, Name = "Fox Bear rapid skill (test)"},
+		-- v27 confirms opening parries with CancelMove=false; later pulses hit
+		-- after release. Guard only after that confirmation, with the normal2s cap.
+		["85729441475501"] = {Phases = {1.55, 1.67, 1.78, 1.89, 2.01, 2.13, 2.24, 2.36}, MinFollowupLead = .08, GuardThroughPhase = 2.48, GuardIfUncancelled = true, Reach = 28, MaxDistance = 30, MaxVertical = 9, MinFacing = -1, Name = "Fox Bear rapid skill (test)"},
 		-- v12 records five contacts at 1.442/1.896/2.246/2.821/3.712, up to
 		-- 13.15 studs. v10 corroborates 1.871/3.708 and elapsed first/fourth
 		-- contacts, but exact move names and automatic outcomes remain unknown.
@@ -3260,7 +3264,10 @@ local weaponProfiles = {
 		-- then cooldown blocked later contacts. Preserve those later windows.
 		-- v19 contact3 hit after facing-.732 was skipped; contact2 was delayed
 		-- at-.047 until only89ms remained, then rejected FreshHitStun.
-		["109000405251112"] = {Phases = {1.42, 1.86, 2.22, 2.79, 3.68}, MinFollowupLead = .08, Reach = 20, MaxDistance = 23, MinFacing = -.8, Name = "Fox Bear extended skill (test)"},
+		-- Latest second contacts1.808/1.821 precede the old1.86 seed. Opening
+		-- parry confirmed with CancelMove=false; held guard is protection, not
+		-- a claim of repeated parries. Cap3s and release byphase3.82.
+		["109000405251112"] = {Phases = {1.42, 1.78, 2.22, 2.79, 3.68}, MinFollowupLead = .08, GuardThroughPhase = 3.82, GuardMaxDuration = 3, GuardIfUncancelled = true, Reach = 20, MaxDistance = 23, MinFacing = -.8, Name = "Fox Bear extended skill (test)"},
 		-- Two v12 runs show 44.85 damage at phases 2.021/2.000/2.004 from
 		-- 8.46/34.73/43.05 studs. Separate range/timing seed; the exact skill,
 		-- targeting shape and whether it can be parried remain unverified.
@@ -3268,7 +3275,10 @@ local weaponProfiles = {
 		-- Repeated side hits include facing -.645/-.708 at9.93/10.22 studs,
 		-- after a skip at-.693. Broaden only this skill's trial facing bound.
 		-- Exact skill shape and parryability remain unknown.
-		["97452490480378"] = {Phase = 2.60, Reach = 28, MaxDistance = 32, MinFacing = -.8, Name = "Fox Bear additional skill (test)"},
+		-- Repeated distant hits:39.58/40.54 at2.700/2.729, latest59.12 at2.871.
+		-- A bounded empirical distance delay (not measured projectile speed)
+		-- prevents simply pressing at the close-range phase from far away.
+		["97452490480378"] = {Phase = 2.60, Reach = 60, MaxDistance = 60, MinFacing = -.8, DistanceTiming = {Start = 20, Speed = 200, MaxDelay = .20}, Name = "Fox Bear additional skill (test)"},
 	}},
 	bat = {Label = "Jager's Bat (recorded)", Reach = 11, MaxDistance = 14, Animations = {
 		-- Two v12 runs show Tool.WeaponName="Jager's Bat" while the player's
@@ -3406,7 +3416,7 @@ local targetModes = {"NPCs", "Players", "Both"}
 local savedTargets = controller.State and controller.State.BeyondNenParryTargets
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {},
 	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "NPCs"}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v29", "Shockwork Pistols: new attacks and guard after a confirmed burst parry. Choose NPCs, Players, or Both below.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v30", "Fox Bear: continuing-combo guard and distance checks. Choose NPCs, Players, or Both below.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -3419,10 +3429,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v29 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v30 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
+		.. "\nFox Bear v30 overrides prior geometry notes: A projected20/current22; B facing-.75; ordinary strike phases unchanged. Rapid skill guard through2.48/cap2s, extended guard through3.82/cap3s only after matched CancelMove=false parry. Extended second seed1.86->1.78 after receipts1.808/1.821; other contacts unchanged. Additional skill97452490480378 now current/projected60 and adds clamp((distance-20)/200,0,.20) seconds to phase ETA, using current distance and live track speed. This empirical trial follows hits at39.58/40.54/59.12; no measured projectile speed or guaranteed hitbox implied. Close-range timing, elevation, cooldown, own-skill rules and other weapons stay unchanged."
 		.. "\nShockwork Pistols v29: six mapped animations. BurstA first seed.40->.34 after a ready opening tap at.250 still got FreshHitStun; later contacts unchanged. Multi-hit76637609852449 retains phases, expands reach18/current21/close radius13 after damage at16.15 and rear11.09. Initial F lasts up to.30; only matched ParryResult with CancelMove=false extends guard through phase3.45, capped3.5s. Accepted, cancelled or ambiguous results do not extend it. This is held-block protection after a parry, not repeated perfect parries; live benefit unverified. New126546963227585 phase.40/reach10/max13 from two close hits;118856732820265 phases1.49/1.99/reach21/max24/facing-.75 from one two-hit episode. No boss-name filter or own-skill bypass."
 		.. "\nDagger v28: only113521135913624 expands to current/projected distance32 at the existing phase.52. v26/v27 non-periodic contacts reached15.23/19.32; v27 skipped atcurrent28.36/projected31.41 before closing to19.32 in.202s. This is an approach-detection trial, not a32-stud hitbox claim. Facing.15, height8, other Dagger timings/ranges and own-skill handling remain unchanged. Periodic damage and single uncertain skill associations do not create new profiles. No eligible targets now gets an explicit status; the selected mode is never changed automatically."
 		.. "\nOlympus Shield v27: eight exact animations from explicit weapon metadata. A phase.40/reach10/max13/close4 retains v26's matched parry. B advances.53 to.42 after two damage receipts at.449; C stays.35/facing-.4. Windup stays.90, expands to reach32/max35 after damage at23.74/31.52. Multi-hit phases.84/1.00/1.22/1.41/1.62/1.89, reach20/max23, follow-up lead.08 after a second episode reached18.94 and revealed the1.650 contact. New D phase.44, ranged skill1.13/reach32/max35 (two samples), additional strike.76 (one sample). Height8 and normal input/cooldown gates remain. These are trial timings/bounds, not guaranteed hitboxes or parryability. Overlapping71522785988111/84503197252950 stay unmapped; unmatched inputs/results do not establish timing or success."
@@ -3901,10 +3912,14 @@ local function step()
 			local weaponKey, weapon, profile = attackOf(rig, swing.Asset)
 			if not profile then continue end
 			local phase, speed = track.TimePosition, track.Speed
+			local delta = localRoot.Position - root.Position
+			local distance = delta.Magnitude
+			local timing = profile.DistanceTiming
+			local distanceDelay = timing and math.clamp((distance - timing.Start) / timing.Speed, 0, timing.MaxDelay) or 0
 			local contact = swing.Contact or 1
 			local hitPhase = contactPhase(profile, contact)
 			while hitPhase do
-				local eta = (hitPhase - phase) / speed
+				local eta = (hitPhase - phase) / speed + distanceDelay
 				local minimum = contact > 1 and profile.MinFollowupLead or -.025
 				if eta >= minimum then break end
 				note(string.format("SKIP actorId=%d weapon=%s animation=%s contact=%d reason=%s phase=%.3f speed=%.3f eta=%.3f minimum=%.3f", rig.Id, weaponKey, swing.Asset, contact, eta < -.025 and "late" or "insufficient-lead", phase, speed, eta, minimum))
@@ -3912,10 +3927,8 @@ local function step()
 			end
 			swing.Contact = contact
 			if not hitPhase then swing.Used = true; continue end
-			local remaining = (hitPhase - phase) / speed
+			local remaining = (hitPhase - phase) / speed + distanceDelay
 			if remaining > state.Lead then continue end
-			local delta = localRoot.Position - root.Position
-			local distance = delta.Magnitude
 			-- Re-evaluate geometry at the moment of the tap, including a short
 			-- velocity projection for closing attacks, instead of a fixed timer.
 			local projected = delta + (localRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity) * math.max(0, remaining)
@@ -3927,7 +3940,7 @@ local function step()
 			local geometryOk = distance <= (profile.MaxDistance or weapon.MaxDistance or 12) and projected.Magnitude <= (profile.Reach or weapon.Reach or 9) and facingDot >= minimumFacing
 			if radialFollowup then geometryOk = distance <= radialFollowup elseif closeThreat then geometryOk = true end
 			if geometryOk and math.abs(delta.Y) <= (profile.MaxVertical or 8) then
-				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1, GuardThroughPhase = profile.GuardThroughPhase, GuardMaxDuration = profile.GuardMaxDuration, GuardIfUncancelled = profile.GuardIfUncancelled, GeometryMode = geometryMode} end
+				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, DistanceDelay = distanceDelay, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1, GuardThroughPhase = profile.GuardThroughPhase, GuardMaxDuration = profile.GuardMaxDuration, GuardIfUncancelled = profile.GuardIfUncancelled, GeometryMode = geometryMode} end
 			elseif swing.GeometryContact ~= contact then
 				swing.GeometryContact = contact
 				note(string.format("SKIP actorId=%d weapon=%s animation=%s contact=%d reason=geometry phase=%.3f eta=%.3f distance=%.2f projected=%.2f vertical=%.2f facing=%.3f mode=%s", rig.Id, weaponKey, swing.Asset, contact, phase, remaining, distance, projected.Magnitude, delta.Y, facingDot, geometryMode))
@@ -3967,8 +3980,8 @@ local function step()
 	local ok = sendBlockKey(true, key)
 	if not ok then stop("Block input unavailable"); return end
 	state.Presses += 1
-	note(string.format("KEY DOWN %s actor=%s weapon=%s animation=%s phase=%.3f speed=%.3f eta=%.3f distance=%.2f lead=%.3f actorId=%d contact=%d/%d geometry=%s",
-		key.Name, best.Model.Name, best.Weapon, best.Swing.Asset, best.Track.TimePosition, best.Track.Speed, best.Remaining, best.Distance, state.Lead, best.ActorId, best.Contact, best.ContactCount, best.GeometryMode))
+	note(string.format("KEY DOWN %s actor=%s weapon=%s animation=%s phase=%.3f speed=%.3f eta=%.3f distance=%.2f lead=%.3f actorId=%d contact=%d/%d geometry=%s distanceDelay=%.3f",
+		key.Name, best.Model.Name, best.Weapon, best.Swing.Asset, best.Track.TimePosition, best.Track.Speed, best.Remaining, best.Distance, state.Lead, best.ActorId, best.Contact, best.ContactCount, best.GeometryMode, best.DistanceDelay))
 	show("Block tap: " .. best.Label)
 end
 local function start()

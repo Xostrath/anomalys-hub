@@ -4061,7 +4061,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v35. Close pistol threats + result attribution.
+-- Beyond Nen auto-parry test v36. Claws, gauntlets and Stone Beast trial profiles.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -4103,6 +4103,39 @@ local weaponProfiles = {
 		-- v16: three separate damage snapshots at .887/.904/.871, speed1,
 		-- distances3.76-6.60. Separate from ordinary combo and looping14241195451.
 		["17050689141"] = {Phase = .85, Name = "Fists long-windup strike (test)"},
+	}},
+	foxbearclaws = {Label = "Fox Bear Claws (test)", Reach = 12, MaxDistance = 15, Animations = {
+		-- v35 player capture1794286123: equipped/linked Fox Bear Claws while
+		-- CombatStyle stays Fists. These IDs differ from the Fox Bear boss.
+		-- Damage receipts seed timing; no automatic parry outcome yet.
+		["79612007727824"] = {Phase = .31, Name = "claws strike A (test)"}, -- .336/.348@.95, up to9.48
+		["125874927433375"] = {Phase = .57, CloseRangeRadius = 8, Name = "claws strike B (test)"}, -- .602/.618@1.235, rear7.61
+		["72049866743494"] = {Phase = .54, Name = "claws strike C (test)"}, -- .574@1.188,6.92 (one sample)
+		["72142086240349"] = {Phase = .50, Name = "claws strike D (test)"}, -- .537@1.15,11.59 (one sample)
+		["137484272192320"] = {Phase = .43, Name = "claws strike E (test)"}, -- .467/.473@1.092,8.79/9.41
+		-- One isolated episode: .767/1.283/1.733, speed1,16.4/14.08/11.44.
+		-- Second pulse faced-.617. No invented contacts or extended guard.
+		["139431761737658"] = {Phases = {.73, 1.25, 1.70}, MinFollowupLead = .08, Reach = 18, MaxDistance = 21, MinFacing = -.7, Name = "claws three-contact skill (test)"},
+	}},
+	mosgauntlets = {Label = "MOS Gauntlets (test)", Reach = 12, MaxDistance = 15, Animations = {
+		-- v35 captures1794288717/1794289001 identify current MOS Gauntlets
+		-- and linked skill tools. Nearby player attacks can overlap; only the
+		-- isolated close samples below seed profiles, not all nearby animations.
+		["98916574573582"] = {Phase = .57, Name = "gauntlets strike A (test)"}, -- .604/.665@.936,3.03/11.11
+		["115294617095997"] = {Phase = .40, Name = "gauntlets strike B (test)"}, -- .433/.445@.98,2.43/10.47
+		["109325960786682"] = {Phase = .72, Reach = 10, MaxDistance = 13, Name = "gauntlets strike C (test)"}, -- .750@.8,1.03 (one sample)
+		["133477517641826"] = {Phase = .88, Reach = 11, MaxDistance = 14, MinFacing = -.95, Name = "gauntlets rear skill (test)"}, -- .912/.933@1,9.42/3.91,facing-.885/-.900
+		-- 119125008775877/104607890923716 overlap periodic damage/other skills.
+		-- 137475098529057 overlaps another attack; all remain unmapped.
+	}},
+	stonebeast = {Label = "Stone Beast (test)", Reach = 23, MaxDistance = 26, Animations = {
+		-- v35 capture1794285919: explicit Character.Weapon="Stone Beast".
+		-- Three episodes give .621/1.021/1.321-1.350/1.554-1.617/2.421-2.462,
+		-- damage15.521, up to21.24 studs. First two phases have one receipt.
+		["117711255420513"] = {Phases = {.59, .99, 1.29, 1.52, 2.39}, MinFollowupLead = .08, Name = "Stone Beast five-contact skill (test)"},
+		-- Repeated later contact1.733/1.783,18.7 damage, rear-facing-.107.
+		-- Earlier .621 receipt is a single-sample trial, not verified parryability.
+		["113726810886988"] = {Phases = {.59, 1.70}, MinFollowupLead = .08, Reach = 20, MaxDistance = 23, MinFacing = -.15, Name = "Stone Beast two-contact skill (test)"},
 	}},
 	olympusshield = {Label = "Olympus Shield", Reach = 10, MaxDistance = 13, Animations = {
 		-- v25 records explicit Character.Weapon/Tool="Olympus Shield".
@@ -4414,7 +4447,7 @@ state.EffectiveTargetMode = state.TargetMode == "Auto" and "Both" or state.Targe
 local function targetLabel()
 	return "Targets: " .. (state.TargetMode == "Auto" and ("Auto / " .. state.EffectiveTargetMode .. (state.BossModel and " (boss)" or "")) or state.TargetMode)
 end
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v35", "Auto watches players and NPCs, switching to NPC-only during a detected boss fight.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v36", "Auto watches players and NPCs, switching to NPC-only during a detected boss fight.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -4432,10 +4465,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v35 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v36 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nEFFECTIVE_TARGETS=" .. state.EffectiveTargetMode
+		.. "\nv36 adds12 trial weapon/animation entries: Fox Bear Claws5 strikes plus3-contact skill, MOS Gauntlets3 strikes plus rear skill, Stone Beast5/2-contact skills. Based on completed v35 damage snapshots and exact equipped/linked weapon metadata, not player names. Player CombatStyle=Fists can resolve current Fox Bear Claws/MOS Gauntlets tools; existing exact Fists mappings remain available for their common attacks. Boss Fox Bear timings are separate from player Claws. Stone Beast requires matching weapon metadata, enabling Auto boss recognition for mapped Stone Eye threats. Some phases have one sample; speeds are read live. No automatic outcomes yet, guaranteed hitbox, or proven complete skill coverage. Crowded overlapping/periodic skills and Dual Yoyo remain unmapped. Unmatched key events are not attributed to the user."
 		.. "\nv35: two v34/Auto captures show boss-only transitions and return to Both; nine unconflicted matched results across them, plus one result after a rejected request and intervening unmatched F-DOWN. BurstB retries occurred but remain unproven: later requests were rejected FreshHitStun. Keep v34 timing/cooldown behavior. Only burstA73241145651241 and strike126546963227585 add close radius6 after recorded facing skips at1.89/5.08 studs then nearby damage. No new timing seeds or weapon IDs. Results after rejection or an intervening unmatched key DOWN are counted separately as uncertain, never extending a guard; a later rejection reclassifies earlier matches. Source of unmatched inputs is unknown."
 		.. "\nv34 overrides burstB73875507755468 extended-guard notes below: v32 matched the opening parry, then seven4.967 damage ticks arrived with HoldingBlock=true, the same amount as unheld ticks in that run. Keep its .30s first tap and existing phase seeds; later contacts use normal .16s taps through all existing cooldown, live geometry and own-punch recovery gates. A matched result no longer extends this ID's hold. Only final contact10 gets close radius6 after a3.59/facing-.975 skip then damage5.42/facing-.726; other contacts retain facing-.45. This is a retry/geometry trial, not proven repeat parries or a measured hitbox. Other burst guards remain unchanged. Latest capture was v32/NPCs and does not validate v33 automatic targeting."
 		.. "\nv33 Auto targeting: Both normally; NPCs while a catalog-classified boss has a mapped threatening attack within60 studs. Detection uses current attack phase/speed plus the existing per-attack range/facing/height checks, up to .8s before contact. Boss itself is prioritized before the nearest-eight limit; player characters never count as bosses. Return to Both when the boss dies/leaves60 studs or no threat has been seen for6s. This is a combat-proximity heuristic, not server-confirmed aggro; an idle nearby boss does not trigger it. Unknown attacks cannot establish engagement. Explicit NPCs/Players/Both modes remain available."
@@ -4629,6 +4663,10 @@ local function weaponOf(rig)
 				candidate = "dagger"
 			elseif name == "Frostblade Boots" or (tool:GetAttribute("WeaponLinked") == true and bound == "Frostblade Boots") then
 				candidate = "frostbladeboots"
+			elseif name == "Fox Bear Claws" or (tool:GetAttribute("WeaponLinked") == true and bound == "Fox Bear Claws") then
+				candidate = "foxbearclaws"
+			elseif name == "MOS Gauntlets" or (tool:GetAttribute("WeaponLinked") == true and bound == "MOS Gauntlets") then
+				candidate = "mosgauntlets"
 			elseif name == "Crazy Slots" and rig.Model:GetAttribute("CustomWeapon") == "Scythe Slot" then
 				candidate = "scytheslot"
 			end
@@ -4649,6 +4687,13 @@ local function attackOf(rig, id)
 	local variant = recordedVariants[id]
 	if rig.Owner and source == "Player.CombatStyle" and key == "fists" and variant then
 		key, weapon, source = variant, weaponProfiles[variant], "recorded-animation/Player.CombatStyle=Fists"
+	end
+	-- These players also played common Fists attacks in the same captures.
+	-- Preserve existing exact-ID coverage when current equipment selects a
+	-- new family; never infer unrecorded attacks or override Character.Weapon.
+	if source == "equipped-tool/Player.CombatStyle=Fists" and (key == "foxbearclaws" or key == "mosgauntlets")
+		and not weapon.Animations[id] and weaponProfiles.fists.Animations[id] then
+		key, weapon, source = "fists", weaponProfiles.fists, "shared-fists/equipped-tool"
 	end
 	return key, weapon, weapon and weapon.Animations[id], source
 end
@@ -5128,7 +5173,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield,ScytheSlot,FrostbladeBoots mappedWeaponAnimations=93 duration=90")
+	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield,ScytheSlot,FrostbladeBoots,FoxBearClaws,MOSGauntlets,StoneBeast mappedWeaponAnimations=105 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

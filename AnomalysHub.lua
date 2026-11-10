@@ -3198,7 +3198,7 @@ function controller.IsBeyondNenChestRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen Auto Chests v3. Nearby non-empty chests take priority over placement.
+-- Beyond Nen Auto Chests v4. Open only; the game handles item rewards.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -3224,12 +3224,12 @@ end
 local function save()
 	if not state.Archive or type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	local report = "BEYOND NEN AUTO CHESTS v3\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n")
+	local report = "BEYOND NEN AUTO CHESTS v4 // OPEN ONLY\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n")
 	pcall(writefile, "AnomalyHub/universal/beyond_nen_autochests_test.txt", report)
 	pcall(writefile, state.Archive, report)
 end
 local function show(message)
-	status.Text = message .. string.format("\nOpened: %d | Loot pickups: %d | Skipped items: %d", state.Opened or 0, state.Collected or 0, state.Skipped or 0)
+	status.Text = message .. string.format("\nChests opened: %d", state.Opened or 0)
 end
 local function waitHere(message, delay)
 	state.NextAction = os.clock() + (delay or .75)
@@ -3458,14 +3458,15 @@ local function beginOpen(chest, nearby)
 	state.Chest, state.ChestId = chest, chest:GetAttribute("ChestId")
 	state.ReusingChest = nearby == true
 	if nearby then state.Entry = {Name = chest:GetAttribute("PickupItem")}; state.StepRequested = false end
-	state.AttemptedItems, state.OpenAttempts, state.OpenConfirmed = {}, 0, false
+	state.OpenAttempts, state.OpenConfirmed = 0, false
 	state.Phase, state.NextAction = "Opening", os.clock()
 	note("CHEST " .. tostring(state.ChestId) .. " type=" .. tostring(chest:GetAttribute("PickupItem")) .. (nearby and " source=nearby-within-5" or " source=placed"))
 end
 local function confirmOpen()
 	if state.OpenConfirmed then return end
 	state.OpenConfirmed = true; state.Opened += 1
-	state.Phase, state.NextAction, state.ItemsWait = "Looting", os.clock() + .4, os.clock() + 3
+	-- Let the game's opening handlers finish before closing the window and continuing.
+	state.Phase, state.NextAction = "Opened", os.clock() + .35
 	note("OPEN confirmed id=" .. tostring(state.ChestId))
 end
 local function requestInventoryTool(entry)
@@ -3645,30 +3646,11 @@ local function step()
 		state.Held, state.ReleaseAt = prompt, now + .09
 		prompt:InputHoldBegin()
 		show("Opening " .. state.Entry.Name); note("OPEN_PROMPT short tap id=" .. tostring(state.ChestId))
-	elseif state.Phase == "Looting" then
-		local chest = state.Chest
-		if not chest.Parent then finishChest(); return end
-		local part = chestRoot(chest)
-		if not part or (root.Position - part.Position).Magnitude > 12 then waitHere("Waiting for you to return within reach of the open chest."); return end
-		local items = chest:FindFirstChild("Items")
-		if not items then if now >= state.ItemsWait then finishChest() end; return end
-		for _, item in ipairs(items:GetChildren()) do
-			if not state.AttemptedItems[item.Name] then
-				local name = item.Name
-				state.AttemptedItems[name] = true
-				show("Collecting " .. name)
-				call("ChestService", "TakeItem", table.pack(state.ChestId, name), function(ok)
-					if ok == true then state.Collected += 1; note("COLLECT " .. name)
-					else state.Skipped += 1; note("SKIP rejected/unavailable " .. name) end
-					state.NextAction = os.clock() + .3
-				end)
-				return
-			end
-		end
+	elseif state.Phase == "Opened" then
 		finishChest()
 	end
 end
-local card = ui.Card(ui.Pages.Auto, "AUTO CHESTS // v3", "Prioritizes your non-empty chests within 5 studs, then places selected inventory chests. Skips empty chests and rejected leftovers.", 390)
+local card = ui.Card(ui.Pages.Auto, "AUTO CHESTS // v4", "Open only. Prioritizes your non-empty chests within 5 studs, then selected inventory chests. Moves on after each confirmed opening.", 390)
 card.LayoutOrder = 35
 status = ui.Create("TextLabel", {Position = UDim2.fromOffset(14, 310), Size = UDim2.new(1, -28, 0, 66), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Off. Select chest types below.", TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left}, card)
@@ -3724,7 +3706,7 @@ local function enable(value)
 	state.StepAxis = root.CFrame.RightVector
 	state.StepRequested, state.WaitMessage = false, nil
 	state.Epoch += 1; state.Done, state.Failed, state.Lines = {}, {}, {}
-	state.Opened, state.Collected, state.Skipped, state.NextAction = 0, 0, 0, os.clock() + .3
+	state.Opened, state.NextAction = 0, os.clock() + .3
 	local ok, guid = pcall(function() return HttpService:GenerateGUID(false) end)
 	state.Archive = "AnomalyHub/universal/beyond_nen_autochests_" .. os.time() .. "_" .. (ok and guid or tostring(state.Epoch)) .. ".txt"
 	state.Unwatch = controller.WatchBeyondNenChests(function(name, direction, args)

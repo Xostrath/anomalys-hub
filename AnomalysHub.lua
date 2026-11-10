@@ -2645,6 +2645,10 @@ local definitions = {
 		RF = {"CloseChest", "GetScannedChests", "OpenChest", "PlaceChest", "TakeAll", "TakeItem"},
 		RE = {"OpenedChest", "ScanChest", "ScannedChests"},
 	},
+	InventoryService = {
+		RF = {"equip", "unequip", "put_in_hotbar", "put_in_hotbar_backpack", "remove_from_hotbar", "remove_from_hotbar_backpack", "swap_hotbar_slot"},
+		RE = {"ItemAdded", "ItemQuantityChanged", "ItemRemoved"},
+	},
 	FishingService = {RF = {"Cast", "Reel"}, RE = {"Bite", "Hold", "Result"}},
 	MeditationService = {
 		RF = {"KeyPromptResult", "PlaceCarpet", "SetPicking", "StartMeditation", "StopMeditation", "UnplaceCarpet", "deleteSphere", "meditationSphreClick"},
@@ -2790,6 +2794,9 @@ local function watch(service, callback)
 end
 function controller.WatchBeyondNenFishing(callback) return watch("FishingService", callback) end
 function controller.WatchBeyondNenChests(callback) return watch("ChestService", callback) end
+function controller.WatchBeyondNenChestInventory(callback)
+	return watch("InventoryService", function(name, direction, args, started) callback("Inventory." .. name, direction, args, started) end)
+end
 function controller.WatchBeyondNenMeditation(callback)
 	local meditation = watch("MeditationService", callback)
 	local technique = watch("NenMasteryService", callback)
@@ -2818,7 +2825,7 @@ local HttpService = game:GetService("HttpService")
 local ui = controller.UI
 local path = "AnomalyHub/universal/beyond_nen_chest_capture.txt"
 local capture = {Active = false, Closed = false, Epoch = 0, Lines = {}, Connections = {}}
-local card = ui.Card(ui.Pages.Auto, "CHEST RECORDER v1", "Record opening and looting a chest so Auto Chests can be mapped.", 218)
+local card = ui.Card(ui.Pages.Auto, "CHEST RECORDER v2", "Record inventory selection, chest placement, opening and looting.", 218)
 card.LayoutOrder = 40
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 117), Size = UDim2.new(1, -28, 0, 85), BackgroundTransparency = 1,
@@ -2869,8 +2876,8 @@ local function sample(value, depth, seen, budget)
 	return "{" .. table.concat(fields, ",") .. "}"
 end
 local function save(reason)
-	capture.Report = "BEYOND NEN CHEST CAPTURE v1 // PASSIVE\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
-		.. "\nObserves only mapped ChestService calls/results, nearby chest/prompt state and chest/loot GUI."
+	capture.Report = "BEYOND NEN CHEST CAPTURE v2 // PASSIVE\nplace=" .. tostring(game.PlaceId) .. " universe=" .. tostring(game.GameId)
+		.. "\nObserves mapped chest/inventory calls, local chest inventory/hotbar/equipment, nearby chest/prompt state and chest/loot GUI."
 		.. "\nNo inputs, prompt activation, remote requests/replays, decompilation or network uploads are performed by this recorder."
 		.. "\nOutgoing observations occur after return; requestStart preserves start time. Hook paths can duplicate a call."
 		.. "\nMissing streamed objects or signals are not proof of missing chests. Events/returns do not alone prove loot was awarded."
@@ -2946,6 +2953,46 @@ local function guiRelevant(object, pg)
 end
 local function snapshot()
 	local current, wanted, pool = {}, {}, {}
+	-- Record the active slot only. These containers came from the session capture.
+	local data = player:FindFirstChild("Data")
+	local sharedData = data and data:FindFirstChild("SharedData")
+	local saves = data and data:FindFirstChild("SavesSlot")
+	local slotId
+	for _, root in ipairs({player, data or player, sharedData or player}) do
+		for _, key in ipairs({"CurrentSlot", "ActiveSlot", "SelectedSlot", "SaveSlot", "Slot"}) do
+			local child = root:FindFirstChild(key)
+			local value = root:GetAttribute(key) or (child and child:IsA("ValueBase") and child.Value)
+			if type(value) == "string" or type(value) == "number" then slotId = tostring(value); break end
+		end
+		if slotId then break end
+	end
+	local slot = saves and slotId and saves:FindFirstChild(slotId)
+	if saves and not slotId then
+		local choices = {}; for _, child in ipairs(saves:GetChildren()) do if child:FindFirstChild("CharacterData") then table.insert(choices, child) end end
+		if #choices == 1 then slot = choices[1] end
+	end
+	local playerData = slot and slot:FindFirstChild("PlayerData")
+	current["INVENTORY_SLOT"] = slot and slot:GetFullName() or "active slot unavailable"
+	if playerData then
+		for _, name in ipairs({"Inventory", "HotbarBackpack", "Equipment"}) do
+			local folder = playerData:FindFirstChild(name)
+			if folder then
+				current["DATA " .. id(folder)] = describe(folder) .. " attrs=" .. sample(folder:GetAttributes())
+				for index, item in ipairs(folder:GetChildren()) do
+					if index > 500 then current["INVENTORY LIMIT"] = "500 entries per container"; break end
+					local itemName = item:GetAttribute("item_name") or item.Name
+					if name ~= "Inventory" or namedChest(tostring(itemName)) then
+						current["ITEM " .. id(item)] = describe(item) .. " attrs=" .. sample(item:GetAttributes())
+					end
+				end
+			end
+		end
+	end
+	for _, root in ipairs({player:FindFirstChildOfClass("Backpack") or player, player.Character or player}) do
+		for _, tool in ipairs(root:GetChildren()) do
+			if tool:IsA("Tool") then current["TOOL " .. id(tool)] = describe(tool) .. " attrs=" .. sample(tool:GetAttributes()) end
+		end
+	end
 	for object in pairs(capture.Candidates) do
 		if not object:IsDescendantOf(workspace) then capture.Candidates[object] = nil; capture.CandidateCount -= 1
 		else
@@ -2993,7 +3040,17 @@ local function snapshot()
 	local pg = player:FindFirstChildOfClass("PlayerGui")
 	local count = 0
 	if pg then
-		for index, object in ipairs(pg:GetDescendants()) do
+		local guiObjects = {}
+		-- The v1 global GUI cap cut off the live loot rows. Inspect ChestView first.
+		local chestView = pg:FindFirstChild("ChestView")
+		if chestView then
+			table.insert(guiObjects, chestView)
+			for _, object in ipairs(chestView:GetDescendants()) do table.insert(guiObjects, object) end
+		end
+		for _, object in ipairs(pg:GetDescendants()) do
+			if object ~= chestView and not (chestView and object:IsDescendantOf(chestView)) then table.insert(guiObjects, object) end
+		end
+		for index, object in ipairs(guiObjects) do
 			if index > 2000 then current["GUI SEARCH LIMIT"] = "2000 objects"; break end
 			if not (object:IsA("GuiObject") or object:IsA("LayerCollector")) or not guiRelevant(object, pg) then continue end
 			count += 1; if count > 150 then current["GUI LIMIT"] = "150 objects"; break end
@@ -3029,6 +3086,7 @@ local function stop(reason)
 	local ok, err = pcall(snapshot); if not ok then log("SNAPSHOT_ERROR " .. tostring(err)) end
 	log("STOP " .. reason); capture.Active = false
 	if capture.Unwatch then capture.Unwatch(); capture.Unwatch = nil end
+	if capture.UnwatchInventory then capture.UnwatchInventory(); capture.UnwatchInventory = nil end
 	for _, connection in ipairs(capture.Connections) do connection:Disconnect() end; table.clear(capture.Connections)
 	for _, connection in pairs(capture.ObjectConnections) do connection:Disconnect() end; table.clear(capture.ObjectConnections)
 	local saved = save(reason)
@@ -3040,6 +3098,7 @@ end
 local function start()
 	if capture.Closed or controller.IsUnloaded() then return end
 	if capture.Active then stop("STOPPED"); return end
+	if controller.SetBeyondNenAutoChests then controller.SetBeyondNenAutoChests(false) end
 	capture.Epoch += 1
 	local ok, nonce = pcall(function() return HttpService:GenerateGUID(false) end)
 	if not ok then nonce = tostring(math.floor(os.clock() * 1000000)) .. "_" .. capture.Epoch end
@@ -3054,6 +3113,12 @@ local function start()
 		log("START session=" .. capture.ArchivePath)
 		if controller.WatchBeyondNenChests then
 			capture.Unwatch = controller.WatchBeyondNenChests(function(name, direction, args, started)
+				if not current() or started < capture.Started then return end
+				log("REMOTE " .. name .. " " .. direction .. " requestStart=" .. string.format("%.4f", started - capture.Started) .. " args=" .. sample(args))
+			end)
+		end
+		if controller.WatchBeyondNenChestInventory then
+			capture.UnwatchInventory = controller.WatchBeyondNenChestInventory(function(name, direction, args, started)
 				if not current() or started < capture.Started then return end
 				log("REMOTE " .. name .. " " .. direction .. " requestStart=" .. string.format("%.4f", started - capture.Started) .. " args=" .. sample(args))
 			end)
@@ -3093,7 +3158,7 @@ local function start()
 	if not setupOk then log("ERROR " .. tostring(setupError)); stop("START_ERROR"); return end
 	if not save("RECORDING") then stop("SAVE_FAILED"); return end
 	recordButton.Text, recordButton.BackgroundColor3 = "Stop + Save", ui.Colors.Danger
-	status.Text = "Recording for up to 2 minutes. Open a chest, take an item / Take All, close the loot window, then Stop + Save."
+	status.Text = "Record up to 2 minutes: move two chest types from inventory into the hotbar, equip one, place/open it, take loot and close. Stop + Save."
 end
 recordButton = ui.FitColumn(ui.Button(card, "Record Chests", 0, 0, 180, start, ui.Colors.AccentSoft), 0, 72)
 ui.FitColumn(ui.Button(card, "Copy Recording", 0, 0, 180, function()

@@ -3642,7 +3642,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v36. Claws, gauntlets and Stone Beast trial profiles.
+-- Beyond Nen auto-parry test v37. Additional Fists and TwinBladeBoss trials.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -3658,6 +3658,10 @@ local player, ui = Players.LocalPlayer, controller.UI
 local path = "AnomalyHub/universal/beyond_nen_autoparry_test.txt"
 local weaponProfiles = {
 	fists = {Label = "Fists", Animations = {
+		-- v36 tests1794344071/5288: seven isolated Action-track damage
+		-- snapshots at .404-.454, speed1,4.11-5.19 studs. Repeated swings
+		-- reset the phase; do not reinterpret these as one multi-hit skill.
+		["114189922145449"] = {Phase = .38, Name = "additional Fists strike (test)"},
 		-- Fists CombatStyle on both observed players. LandedHit/settled M1
 		-- samples seed these phases; they still require an automatic-input test.
 		["72916536471630"] = {Phase = .28, Name = "M1-1"},
@@ -3684,6 +3688,16 @@ local weaponProfiles = {
 		-- v16: three separate damage snapshots at .887/.904/.871, speed1,
 		-- distances3.76-6.60. Separate from ordinary combo and looping14241195451.
 		["17050689141"] = {Phase = .85, Name = "Fists long-windup strike (test)"},
+	}},
+	twinbladeboss = {Label = "TwinBladeBoss (test)", Reach = 20, MaxDistance = 23, Animations = {
+		-- Explicit Weapon=TwinBladeBoss in test1794345713. Three isolated
+		-- receipts at .404/.558/.600, speed1,7.54-18.80 studs. Seed the earliest
+		-- observed contact; delayed ranged contact is not a second swing.
+		["130837545639001"] = {Phase = .38, MinFacing = .05, Name = "twin blade strike A (test)"},
+		-- One isolated receipt .721@1,5.27 studs,facing-.112. Trial only.
+		["118514167447656"] = {Phase = .68, Reach = 9, MaxDistance = 12, MinFacing = -.2, Name = "twin blade strike B (test)"},
+		-- 112427427997736 overlaps another Action track; 93277029839353
+		-- has a different damage amount and one sample. Neither is mapped.
 	}},
 	foxbearclaws = {Label = "Fox Bear Claws (test)", Reach = 12, MaxDistance = 15, Animations = {
 		-- v35 player capture1794286123: equipped/linked Fox Bear Claws while
@@ -4028,7 +4042,7 @@ state.EffectiveTargetMode = state.TargetMode == "Auto" and "Both" or state.Targe
 local function targetLabel()
 	return "Targets: " .. (state.TargetMode == "Auto" and ("Auto / " .. state.EffectiveTargetMode .. (state.BossModel and " (boss)" or "")) or state.TargetMode)
 end
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v36", "Auto watches players and NPCs, switching to NPC-only during a detected boss fight.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v37", "Auto watches players and NPCs, switching to NPC-only during a detected boss fight.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -4046,10 +4060,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v36 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v37 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nEFFECTIVE_TARGETS=" .. state.EffectiveTargetMode
+		.. "\nv37 adds one Fists strike from seven isolated v36 damage snapshots and two TwinBladeBoss trial strikes from explicit weapon metadata. New input timing needs live validation. Existing timings, cooldowns and own-skill restrictions unchanged."
 		.. "\nv36 adds12 trial weapon/animation entries: Fox Bear Claws5 strikes plus3-contact skill, MOS Gauntlets3 strikes plus rear skill, Stone Beast5/2-contact skills. Based on completed v35 damage snapshots and exact equipped/linked weapon metadata, not player names. Player CombatStyle=Fists can resolve current Fox Bear Claws/MOS Gauntlets tools; existing exact Fists mappings remain available for their common attacks. Boss Fox Bear timings are separate from player Claws. Stone Beast requires matching weapon metadata, enabling Auto boss recognition for mapped Stone Eye threats. Some phases have one sample; speeds are read live. No automatic outcomes yet, guaranteed hitbox, or proven complete skill coverage. Crowded overlapping/periodic skills and Dual Yoyo remain unmapped. Unmatched key events are not attributed to the user."
 		.. "\nv35: two v34/Auto captures show boss-only transitions and return to Both; nine unconflicted matched results across them, plus one result after a rejected request and intervening unmatched F-DOWN. BurstB retries occurred but remain unproven: later requests were rejected FreshHitStun. Keep v34 timing/cooldown behavior. Only burstA73241145651241 and strike126546963227585 add close radius6 after recorded facing skips at1.89/5.08 studs then nearby damage. No new timing seeds or weapon IDs. Results after rejection or an intervening unmatched key DOWN are counted separately as uncertain, never extending a guard; a later rejection reclassifies earlier matches. Source of unmatched inputs is unknown."
 		.. "\nv34 overrides burstB73875507755468 extended-guard notes below: v32 matched the opening parry, then seven4.967 damage ticks arrived with HoldingBlock=true, the same amount as unheld ticks in that run. Keep its .30s first tap and existing phase seeds; later contacts use normal .16s taps through all existing cooldown, live geometry and own-punch recovery gates. A matched result no longer extends this ID's hold. Only final contact10 gets close radius6 after a3.59/facing-.975 skip then damage5.42/facing-.726; other contacts retain facing-.45. This is a retry/geometry trial, not proven repeat parries or a measured hitbox. Other burst guards remain unchanged. Latest capture was v32/NPCs and does not validate v33 automatic targeting."
@@ -4061,7 +4076,7 @@ local function save(reason)
 		.. "\nShockwork Pistols v29: six mapped animations. BurstA first seed.40->.34 after a ready opening tap at.250 still got FreshHitStun; later contacts unchanged. Multi-hit76637609852449 retains phases, expands reach18/current21/close radius13 after damage at16.15 and rear11.09. Initial F lasts up to.30; only matched ParryResult with CancelMove=false extends guard through phase3.45, capped3.5s. Accepted, cancelled or ambiguous results do not extend it. This is held-block protection after a parry, not repeated perfect parries; live benefit unverified. New126546963227585 phase.40/reach10/max13 from two close hits;118856732820265 phases1.49/1.99/reach21/max24/facing-.75 from one two-hit episode. No boss-name filter or own-skill bypass."
 		.. "\nDagger v28: only113521135913624 expands to current/projected distance32 at the existing phase.52. v26/v27 non-periodic contacts reached15.23/19.32; v27 skipped atcurrent28.36/projected31.41 before closing to19.32 in.202s. This is an approach-detection trial, not a32-stud hitbox claim. Facing.15, height8, other Dagger timings/ranges and own-skill handling remain unchanged. Periodic damage and single uncertain skill associations do not create new profiles. No eligible targets now gets an explicit status; the selected mode is never changed automatically."
 		.. "\nOlympus Shield v27: eight exact animations from explicit weapon metadata. A phase.40/reach10/max13/close4 retains v26's matched parry. B advances.53 to.42 after two damage receipts at.449; C stays.35/facing-.4. Windup stays.90, expands to reach32/max35 after damage at23.74/31.52. Multi-hit phases.84/1.00/1.22/1.41/1.62/1.89, reach20/max23, follow-up lead.08 after a second episode reached18.94 and revealed the1.650 contact. New D phase.44, ranged skill1.13/reach32/max35 (two samples), additional strike.76 (one sample). Height8 and normal input/cooldown gates remain. These are trial timings/bounds, not guaranteed hitboxes or parryability. Overlapping71522785988111/84503197252950 stay unmapped; unmatched inputs/results do not establish timing or success."
-		.. "\nFists: 13 animations. Pitchfork: 6. BigPitchfork: 8. Rifle: 6 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
+		.. "\nFists: 14 animations. TwinBladeBoss: 2 trial strikes. Pitchfork: 6. BigPitchfork: 8. Rifle: 6 strikes and one burst. Sword: 9. Dagger: 10. Bat: 5 strikes and one skill with five observed contacts. Fox Bear: 5 strikes and four skills with eight/five/one/one contact seeds. Both fork profiles have separately mapped four-contact moves; Dagger has five- and eight-contact moves. New skills remain under test. No actor-name filters."
 		.. "\nShockwork Pistols v25 baseline (overridden by v29 above): four exact animations from explicit weapon metadata, with 14/10/14/1 candidate contact windows. BurstA includes late phase3.08, reach23/max26/facing.15. BurstB reach30/max31/height30/facing-.4 after repeated damage across vertical25. Multi-hit76637609852449 extends through3.28, reach15/max18, close radius10, otherwise facing-.5. Close strike10/max13/facing-.95. Other height bounds remain8. Repeated contacts require .08s lead and normal cooldowns; v29 adds confirmed-parry guard only to the multi-hit strike. These are trial bounds/contact seeds, not measured hitboxes, shot counts or proof every contact is parryable. Other pistol animations stay unmapped."
 		.. "\nFists v20: alternate first strike reach12/max15, close radius10; second reach11/max14, close radius2; third reach11/max14. Close radius uses current distance without facing/velocity prediction, while retaining exact animation timing and elevation8. Trial bounds from observed damage, not measured hitboxes. Phase seeds and other Fists variants unchanged."
 		.. "\nRifle v16 had zero automatic inputs because it was unmapped. v18 added trial strike timings and eleven burst contact windows, not an established shot count. Burst reach35/max38 and strike A reach14/max17 are separate from default melee bounds. Burst follow-ups need .08s lead and respect game cooldown. Projectile speed/distance delay and full attack coverage remain unverified."
@@ -4754,7 +4769,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield,ScytheSlot,FrostbladeBoots,FoxBearClaws,MOSGauntlets,StoneBeast mappedWeaponAnimations=105 duration=90")
+	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield,ScytheSlot,FrostbladeBoots,FoxBearClaws,MOSGauntlets,StoneBeast,TwinBladeBoss mappedWeaponAnimations=108 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

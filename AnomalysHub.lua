@@ -4061,7 +4061,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v33. Automatic boss targeting + weapon profiles.
+-- Beyond Nen auto-parry test v34. Pistol burst retries + automatic boss targeting.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -4283,7 +4283,13 @@ local weaponProfiles = {
 		-- Latest v30 confirms the opener with CancelMove=false after .225s;
 		-- later bullets hit after release. Final hit39.59 followed a geometry
 		-- skip atcurrent35.68/projected37.72/facing-.412; earlier v27 hit35-36.
-		["73875507755468"] = {Phases = {.78, .89, 1.00, 1.11, 1.23, 1.34, 1.46, 1.57, 1.69, 1.81}, MinFollowupLead = .08, GuardThroughPhase = 1.99, GuardIfUncancelled = true, Reach = 40, MaxDistance = 40, MaxVertical = 30, MinFacing = -.45, Name = "pistols burst B (test)"},
+		-- v32: opener parried after .188s, but seven later 4.967 damage ticks
+		-- arrived while HoldingBlock=true, matching unheld damage in this run.
+		-- Keep the .30s opening tap; discontinue this ID's extended guard so
+		-- later contacts can retry through normal cooldown and recovery gates.
+		-- Final contact hit at5.42/facing-.726 after a3.59/facing-.975 skip.
+		-- Only contact10 gets a6-stud close exception; not a measured hitbox.
+		["73875507755468"] = {Phases = {.78, .89, 1.00, 1.11, 1.23, 1.34, 1.46, 1.57, 1.69, 1.81}, MinFollowupLead = .08, InitialTapDuration = .30, ContactCloseRadius = {[10] = 6}, Reach = 40, MaxDistance = 40, MaxVertical = 30, MinFacing = -.45, Name = "pistols burst B (test)"},
 		-- Previously only .48/.98 were mapped. Independent v24 runs show a
 		-- continuing train at1.104-2.450 plus a final hit3.312/3.337 (speed1).
 		-- Rear hits at3.77-6.09 studs justify a close radius for this ID only.
@@ -4404,7 +4410,7 @@ state.EffectiveTargetMode = state.TargetMode == "Auto" and "Both" or state.Targe
 local function targetLabel()
 	return "Targets: " .. (state.TargetMode == "Auto" and ("Auto / " .. state.EffectiveTargetMode .. (state.BossModel and " (boss)" or "")) or state.TargetMode)
 end
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v33", "Auto watches players and NPCs, switching to NPC-only during a detected boss fight.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v34", "Auto watches players and NPCs, switching to NPC-only during a detected boss fight.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -4422,10 +4428,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v33 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v34 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nEFFECTIVE_TARGETS=" .. state.EffectiveTargetMode
+		.. "\nv34 overrides burstB73875507755468 extended-guard notes below: v32 matched the opening parry, then seven4.967 damage ticks arrived with HoldingBlock=true, the same amount as unheld ticks in that run. Keep its .30s first tap and existing phase seeds; later contacts use normal .16s taps through all existing cooldown, live geometry and own-punch recovery gates. A matched result no longer extends this ID's hold. Only final contact10 gets close radius6 after a3.59/facing-.975 skip then damage5.42/facing-.726; other contacts retain facing-.45. This is a retry/geometry trial, not proven repeat parries or a measured hitbox. Other burst guards remain unchanged. Latest capture was v32/NPCs and does not validate v33 automatic targeting."
 		.. "\nv33 Auto targeting: Both normally; NPCs while a catalog-classified boss has a mapped threatening attack within60 studs. Detection uses current attack phase/speed plus the existing per-attack range/facing/height checks, up to .8s before contact. Boss itself is prioritized before the nearest-eight limit; player characters never count as bosses. Return to Both when the boss dies/leaves60 studs or no threat has been seen for6s. This is a combat-proximity heuristic, not server-confirmed aggro; an idle nearby boss does not trigger it. Unknown attacks cannot establish engagement. Explicit NPCs/Players/Both modes remain available."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
 		.. "\nv32 overrides earlier pistol notes: burstB73875507755468 gets matched CancelMove=false guard through1.99/cap2s, reach/current40, facing-.45 after hits at35-39.59 and a projected37.72 skip. New separate Shockwork mapping113521135913624 seed.54/reach12/current15; Dagger timing/range unchanged. Shared animation IDs no longer infer Dagger from generic Fists; current equipped Shockwork Pistols or Phantom Goons Dagger resolves the family. Skill118856732820265 adds trial first seed.39 from one isolated .421 receipt, retains1.49/1.99 and range21/current24, adds close10/facing-.90 after rear hits9.01/13.34. Existing v31 weapon and interrupted-hold fixes retained. Latest source test was v30, not evidence of v31 performance. InvalidTimestamp responses are logged without changing game-generated timestamps. All new timings/bounds need live testing."
@@ -4734,7 +4741,8 @@ local function attackGeometry(weapon, profile, root, localRoot, remaining, conta
 	local projected = delta + (localRoot.AssemblyLinearVelocity - root.AssemblyLinearVelocity) * math.max(0, remaining)
 	local facing = distance < 1 and 1 or root.CFrame.LookVector:Dot(delta.Unit)
 	local radial = contact > 1 and profile.FollowupRadius
-	local close = profile.CloseRangeRadius and distance <= profile.CloseRangeRadius
+	local closeRadius = (profile.ContactCloseRadius and profile.ContactCloseRadius[contact]) or profile.CloseRangeRadius
+	local close = closeRadius and distance <= closeRadius
 	local mode = radial and "nearby-followup" or (close and "nearby-strike" or "directional")
 	local minimumFacing = (contact > 1 and profile.FollowupMinFacing) or profile.MinFacing or .15
 	local ok = distance <= (profile.MaxDistance or weapon.MaxDistance or 12)
@@ -5031,7 +5039,7 @@ local function step()
 			-- velocity projection for closing attacks, instead of a fixed timer.
 			local geometryOk, geometryMode, projected, facingDot = attackGeometry(weapon, profile, root, localRoot, remaining, contact)
 			if geometryOk then
-				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, DistanceDelay = distanceDelay, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1, GuardThroughPhase = profile.GuardThroughPhase, GuardMaxDuration = profile.GuardMaxDuration, GuardIfUncancelled = profile.GuardIfUncancelled, GeometryMode = geometryMode} end
+				if not best or remaining < best.Remaining then best = {Swing = swing, Model = rig.Model, ActorId = rig.Id, Weapon = weaponKey, Label = weapon.Label, Track = track, Remaining = remaining, Distance = distance, DistanceDelay = distanceDelay, Contact = contact, ContactCount = profile.Phases and #profile.Phases or 1, TapDuration = contact == 1 and profile.InitialTapDuration or nil, GuardThroughPhase = profile.GuardThroughPhase, GuardMaxDuration = profile.GuardMaxDuration, GuardIfUncancelled = profile.GuardIfUncancelled, GeometryMode = geometryMode} end
 			elseif swing.GeometryContact ~= contact then
 				swing.GeometryContact = contact
 				note(string.format("SKIP actorId=%d weapon=%s animation=%s contact=%d reason=geometry phase=%.3f eta=%.3f distance=%.2f projected=%.2f vertical=%.2f facing=%.3f mode=%s", rig.Id, weaponKey, swing.Asset, contact, phase, remaining, distance, projected.Magnitude, delta.Y, facingDot, geometryMode))
@@ -5063,7 +5071,7 @@ local function step()
 	best.Swing.Used = best.Contact >= best.ContactCount
 	state.LastAttempt = {At = now, Key = key, Self = model, Model = best.Model, ActorId = best.ActorId, Weapon = best.Weapon, Animation = best.Swing.Asset, Serial = state.Presses + 1}
 	state.PendingInputs[state.LastAttempt.Serial] = state.LastAttempt
-	state.Held = {Key = key, Until = now + (best.GuardThroughPhase and .30 or .16), Attempt = state.LastAttempt,
+	state.Held = {Key = key, Until = now + (best.TapDuration or (best.GuardThroughPhase and .30 or .16)), Attempt = state.LastAttempt,
 		Track = best.Track, Swing = best.Swing, Model = best.Model, GuardThroughPhase = best.GuardThroughPhase,
 		GuardIfUncancelled = best.GuardIfUncancelled, GuardDeadline = now + math.clamp(best.GuardMaxDuration or 2, .3, 3.5)}
 	state.Backoff = now + .25

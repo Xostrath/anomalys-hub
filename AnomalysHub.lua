@@ -3198,7 +3198,7 @@ function controller.IsBeyondNenChestRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen Auto Chests v2. Recoverable waits and measured short movement.
+-- Beyond Nen Auto Chests v3. Nearby non-empty chests take priority over placement.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -3224,7 +3224,7 @@ end
 local function save()
 	if not state.Archive or type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	local report = "BEYOND NEN AUTO CHESTS v2\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n")
+	local report = "BEYOND NEN AUTO CHESTS v3\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n")
 	pcall(writefile, "AnomalyHub/universal/beyond_nen_autochests_test.txt", report)
 	pcall(writefile, state.Archive, report)
 end
@@ -3325,6 +3325,38 @@ local function owned(chest)
 	return chest:GetAttribute("Owner") == player.UserId
 end
 local function chestRoot(chest) return chest and chest:FindFirstChild("HumanoidRootPart") end
+local function nearbyChests(ignoreDone)
+	local _, root = character()
+	local folder, candidates = chestFolder(), {}
+	if not root then return candidates end
+	for _, chest in ipairs(folder and folder:GetChildren() or {}) do
+		local id, name = chest:GetAttribute("ChestId"), chest:GetAttribute("PickupItem")
+		local part = chestRoot(chest)
+		local prompt = part and part:FindFirstChild("OpenChestPrompt")
+		if not owned(chest) or type(id) ~= "string" or not chestName(name) or not part
+			or (not ignoreDone and state.Done[id]) or not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then continue end
+		local distance = (part.Position - root.Position).Magnitude
+		if distance > 5 or distance > prompt.MaxActivationDistance then continue end
+		local items, hasLoot = chest:FindFirstChild("Items"), false
+		if items then
+			for _, item in ipairs(items:GetChildren()) do
+				local quantity = tonumber(item:GetAttribute("Quantity") or item:GetAttribute("quantity"))
+				if item:IsA("Configuration") and (quantity == nil or quantity > 0) then hasLoot = true; break end
+			end
+		end
+		-- Unopened chests in the captures had no Items folder until the first opening.
+		-- An existing empty folder, or an already opened chest without loot, is skipped.
+		local unopened = not items and chest:GetAttribute("OwnerOpened") == false
+		if hasLoot or unopened then table.insert(candidates, {Chest = chest, Name = name, Distance = distance, Id = id}) end
+	end
+	table.sort(candidates, function(a, b) return a.Distance == b.Distance and a.Id < b.Id or a.Distance < b.Distance end)
+	return candidates
+end
+local function nearestChest(ignoreDone, excludedId)
+	for _, candidate in ipairs(nearbyChests(ignoreDone)) do
+		if candidate.Id ~= excludedId and selected(candidate.Name) then return candidate end
+	end
+end
 local function release()
 	if not state.Held then return true end
 	local ok = pcall(function() state.Held:InputHoldEnd() end)
@@ -3422,11 +3454,13 @@ local function finishChest()
 		show("Finished chest. Taking a short step before the next one.")
 	end)
 end
-local function beginOpen(chest)
+local function beginOpen(chest, nearby)
 	state.Chest, state.ChestId = chest, chest:GetAttribute("ChestId")
+	state.ReusingChest = nearby == true
+	if nearby then state.Entry = {Name = chest:GetAttribute("PickupItem")}; state.StepRequested = false end
 	state.AttemptedItems, state.OpenAttempts, state.OpenConfirmed = {}, 0, false
 	state.Phase, state.NextAction = "Opening", os.clock()
-	note("CHEST " .. tostring(state.ChestId) .. " type=" .. tostring(chest:GetAttribute("PickupItem")))
+	note("CHEST " .. tostring(state.ChestId) .. " type=" .. tostring(chest:GetAttribute("PickupItem")) .. (nearby and " source=nearby-within-5" or " source=placed"))
 end
 local function confirmOpen()
 	if state.OpenConfirmed then return end
@@ -3448,6 +3482,8 @@ end
 local function choose()
 	local entries, slot = inventory()
 	if slot ~= state.Slot then stop("Character save slot changed."); return end
+	local nearby = nearestChest()
+	if nearby then beginOpen(nearby.Chest, true); show("Opening nearby " .. nearby.Name); return end
 	-- Use already available chest tools before needing another hotbar slot.
 	table.sort(entries, function(a, b)
 		if (a.Tool ~= nil) ~= (b.Tool ~= nil) then return a.Tool ~= nil end
@@ -3490,6 +3526,8 @@ local function step()
 	if not state.Focused or Input:GetFocusedTextBox() then release(); cancelMove(); show("Paused while typing or outside Roblox."); return end
 	if state.MoveUntil or state.Held or now < state.NextAction then return end
 	if state.Phase == "Between" and state.StepRequested then
+		local nearby = nearestChest()
+		if nearby then beginOpen(nearby.Chest, true); return end
 		state.StepRequested = false; smallStep(); state.NextAction = now + .8; return
 	end
 	if state.Phase == "Select" or state.Phase == "Between" then choose(); return end
@@ -3519,6 +3557,9 @@ local function step()
 			waitHere("Waiting to equip the chest.")
 		end
 	elseif state.Phase == "Equipping" then
+		-- A chest may appear while inventory/equipment requests are still returning.
+		local nearby = nearestChest()
+		if nearby then beginOpen(nearby.Chest, true); return end
 		local tool = findTool(state.Entry.Name, state.Entry.Id)
 		if not tool or tool.Parent ~= char then
 			state.Phase, state.ToolDeadline = "AwaitTool", now + 3
@@ -3570,6 +3611,10 @@ local function step()
 		if now >= state.SpawnDeadline then stop("Placement returned, but the new chest was not found. Stopped to avoid wasting chests.") end
 	elseif state.Phase == "Opening" then
 		local chest, part = state.Chest, chestRoot(state.Chest)
+		if not part or not chest.Parent or (part.Position - root.Position).Magnitude > 5 then
+			local nearby = nearestChest(false, state.ChestId)
+			if nearby then beginOpen(nearby.Chest, true); return end
+		end
 		if not chest or not chest.Parent or not part then
 			local folder = chestFolder()
 			for _, existing in ipairs(folder and folder:GetChildren() or {}) do
@@ -3580,10 +3625,14 @@ local function step()
 			waitHere("Waiting for the placed chest to load again."); return
 		end
 		if not owned(chest) then waitHere("Waiting: this chest is no longer marked as yours."); return end
-		if chest:GetAttribute("OwnerOpened") == true and chest:GetAttribute("OpenedBy") == player.UserId then confirmOpen(); return end
+		-- A previous opening flag does not mean this session has reopened the chest.
+		if not state.ReusingChest and chest:GetAttribute("OwnerOpened") == true and chest:GetAttribute("OpenedBy") == player.UserId then confirmOpen(); return end
 		local prompt = part:FindFirstChild("OpenChestPrompt")
 		if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then waitHere("Waiting for the chest's opening prompt."); return end
 		local distance = (root.Position - part.Position).Magnitude
+		if state.ReusingChest and distance > 5 then
+			state.Phase = "Select"; waitHere("Nearby chest moved outside 5 studs. Checking again.", .3); return
+		end
 		if distance > math.min(12, prompt.MaxActivationDistance) then
 			waitHere(string.format("Waiting near the placed chest (%.1f studs away).", distance)); return
 		end
@@ -3619,7 +3668,7 @@ local function step()
 		finishChest()
 	end
 end
-local card = ui.Card(ui.Pages.Auto, "AUTO CHESTS // v2", "Opens selected chest stacks, skips rejected items and takes a measured step. Waits through temporary range, placement or equipment issues.", 390)
+local card = ui.Card(ui.Pages.Auto, "AUTO CHESTS // v3", "Prioritizes your non-empty chests within 5 studs, then places selected inventory chests. Skips empty chests and rejected leftovers.", 390)
 card.LayoutOrder = 35
 status = ui.Create("TextLabel", {Position = UDim2.fromOffset(14, 310), Size = UDim2.new(1, -28, 0, 66), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Off. Select chest types below.", TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left}, card)
@@ -3632,6 +3681,10 @@ local function render()
 		local group = groups[entry.Name] or {Quantity = 0, Known = true}; groups[entry.Name] = group
 		group.Quantity += entry.Quantity or 0; group.Known = group.Known and entry.Quantity ~= nil
 	end
+	for _, candidate in ipairs(nearbyChests(true)) do
+		local group = groups[candidate.Name] or {Quantity = 0, Known = true}; groups[candidate.Name] = group
+		group.Nearby = (group.Nearby or 0) + 1
+	end
 	local names = {}; for name in pairs(groups) do table.insert(names, name) end; table.sort(names)
 	for name, row in pairs(state.Rows) do if not groups[name] then row:Destroy(); state.Rows[name] = nil end end
 	for index, name in ipairs(names) do
@@ -3641,6 +3694,7 @@ local function render()
 				if selection.All then
 					selection.All = false; selection.Types = {}
 					for _, entry in ipairs(inventory()) do selection.Types[entry.Name] = true end
+					for _, candidate in ipairs(nearbyChests(true)) do selection.Types[candidate.Name] = true end
 				end
 				selection.Types[name] = not selection.Types[name]; controller.SaveConfig(); render()
 			end)
@@ -3648,6 +3702,7 @@ local function render()
 		end
 		row.Position, row.Size = UDim2.fromOffset(4, (index - 1) * 36 + 4), UDim2.new(1, -12, 0, 32)
 		row.Text = (selected(name) and "[ON] " or "[OFF] ") .. name .. (groups[name].Known and " x" .. groups[name].Quantity or "")
+			.. (groups[name].Nearby and " | " .. groups[name].Nearby .. " nearby" or "")
 		row.BackgroundColor3 = selected(name) and ui.Colors.AccentSoft or ui.Colors.Surface
 	end
 	list.CanvasSize = UDim2.new(0, 0, 0, #names * 36 + 8)
@@ -3658,9 +3713,11 @@ local function enable(value)
 	if state.Pending then show("Waiting for the previous chest request to finish."); return end
 	if controller.IsBeyondNenChestRecording and controller.IsBeyondNenChestRecording() then show("Stop the chest recorder before opening automatically."); return end
 	local char, root = character(); if not char then show("Wait for your character to load."); return end
-	local entries, slot = inventory(); if #entries == 0 then show("No owned chest items found. Open inventory once, then Refresh Chests."); return end
+	local entries, slot = inventory()
+	local nearby = nearestChest(true)
+	if #entries == 0 and not nearby then show("No selected chests in inventory or within 5 studs. Refresh Chests to check again."); return end
 	local selectedAny = false; for _, entry in ipairs(entries) do if selected(entry.Name) then selectedAny = true end end
-	if not selectedAny then show("Select at least one chest type."); return end
+	if not selectedAny and not nearby then show("Select at least one chest type."); return end
 	if controller.SetBeyondNenAutoFishing then controller.SetBeyondNenAutoFishing(false) end
 	if controller.SetBeyondNenAutoMeditation then controller.SetBeyondNenAutoMeditation(false) end
 	state.Enabled, state.Character, state.Slot, state.Phase = true, char, slot, "Select"

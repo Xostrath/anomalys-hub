@@ -3198,7 +3198,7 @@ function controller.IsBeyondNenChestRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen Auto Chests v4. Open only; the game handles item rewards.
+-- Beyond Nen Auto Chests v5. Open inventory chests; move away from existing chests.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return end
@@ -3224,7 +3224,7 @@ end
 local function save()
 	if not state.Archive or type(writefile) ~= "function" then return end
 	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
-	local report = "BEYOND NEN AUTO CHESTS v4 // OPEN ONLY\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n")
+	local report = "BEYOND NEN AUTO CHESTS v5 // OPEN ONLY / CHEST CLEARANCE\nplace=" .. tostring(game.PlaceId) .. "\n" .. table.concat(state.Lines, "\n")
 	pcall(writefile, "AnomalyHub/universal/beyond_nen_autochests_test.txt", report)
 	pcall(writefile, state.Archive, report)
 end
@@ -3325,37 +3325,20 @@ local function owned(chest)
 	return chest:GetAttribute("Owner") == player.UserId
 end
 local function chestRoot(chest) return chest and chest:FindFirstChild("HumanoidRootPart") end
-local function nearbyChests(ignoreDone)
-	local _, root = character()
-	local folder, candidates = chestFolder(), {}
-	if not root then return candidates end
+local function chestObstacles(root)
+	local folder, points, closest = chestFolder(), {}, math.huge
 	for _, chest in ipairs(folder and folder:GetChildren() or {}) do
-		local id, name = chest:GetAttribute("ChestId"), chest:GetAttribute("PickupItem")
 		local part = chestRoot(chest)
-		local prompt = part and part:FindFirstChild("OpenChestPrompt")
-		if not owned(chest) or type(id) ~= "string" or not chestName(name) or not part
-			or (not ignoreDone and state.Done[id]) or not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then continue end
-		local distance = (part.Position - root.Position).Magnitude
-		if distance > 5 or distance > prompt.MaxActivationDistance then continue end
-		local items, hasLoot = chest:FindFirstChild("Items"), false
-		if items then
-			for _, item in ipairs(items:GetChildren()) do
-				local quantity = tonumber(item:GetAttribute("Quantity") or item:GetAttribute("quantity"))
-				if item:IsA("Configuration") and (quantity == nil or quantity > 0) then hasLoot = true; break end
+		if part then
+			local delta = part.Position - root.Position
+			local distance = Vector3.new(delta.X, 0, delta.Z).Magnitude
+			-- Empty, opened and other players' chests still occupy space.
+			if math.abs(delta.Y) <= 6 and distance <= 12 then
+				table.insert(points, part.Position); closest = math.min(closest, distance)
 			end
 		end
-		-- Unopened chests in the captures had no Items folder until the first opening.
-		-- An existing empty folder, or an already opened chest without loot, is skipped.
-		local unopened = not items and chest:GetAttribute("OwnerOpened") == false
-		if hasLoot or unopened then table.insert(candidates, {Chest = chest, Name = name, Distance = distance, Id = id}) end
 	end
-	table.sort(candidates, function(a, b) return a.Distance == b.Distance and a.Id < b.Id or a.Distance < b.Distance end)
-	return candidates
-end
-local function nearestChest(ignoreDone, excludedId)
-	for _, candidate in ipairs(nearbyChests(ignoreDone)) do
-		if candidate.Id ~= excludedId and selected(candidate.Name) then return candidate end
-	end
+	return points, closest
 end
 local function release()
 	if not state.Held then return true end
@@ -3430,20 +3413,37 @@ local function smallStep()
 	local axis = camera and camera.CFrame.RightVector or state.StepAxis
 	axis = Vector3.new(axis.X, 0, axis.Z)
 	if axis.Magnitude < .1 then return end
-	local preferred = (state.Opened % 2 == 1) and 1 or -1
-	local sign, direction
-	for _, side in ipairs({preferred, -preferred}) do
-		local candidate = axis.Unit * side
-		if floorPoint(root, candidate * 1.25, state.Chest) then sign, direction = side, candidate; break end
+	axis = axis.Unit
+	local forward = Vector3.new(axis.Z, 0, -axis.X)
+	local points, currentClearance = chestObstacles(root)
+	local direction, key, bestClearance
+	for _, option in ipairs({{axis, Enum.KeyCode.D}, {axis * -1, Enum.KeyCode.A}, {forward, Enum.KeyCode.W}, {forward * -1, Enum.KeyCode.S}}) do
+		local candidate = option[1]
+		if not floorPoint(root, candidate * 2) or not floorPoint(root, candidate * 4) then continue end
+		local clearance, safe = 24, true
+		for _, point in ipairs(points) do
+			local start = point - root.Position; start = Vector3.new(start.X, 0, start.Z)
+			for _, distance in ipairs({1, 2, 3, 4}) do
+				local separation = (start - candidate * distance).Magnitude
+				-- Never cut through another chest to escape the nearest one.
+				if separation + .05 < math.min(2, start.Magnitude) then safe = false; break end
+				if distance == 4 then clearance = math.min(clearance, separation) end
+			end
+			if not safe then break end
+		end
+		if safe and (#points == 0 or clearance > currentClearance + .25) and (not bestClearance or clearance > bestClearance) then
+			direction, key, bestClearance = candidate, option[2], clearance
+		end
 	end
-	if not direction then note("STEP skipped: both sides blocked or no safe ground"); return end
+	if not direction then note("STEP skipped: no safe direction increases chest clearance"); return false end
 	state.MoveHumanoid, state.MoveOrigin, state.MoveDirection = humanoid, root.Position, direction
-	state.MoveUntil = os.clock() + .65
+	state.MoveUntil = os.clock() + 1
 	if inputManager then
-		state.MoveKey = sign == 1 and Enum.KeyCode.D or Enum.KeyCode.A
+		state.MoveKey = key
 		inputManager:SendKeyEvent(true, state.MoveKey, false, game)
 	end
-	note("STEP_START target=1.25 backend=" .. (state.MoveKey and "movement key" or "continuous Move"))
+	note(string.format("STEP_START target=4 clearance=%.2f planned=%.2f backend=%s", currentClearance, bestClearance, state.MoveKey and "movement key" or "continuous Move"))
+	return true
 end
 local function finishChest()
 	local id = state.ChestId
@@ -3454,13 +3454,11 @@ local function finishChest()
 		show("Finished chest. Taking a short step before the next one.")
 	end)
 end
-local function beginOpen(chest, nearby)
+local function beginOpen(chest)
 	state.Chest, state.ChestId = chest, chest:GetAttribute("ChestId")
-	state.ReusingChest = nearby == true
-	if nearby then state.Entry = {Name = chest:GetAttribute("PickupItem")}; state.StepRequested = false end
 	state.OpenAttempts, state.OpenConfirmed = 0, false
 	state.Phase, state.NextAction = "Opening", os.clock()
-	note("CHEST " .. tostring(state.ChestId) .. " type=" .. tostring(chest:GetAttribute("PickupItem")) .. (nearby and " source=nearby-within-5" or " source=placed"))
+	note("CHEST " .. tostring(state.ChestId) .. " type=" .. tostring(chest:GetAttribute("PickupItem")) .. " source=placed")
 end
 local function confirmOpen()
 	if state.OpenConfirmed then return end
@@ -3483,8 +3481,6 @@ end
 local function choose()
 	local entries, slot = inventory()
 	if slot ~= state.Slot then stop("Character save slot changed."); return end
-	local nearby = nearestChest()
-	if nearby then beginOpen(nearby.Chest, true); show("Opening nearby " .. nearby.Name); return end
 	-- Use already available chest tools before needing another hotbar slot.
 	table.sort(entries, function(a, b)
 		if (a.Tool ~= nil) ~= (b.Tool ~= nil) then return a.Tool ~= nil end
@@ -3509,7 +3505,7 @@ local function step()
 	if state.Held and (not state.Enabled or now >= state.ReleaseAt) then if not release() then stop("Could not release the chest key."); return end end
 	if state.MoveUntil then
 		local _, root = character()
-		if not state.Enabled or now >= state.MoveUntil or not root or (root.Position - state.MoveOrigin).Magnitude >= 1.25 then
+		if not state.Enabled or now >= state.MoveUntil or not root or (root.Position - state.MoveOrigin).Magnitude >= 4 then
 			cancelMove(now >= state.MoveUntil and "deadline" or "distance reached")
 		end
 	end
@@ -3527,9 +3523,9 @@ local function step()
 	if not state.Focused or Input:GetFocusedTextBox() then release(); cancelMove(); show("Paused while typing or outside Roblox."); return end
 	if state.MoveUntil or state.Held or now < state.NextAction then return end
 	if state.Phase == "Between" and state.StepRequested then
-		local nearby = nearestChest()
-		if nearby then beginOpen(nearby.Chest, true); return end
-		state.StepRequested = false; smallStep(); state.NextAction = now + .8; return
+		if smallStep() then state.StepRequested = false; state.NextAction = now + .3
+		else waitHere("Waiting for a safe step away from nearby chests.", 1) end
+		return
 	end
 	if state.Phase == "Select" or state.Phase == "Between" then choose(); return end
 	if state.Phase == "AwaitTool" then
@@ -3558,9 +3554,13 @@ local function step()
 			waitHere("Waiting to equip the chest.")
 		end
 	elseif state.Phase == "Equipping" then
-		-- A chest may appear while inventory/equipment requests are still returning.
-		local nearby = nearestChest()
-		if nearby then beginOpen(nearby.Chest, true); return end
+		-- Nearby detection is for making room, never for reopening old chests.
+		local _, clearance = chestObstacles(root)
+		if clearance <= 6 then
+			if smallStep() then waitHere("Moving away from existing chests before placing the next one.", .3)
+			else waitHere("Waiting for a clear path away from nearby chests.", 1) end
+			return
+		end
 		local tool = findTool(state.Entry.Name, state.Entry.Id)
 		if not tool or tool.Parent ~= char then
 			state.Phase, state.ToolDeadline = "AwaitTool", now + 3
@@ -3588,7 +3588,9 @@ local function step()
 				if clear then ground = point; break end
 			end
 		end
-		if not ground then waitHere("Waiting for a clear spot nearby. Move a little if chests surround you.", 1); return end
+		if not ground then
+			smallStep(); waitHere("Making room for a clear chest placement.", 1); return
+		end
 		state.Before, state.PlacePoint = {}, ground
 		local folder = chestFolder()
 		for _, chest in ipairs(folder and folder:GetChildren() or {}) do state.Before[chest] = true end
@@ -3612,10 +3614,6 @@ local function step()
 		if now >= state.SpawnDeadline then stop("Placement returned, but the new chest was not found. Stopped to avoid wasting chests.") end
 	elseif state.Phase == "Opening" then
 		local chest, part = state.Chest, chestRoot(state.Chest)
-		if not part or not chest.Parent or (part.Position - root.Position).Magnitude > 5 then
-			local nearby = nearestChest(false, state.ChestId)
-			if nearby then beginOpen(nearby.Chest, true); return end
-		end
 		if not chest or not chest.Parent or not part then
 			local folder = chestFolder()
 			for _, existing in ipairs(folder and folder:GetChildren() or {}) do
@@ -3626,14 +3624,10 @@ local function step()
 			waitHere("Waiting for the placed chest to load again."); return
 		end
 		if not owned(chest) then waitHere("Waiting: this chest is no longer marked as yours."); return end
-		-- A previous opening flag does not mean this session has reopened the chest.
-		if not state.ReusingChest and chest:GetAttribute("OwnerOpened") == true and chest:GetAttribute("OpenedBy") == player.UserId then confirmOpen(); return end
+		if chest:GetAttribute("OwnerOpened") == true and chest:GetAttribute("OpenedBy") == player.UserId then confirmOpen(); return end
 		local prompt = part:FindFirstChild("OpenChestPrompt")
 		if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then waitHere("Waiting for the chest's opening prompt."); return end
 		local distance = (root.Position - part.Position).Magnitude
-		if state.ReusingChest and distance > 5 then
-			state.Phase = "Select"; waitHere("Nearby chest moved outside 5 studs. Checking again.", .3); return
-		end
 		if distance > math.min(12, prompt.MaxActivationDistance) then
 			waitHere(string.format("Waiting near the placed chest (%.1f studs away).", distance)); return
 		end
@@ -3650,7 +3644,7 @@ local function step()
 		finishChest()
 	end
 end
-local card = ui.Card(ui.Pages.Auto, "AUTO CHESTS // v4", "Open only. Prioritizes your non-empty chests within 5 studs, then selected inventory chests. Moves on after each confirmed opening.", 390)
+local card = ui.Card(ui.Pages.Auto, "AUTO CHESTS // v5", "Opens selected inventory chests. Steps about 4 studs away from nearby chests to make room for the next placement.", 390)
 card.LayoutOrder = 35
 status = ui.Create("TextLabel", {Position = UDim2.fromOffset(14, 310), Size = UDim2.new(1, -28, 0, 66), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Off. Select chest types below.", TextColor3 = ui.Colors.Muted, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left}, card)
@@ -3663,10 +3657,6 @@ local function render()
 		local group = groups[entry.Name] or {Quantity = 0, Known = true}; groups[entry.Name] = group
 		group.Quantity += entry.Quantity or 0; group.Known = group.Known and entry.Quantity ~= nil
 	end
-	for _, candidate in ipairs(nearbyChests(true)) do
-		local group = groups[candidate.Name] or {Quantity = 0, Known = true}; groups[candidate.Name] = group
-		group.Nearby = (group.Nearby or 0) + 1
-	end
 	local names = {}; for name in pairs(groups) do table.insert(names, name) end; table.sort(names)
 	for name, row in pairs(state.Rows) do if not groups[name] then row:Destroy(); state.Rows[name] = nil end end
 	for index, name in ipairs(names) do
@@ -3676,7 +3666,6 @@ local function render()
 				if selection.All then
 					selection.All = false; selection.Types = {}
 					for _, entry in ipairs(inventory()) do selection.Types[entry.Name] = true end
-					for _, candidate in ipairs(nearbyChests(true)) do selection.Types[candidate.Name] = true end
 				end
 				selection.Types[name] = not selection.Types[name]; controller.SaveConfig(); render()
 			end)
@@ -3684,7 +3673,6 @@ local function render()
 		end
 		row.Position, row.Size = UDim2.fromOffset(4, (index - 1) * 36 + 4), UDim2.new(1, -12, 0, 32)
 		row.Text = (selected(name) and "[ON] " or "[OFF] ") .. name .. (groups[name].Known and " x" .. groups[name].Quantity or "")
-			.. (groups[name].Nearby and " | " .. groups[name].Nearby .. " nearby" or "")
 		row.BackgroundColor3 = selected(name) and ui.Colors.AccentSoft or ui.Colors.Surface
 	end
 	list.CanvasSize = UDim2.new(0, 0, 0, #names * 36 + 8)
@@ -3696,10 +3684,9 @@ local function enable(value)
 	if controller.IsBeyondNenChestRecording and controller.IsBeyondNenChestRecording() then show("Stop the chest recorder before opening automatically."); return end
 	local char, root = character(); if not char then show("Wait for your character to load."); return end
 	local entries, slot = inventory()
-	local nearby = nearestChest(true)
-	if #entries == 0 and not nearby then show("No selected chests in inventory or within 5 studs. Refresh Chests to check again."); return end
+	if #entries == 0 then show("No chests in inventory. Refresh Chests to check again."); return end
 	local selectedAny = false; for _, entry in ipairs(entries) do if selected(entry.Name) then selectedAny = true end end
-	if not selectedAny and not nearby then show("Select at least one chest type."); return end
+	if not selectedAny then show("Select at least one chest type."); return end
 	if controller.SetBeyondNenAutoFishing then controller.SetBeyondNenAutoFishing(false) end
 	if controller.SetBeyondNenAutoMeditation then controller.SetBeyondNenAutoMeditation(false) end
 	state.Enabled, state.Character, state.Slot, state.Phase = true, char, slot, "Select"
@@ -4056,7 +4043,7 @@ function controller.IsBeyondNenParryRecording() return capture.Active end
 
 end)()
 ;(function()
--- Beyond Nen auto-parry test v31. Weapon type + observed animation variant.
+-- Beyond Nen auto-parry test v32. Weapon type + observed animation variant.
 -- Animation phases are estimates from observed results, not server hitbox rules.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
@@ -4275,7 +4262,10 @@ local weaponProfiles = {
 		-- Two v24 runs: geometry skips at vertical-25 followed by matching
 		-- damage, distance25-29.24. This projectile needs its own height bound;
 		-- all other attacks retain the default8. Keep the existing current cap31.
-		["73875507755468"] = {Phases = {.78, .89, 1.00, 1.11, 1.23, 1.34, 1.46, 1.57, 1.69, 1.81}, MinFollowupLead = .08, Reach = 30, MaxDistance = 31, MaxVertical = 30, MinFacing = -.4, Name = "pistols burst B (test)"},
+		-- Latest v30 confirms the opener with CancelMove=false after .225s;
+		-- later bullets hit after release. Final hit39.59 followed a geometry
+		-- skip atcurrent35.68/projected37.72/facing-.412; earlier v27 hit35-36.
+		["73875507755468"] = {Phases = {.78, .89, 1.00, 1.11, 1.23, 1.34, 1.46, 1.57, 1.69, 1.81}, MinFollowupLead = .08, GuardThroughPhase = 1.99, GuardIfUncancelled = true, Reach = 40, MaxDistance = 40, MaxVertical = 30, MinFacing = -.45, Name = "pistols burst B (test)"},
 		-- Previously only .48/.98 were mapped. Independent v24 runs show a
 		-- continuing train at1.104-2.450 plus a final hit3.312/3.337 (speed1).
 		-- Rear hits at3.77-6.09 studs justify a close radius for this ID only.
@@ -4292,9 +4282,16 @@ local weaponProfiles = {
 		-- v30 isolated Action contact at .550/speed1.064/distance5.31.
 		-- Single-sample timing trial; no automatic parry confirmation yet.
 		["78460118661143"] = {Phase = .52, Reach = 10, MaxDistance = 13, Name = "pistols additional strike B (test)"},
+		-- Shared ID, separately observed under explicit Shockwork Pistols:
+		-- v27 .572 and latest .576/.589, speed1.04, distances7.72/10.62.
+		-- Do not borrow Dagger's32-stud approach bounds or infer weapon from ID.
+		["113521135913624"] = {Phase = .54, Reach = 12, MaxDistance = 15, Name = "pistols additional strike C (test)"},
 		-- One two-hit episode at1.525/2.021, speed1, distance19.46/13.39.
 		-- First facing-.693; exact move identity and parryability unverified.
-		["118856732820265"] = {Phases = {1.49, 1.99}, Reach = 21, MaxDistance = 24, MinFacing = -.75, Name = "pistols two-hit skill (test)"},
+		-- Latest v30 reveals an earlier .421 receipt (single-sample trial),
+		-- distance9.01/facing-.963. Existing1.49 contact hit13.34/facing-.888
+		-- after a -.893 skip. Preserve later seeds, allow close10/rear-.90.
+		["118856732820265"] = {Phases = {.39, 1.49, 1.99}, Reach = 21, MaxDistance = 24, CloseRangeRadius = 10, MinFacing = -.90, Name = "pistols three-contact skill (test)"},
 	}},
 	scytheslot = {Label = "Crazy Slots: Scythe (test)", Reach = 13, MaxDistance = 16, Animations = {
 		-- v30: equipped Crazy Slots + CustomWeapon="Scythe Slot", despite
@@ -4376,13 +4373,16 @@ for _, key in ipairs({"sword", "dagger", "bat"}) do
 	for id in pairs(weaponProfiles[key].Animations) do
 		-- An ambiguous animation must not pick a weapon family arbitrarily.
 		recordedVariants[id] = recordedVariants[id] == nil and key or false
+		for otherKey, profile in pairs(weaponProfiles) do
+			if otherKey ~= key and profile.Animations[id] then recordedVariants[id] = false; break end
+		end
 	end
 end
 local targetModes = {"NPCs", "Players", "Both"}
 local savedTargets = controller.State and controller.State.BeyondNenParryTargets
 local state = {Enabled = false, Closed = false, Focused = true, Rigs = {}, PlayerModels = {}, Lines = {}, Unknown = {}, Attempts = {}, Results = {},
 	TargetMode = table.find(targetModes, savedTargets) and savedTargets or "NPCs"}
-local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v31", "Scythe, Frostblade Boots and pistol updates. Choose NPCs, Players, or Both below.", 268)
+local card = ui.Card(ui.Pages.Combat, "AUTO PARRY TEST v32", "Scythe, Frostblade Boots and pistol updates. Choose NPCs, Players, or Both below.", 268)
 local status = ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 161), Size = UDim2.new(1, -28, 0, 91), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Ready. Detects the opponent's weapon automatically. Let the test handle F. Unmapped variants are skipped; stops after 90 seconds.",
@@ -4395,10 +4395,11 @@ local function note(message)
 end
 local function save(reason)
 	if not state.Started then return false end
-	state.Report = "BEYOND NEN AUTO PARRY TEST v31 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
+	state.Report = "BEYOND NEN AUTO PARRY TEST v32 // WEAPON PROFILES\nplace=" .. tostring(game.PlaceId)
 		.. "\nHISTORY=" .. tostring(state.ArchivePath)
 		.. "\nTARGETS=" .. state.TargetMode .. ". Player-character ownership selects eligible targets before the nearest-eight limit. Weapon profiles still apply identically to either target type. This filter does not infer hostility; Players/Both can react to friendly swings."
 		.. "\nNormal block-key inputs only. Incoming results are observed; no combat remote replays or forged timestamps."
+		.. "\nv32 overrides earlier pistol notes: burstB73875507755468 gets matched CancelMove=false guard through1.99/cap2s, reach/current40, facing-.45 after hits at35-39.59 and a projected37.72 skip. New separate Shockwork mapping113521135913624 seed.54/reach12/current15; Dagger timing/range unchanged. Shared animation IDs no longer infer Dagger from generic Fists; current equipped Shockwork Pistols or Phantom Goons Dagger resolves the family. Skill118856732820265 adds trial first seed.39 from one isolated .421 receipt, retains1.49/1.99 and range21/current24, adds close10/facing-.90 after rear hits9.01/13.34. Existing v31 weapon and interrupted-hold fixes retained. Latest source test was v30, not evidence of v31 performance. InvalidTimestamp responses are logged without changing game-generated timestamps. All new timings/bounds need live testing."
 		.. "\nv31: unmatched block-key UP ends an internal burst hold, allowing later timed contacts through normal gates; it does not identify who released the key. Pistol burstA now waits up to.30s for a matched CancelMove=false parry, then guards through3.20 with3.5s cap. New pistol78460118661143 trial seed.52. Six Scythe and three Frostblade trial animations require explicit matching Weapon, or generic player Fists plus current equipped Tool.WeaponName/BoundWeapon. Crazy Slots also requires current CustomWeapon=Scythe Slot. Stale subweapon metadata, backpack tools and overlapping periodic damage do not select a profile. Live speed/geometry/cooldown/own-skill rules remain. Timings are damage-receipt estimates; no guaranteed parry or hitbox claim."
 		.. "\nFox Bear v30 overrides prior geometry notes: A projected20/current22; B facing-.75; ordinary strike phases unchanged. Rapid skill guard through2.48/cap2s, extended guard through3.82/cap3s only after matched CancelMove=false parry. Extended second seed1.86->1.78 after receipts1.808/1.821; other contacts unchanged. Additional skill97452490480378 now current/projected60 and adds clamp((distance-20)/200,0,.20) seconds to phase ETA, using current distance and live track speed. This empirical trial follows hits at39.58/40.54/59.12; no measured projectile speed or guaranteed hitbox implied. Close-range timing, elevation, cooldown, own-skill rules and other weapons stay unchanged."
 		.. "\nShockwork Pistols v29: six mapped animations. BurstA first seed.40->.34 after a ready opening tap at.250 still got FreshHitStun; later contacts unchanged. Multi-hit76637609852449 retains phases, expands reach18/current21/close radius13 after damage at16.15 and rear11.09. Initial F lasts up to.30; only matched ParryResult with CancelMove=false extends guard through phase3.45, capped3.5s. Accepted, cancelled or ambiguous results do not extend it. This is held-block protection after a parry, not repeated perfect parries; live benefit unverified. New126546963227585 phase.40/reach10/max13 from two close hits;118856732820265 phases1.49/1.99/reach21/max24/facing-.75 from one two-hit episode. No boss-name filter or own-skill bypass."
@@ -4574,7 +4575,11 @@ local function weaponOf(rig)
 			if not tool:IsA("Tool") then continue end
 			local name, bound = tool:GetAttribute("WeaponName"), tool:GetAttribute("BoundWeapon")
 			local candidate
-			if name == "Frostblade Boots" or (tool:GetAttribute("WeaponLinked") == true and bound == "Frostblade Boots") then
+			if name == "Shockwork Pistols" or (tool:GetAttribute("WeaponLinked") == true and bound == "Shockwork Pistols") then
+				candidate = "shockworkpistols"
+			elseif name == "Phantom Goons Dagger" or (tool:GetAttribute("WeaponLinked") == true and bound == "Phantom Goons Dagger") then
+				candidate = "dagger"
+			elseif name == "Frostblade Boots" or (tool:GetAttribute("WeaponLinked") == true and bound == "Frostblade Boots") then
 				candidate = "frostbladeboots"
 			elseif name == "Crazy Slots" and rig.Model:GetAttribute("CustomWeapon") == "Scythe Slot" then
 				candidate = "scytheslot"
@@ -4997,7 +5002,7 @@ local function start()
 	state.ArchivePath = "AnomalyHub/universal/beyond_nen_autoparry_test_" .. os.time() .. "_" .. tostring(nonce):gsub("[^%w_%-]", "") .. ".txt"
 	state.Character, state.LastAttempt, state.LastHealth = nil, nil, nil
 	state.Key = blockKey()
-	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield,ScytheSlot,FrostbladeBoots mappedWeaponAnimations=92 duration=90")
+	note("START key=" .. state.Key.Name .. " targets=" .. state.TargetMode .. " weaponProfiles=Fists,Pitchfork,BigPitchfork,Rifle,ShockworkPistols,Sword,Dagger,Bat,FoxBear,OlympusShield,ScytheSlot,FrostbladeBoots mappedWeaponAnimations=93 duration=90")
 	if controller.WatchBeyondNenCombat then state.Unwatch = controller.WatchBeyondNenCombat(feedback) end
 	button.Text, button.BackgroundColor3 = "Stop + Save Test", ui.Colors.Danger
 	show("Test running. Let it handle your block key."); save("RUNNING")

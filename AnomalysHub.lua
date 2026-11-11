@@ -2584,6 +2584,7 @@ if type(controller) ~= "table" or controller.Profile ~= "BeyondNen" then return 
 local player = game:GetService("Players").LocalPlayer
 local rs = game:GetService("ReplicatedStorage")
 local run = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
 local ui = controller.UI
 local ranks = {Common=1, Uncommon=2, Rare=3, Legendary=4, Extraordinary=5, Mythical=6}
 local known = {}
@@ -2596,11 +2597,48 @@ add(2, "Aura Control|Firm Guard|Recovery Training|Efficient Cooking|Craftsman's 
 add(3, "Boss Hunter|Hardened Hunter|Final Effort|Counter Pressure|Defensive Instinct|Battle Focus|Preparation|Skilled Harvester|Treasure Sense|Fast Recovery")
 add(4, "Nen Master|Martial Master|Lifesteal|Second Wind|Relentless Spirit|Aura Reversal|Lucky Discovery|Hunter's Intuition")
 add(5, "Heavenly Restriction|Technique Master|Parry God|Iron Will|Warrior Hate|Comeback Spirit")
+-- Rarities belong to this game, not one character/save slot. Persist only
+-- learned labels; keep high-tier protections even if an old cache disagrees.
+local cachePath="AnomalyHub/universal/talent_rarities_"..tostring(game.GameId)..".json"
+local learned,cacheCount,cacheWarning={},0,nil
+local function mergeCache(data)
+	if type(data)~="table" or data.Version~=1 or data.Universe~=game.GameId or type(data.Rarities)~="table" then return end
+	local count=0
+	for key,rank in pairs(data.Rarities) do
+		count+=1;if count>512 then break end
+		if type(key)=="string" and #key>0 and #key<=100 and key:match("^[a-z0-9]+$")
+			and type(rank)=="number" and rank>=1 and rank<=6 and rank%1==0 then
+			local previous=known[key] or 0
+			known[key]=previous>=4 and math.max(previous,rank) or rank
+			if not learned[key] then cacheCount+=1 end
+			learned[key]=known[key]
+		end
+	end
+end
+if type(readfile)=="function" then
+	local ok,text=pcall(readfile,cachePath)
+	if ok and type(text)=="string" and #text<=65536 then
+		local decoded,data=pcall(HttpService.JSONDecode,HttpService,text)
+		if decoded then mergeCache(data) end
+	end
+end
+mergeCache(env.__AnomalyTalentRarityCache)
+local function saveRarities()
+	local data={Version=1,Universe=game.GameId,Rarities=table.clone(learned)}
+	env.__AnomalyTalentRarityCache=data -- Reload survives even without file APIs.
+	local ok=pcall(function()
+		if type(writefile)~="function" then error("File saving unavailable") end
+		if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal") end
+		writefile(cachePath,HttpService:JSONEncode(data))
+	end)
+	cacheWarning=not ok and "Rarity memory is session-only: file saving failed." or nil
+	return ok
+end
 local state = {Enabled=false, Closed=false, Epoch=0, Rolls=0, Lines={}}
-local card = ui.Card(ui.Pages.Auto, "AUTO TALENTS // v1", "Jenni only: 3,333 per roll. Replaces Common, then Uncommon, then Rare. Keeps Legendary or higher; stops on unknown results.", 250)
+local card = ui.Card(ui.Pages.Auto, "AUTO TALENTS // v2", "Jenni only: 3,333 per roll. Replaces lowest rarities first. Keeps Legendary or higher and remembers identified talents across reloads.", 250)
 card.LayoutOrder = 35
 local status = ui.Create("TextLabel", {Position=UDim2.fromOffset(14,150), Size=UDim2.new(1,-28,0,86), BackgroundTransparency=1,
-	Font=Enum.Font.Gotham, Text="Off. Set a roll limit, then enable. Unrecognized talents are protected.", TextColor3=ui.Colors.Muted,
+	Font=Enum.Font.Gotham, Text="Off. Remembered "..cacheCount.." talent rarities. Set a roll limit, then enable.", TextColor3=ui.Colors.Muted,
 	TextSize=11, TextWrapped=true, TextXAlignment=Enum.TextXAlignment.Left}, card)
 local limit = ui.ValueBox(card, "Max rolls (1–100)", 14, 110, 180, "10", function() end)
 ui.Create("TextLabel", {Position=UDim2.fromOffset(208,110), Size=UDim2.new(1,-222,0,34), BackgroundTransparency=1,
@@ -2611,11 +2649,12 @@ local function note(text)
 	if #state.Lines > 300 then table.remove(state.Lines,1) end
 	if type(writefile)=="function" then
 		if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal") end
-		pcall(writefile,"AnomalyHub/universal/beyond_nen_autotalents_test.txt","AUTO TALENTS v1\n"..table.concat(state.Lines,"\n"))
+		pcall(writefile,"AnomalyHub/universal/beyond_nen_autotalents_test.txt","AUTO TALENTS v2\n"..table.concat(state.Lines,"\n"))
 	end
 end
 local function show(text)
 	status.Text=text.."\nConfirmed rolls: "..state.Rolls.." | Spent: "..(state.Rolls*3333).." Jenni"
+	if cacheWarning then status.Text..="\n"..cacheWarning end
 end
 local function stop(reason)
 	state.Enabled=false;state.Epoch+=1;state.Expected=nil
@@ -2646,6 +2685,13 @@ local function learn()
 			if os.clock()>=state.TooltipAt then
 				-- Never downgrade a talent already known to meet the stopping tier.
 				known[key]=(known[key] or 0)>=4 and math.max(known[key],rank) or rank
+				if #key>0 and #key<=100 and learned[key]~=known[key] and (learned[key] or cacheCount<512) then
+					if not learned[key] then cacheCount+=1 end
+					learned[key]=known[key]
+					local saved=saveRarities()
+					note("LEARNED "..key.." rank="..known[key].." saved="..tostring(saved))
+					if not state.Enabled then show("Remembered "..title.Text..". Enable Auto Talents when ready.") end
+				end
 			end
 			return
 		end

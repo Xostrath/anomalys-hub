@@ -1,5 +1,7 @@
 # Anomaly's Hub project notes
 
+Read the [per-game handoff index](docs/games/README.md) and the target game’s note first. [Sparkling](docs/games/sparkling.md) now holds its current findings, experiment history, diagnostics format, failures, unknowns, and next steps. [Beyond Nen](docs/games/beyond-nen.md) and [Hunter X Enter](docs/games/hunter-x-enter.md) have initial reference inventories. The sections below retain shared conventions and earlier development evidence; use the per-game note for the latest game status.
+
 ## Interface conventions
 
 All adapters use the shared UniversalHub controller and UI helpers. Hunter X Enter is the visual reference: dark panels, purple accents, compact sidebar, consistent type and spacing, and responsive two-column panels on Auto, Settings, and Recorders.
@@ -108,10 +110,17 @@ Player ESP now has a Ki level toggle reading only direct Character.Ki numeric va
 
 A third combat capture from main-world place 110405289082842 reached the 16,000-line limit at about 118.45 seconds. Self-targeted Counter Parry messages appeared near 28.747, 31.680, and 72.046 seconds. The first and third followed opponent animation 84394230178792 (combo 2) by about .20/.23 seconds; the second followed 95937874840716 (combo 3) by about .10 seconds. Other counter messages in this crowded capture refer to other actors and must not be counted as the local player's results. These are client timing correlations, not measured server parry windows.
 
-Auto → Auto Parry is an off-by-default experiment scoped to these two animation IDs. It sends a brief F input, never remote calls, only when an attacker is within 8 studs, both characters face the encounter, and line of sight is clear. It honors observed incoming Counter cooldown durations, avoids overlapping manual F input, releases its held key, and stops on character loss/death, teleport, loss of window focus, unload, or starting a manual combat recording. It does not cover all fighting styles, heavy attacks, or projectiles. Its log is `AnomalyHub/universal/sparkling_auto_parry_latest.txt`; post-attempt self counter messages are counted as correlations, not guaranteed causation. Source and public/private builds compile; no live automatic-defense test has been performed yet.
+Auto → Auto Parry is an off-by-default experiment scoped to these two animation IDs. It sends a brief F input, never remote calls, only when an attacker is within 8 studs, both characters face the encounter, and line of sight is clear. It honors observed incoming Counter cooldown durations, avoids overlapping manual F input, releases its held key, and stops on character loss/death, teleport, loss of window focus, unload, or starting a manual combat recording. It does not cover all fighting styles, heavy attacks, or projectiles. Its log is `AnomalyHub/universal/sparkling_auto_parry_latest.txt`; post-attempt self counter messages are counted as correlations, not guaranteed causation. Initial source and public/private builds compiled. The first v1 live log has since been reviewed; see the Sparkling game note for the inconclusive result and diagnostics v2 follow-up.
 
 ### Ki bar correction
 
 The user wants Ki as a bar beside health, not an identity-text line. Sparkling now uses the shared blue energy bar adjacent to the red health bar, controlled by Ki bar and also shown for Self ESP. The numeric KI identity line was removed. Fill requires finite Character.Ki and a positive explicit Character.MaxKi (numeric value or attribute); conflicting maxima are unavailable. If Ki is known but its maximum is not, show an unfilled track marked ? rather than a fabricated percentage. No maximum Ki source is present in the reviewed combat captures; Capture ESP Data is still required to establish the live source/semantics.
 
 Power Level labels use rounded whole numbers with comma thousands separators (for example, 12,345), with no decimal suffix. The underlying value is unchanged.
+
+
+## Sparkling diagnostics v2 and per-game handoff
+
+Auto Parry now starts a bounded diagnostic session automatically; Recorders → Sparkling Parry Diagnostics provides Save Log and Copy Log. The report explains cue decisions, geometry, timing, F down/up, shared outgoing Action observations when hooks are available, cooldowns, health/state and ambiguous self-counter attribution. Latest and unique history files save every five seconds and on stop. At 12,000 event lines / 3 MB, event detail freezes while totals/final status continue. Manual combat recording and automatic observation use exclusive ownership of the existing hooks. Mapped attack timings are unchanged. Source/public/private compilation and 47 mocked Luau assertions passed; the new version remains untested live. See the [Sparkling note](docs/games/sparkling.md) for report fields and the next test.
+
+Every game note must retain discoveries, successes, failures, evidence limits and a next-chat handoff. Consult other games’ notes and referenced code before implementing a similar feature. Initial Beyond Nen/Hunter X Enter notes deliberately mark missing history instead of inventing it.

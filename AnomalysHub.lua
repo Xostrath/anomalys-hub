@@ -1688,6 +1688,21 @@ local function installHooks()
 	end
 	end
 end
+-- Share the existing forwarding hooks with automatic-defense diagnostics.
+-- Only one activity owns the callback; manual recording and auto parry exclude each other.
+controller.IsSparklingRecording=function()return active~=nil end
+controller.BeginSparklingParryObservation=function(callback)
+ if active then return nil,"manual recorder active; outgoing observation unavailable"end
+ local requests=rs:FindFirstChild("Requests")
+ local action=requests and requests:FindFirstChild("Action")
+ if not action or not action:IsA("RemoteEvent")then return nil,"Requests.Action unavailable"end
+ probe.Targets={[action]="ReplicatedStorage.Requests.Action"}
+ probe.Callback=callback
+ installHooks()
+ return function()
+  if probe.Callback==callback then probe.Callback=nil;probe.Targets={}end
+ end,#probe.Coverage>0 and table.concat(probe.Coverage,", ") or "outgoing hooks unavailable; local inputs and incoming events only"
+end
 local function syncRemotes(c)
 	local paths = {}
 	local function add(folder, names)
@@ -2064,7 +2079,7 @@ button.Size=UDim2.new(1,-28,0,34)
 
 end)()
 ;(function()
--- Experimental: only two observed attack animations; F input, never remote replay.
+-- Experimental: two observed attack animations; F input, never remote replay.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -2073,52 +2088,105 @@ local input=game:GetService("UserInputService")
 local guiService=game:GetService("GuiService")
 local run=game:GetService("RunService")
 local rs=game:GetService("ReplicatedStorage")
+local http=game:GetService("HttpService")
+local stats=game:GetService("Stats")
 local okInput,vim=pcall(game.GetService,game,"VirtualInputManager")
 if not okInput then vim=nil end
 local ui=controller.UI
--- Animation-to-counter receipt intervals observed: ~.20/.23s and ~.10s.
--- These are client observations, not server parry-window measurements.
+-- Client observations, not server parry-window measurements. Timing unchanged.
 local attacks={['84394230178792']=.04,['95937874840716']=0}
 local enabled,closed,held=false,false,false
 local releaseAt,nextPulse,nextScan,cooldownUntil=0,0,0,0
+local heldAt,heldAttempt,nextReleaseRetry=0,0,0
 local watched,pending,seen={},{},setmetatable({},{__mode="k"})
 local ownCharacter=player.Character
 local attempts,confirmed=0,0
-local lastAttempt=-math.huge
-local lastConfirmedAttempt=0
-local lines={"SPARKLING AUTO PARRY EXPERIMENT v1 // F input; two observed animation IDs only. Outcome correlation is not proof of causation."}
-local function log(text)
- table.insert(lines,string.format('%.4f %s',os.clock(),text))
- if #lines>400 then table.remove(lines,2)end
- if type(writefile)=="function"then
-  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
-  pcall(writefile,"AnomalyHub/universal/sparkling_auto_parry_latest.txt",table.concat(lines,"\n"))
+local session,stopProbe,sendingAttempt
+local rootPath="AnomalyHub/universal/"
+local latestPath=rootPath.."sparkling_auto_parry_latest.txt"
+local diagnosticStatus,button
+
+-- Same bounded, elapsed-time/history convention as Beyond Nen's recorder.
+local function sample(value)
+ local kind=typeof(value)
+ if kind=="Instance" then return string.format("%q",value:GetFullName():sub(1,240))end
+ if kind=="string" then return string.format("%q",value:sub(1,240))end
+ if kind=="table" then return "<table; not expanded>"end
+ return tostring(value):sub(1,240)
+end
+local function log(event,detail)
+ if not session or (not session.Open and event~="F_UP")then return end
+ session.Counts[event]=(session.Counts[event] or 0)+1
+ local line=string.format("%.4f %s %s",os.clock()-session.Started,event,detail or "")
+ if #line>2048 then line=line:sub(1,2016).." <line limit>"end
+ if #session.Lines>=12000 or session.Bytes+#line+1>3000000 then session.Dropped+=1;return end
+ table.insert(session.Lines,line);session.Bytes+=#line+1
+end
+local function sortedCounts(counts)
+ local parts={}
+ for key,value in pairs(counts)do table.insert(parts,key.."="..tostring(value))end
+ table.sort(parts);return table.concat(parts," ")
+end
+local function report(reason)
+ if not session then return nil end
+ return "SPARKLING AUTO PARRY DIAGNOSTICS v2\n"
+  .."session="..session.Id.." place="..game.PlaceId.." universe="..game.GameId.." unix="..session.Unix.." localClock="..session.Started
+  .."\nHISTORY="..session.Path
+  .."\nCoverage: auto-parry decisions, nearby Workspace.Live animation starts, local combat input events, incoming CooldownNT/Effects, health and sampled local state."
+  .."\nOutgoing Action observation reuses the combat recorder's hooks when available (see COVERAGE). Direct/namecall paths may duplicate a call. OUT/RETURN and F_DOWN are not server acceptance. Input events may include synthesized F."
+  .."\nSELF_COUNTER lists all attempts in the preceding 1s; attacker is not established. Multiple candidates are ambiguous. Health changes are observations, not verdicts."
+  .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
+  .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s; save=5s."
+  .."\nConfig: range=8 watchRange=30 attackerDot>=0.2 selfDot>=0 delay84394230178792=0.04 delay95937874840716=0 hold=0.12 pulseGap=0.3 cueExpiry=0.25"
+  .."\n"..table.concat(session.Lines,"\n")
+  .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
+  ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d singleCandidateEvents=%d ambiguousEvents=%d noCandidateEvents=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,confirmed,session.Single,session.Ambiguous,session.Unmatched,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
+  .."\nEVENT_TOTALS "..sortedCounts(session.Counts).."\nSKIP_TOTALS "..sortedCounts(session.Skips)
+  ..(session.Dropped>0 and "\nCAPTURE LIMIT REACHED: missing event detail must not be treated as absence." or "")
+end
+local function save(reason)
+ local text=report(reason)
+ if not text then return false end
+ local latest,history=false,false
+ if type(writefile)=="function" then
+  if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  latest=pcall(writefile,latestPath,text);history=pcall(writefile,session.Path,text)
  end
+ if diagnosticStatus then
+  diagnosticStatus.Text=(session.Open and "Recording. " or "Stopped. ")..(latest and "Latest saved. " or "Latest save failed. ")
+   ..(history and "History saved." or "History save failed; use Copy Log.")
+   ..(session.Dropped>0 and " Detail limit reached; totals continue." or "")
+ end
+ return latest and history
 end
-local card=ui.Card(ui.Pages.Auto,"AUTO PARRY // EXPERIMENTAL","Two recorded melee attacks only. Checks range, facing and clear sight; results need live testing.",232)
-for _,child in ipairs(card:GetChildren())do
- if child:IsA("TextLabel") and child.Position.Y.Offset==31 then child.Size=UDim2.new(1,-28,0,54)end
+local function actor(model)
+ if not session or not model then return "none"end
+ if not session.Actors[model]then
+  session.ActorSerial+=1;session.Actors[model]=session.ActorSerial
+  log("ACTOR","id="..session.ActorSerial.." self="..tostring(model==player.Character).." model="..sample(model))
+ end
+ return tostring(session.Actors[model])
 end
-local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,142),Size=UDim2.new(1,-28,0,76),BackgroundTransparency=1,
- Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Does not cover heavy attacks, projectiles, or other fighting styles. Never enables itself after reload."},card)
-local button
-local function release()
- if not held then return true end
- local ok=pcall(function()vim:SendKeyEvent(false,Enum.KeyCode.F,false,game)end)
- if ok then held=false end
- return ok
+local function trackData(track)
+ return string.format("animation=%s phase=%.4f length=%.4f speed=%.3f playing=%s",track.Animation and track.Animation.AnimationId:match("%d+") or "none",track.TimePosition,track.Length,track.Speed,tostring(track.IsPlaying))
 end
-local function clearWatch()
- for _,entry in pairs(watched)do entry.Connection:Disconnect()end
- table.clear(watched);table.clear(pending)
+local function skip(reason,detail)
+ if session and session.Open then session.Skips[reason]=(session.Skips[reason]or 0)+1 end
+ log("SKIP","reason="..reason.." "..(detail or ""))
 end
-local function stop(reason)
- enabled=false;clearWatch()
- local released=release()
- if button then button.Text="Auto Parry: OFF"end
- status.Text=reason..(released and "" or " F release failed; press and release F manually.")
- log("STOP "..reason)
+local function candidates(now)
+ local parts={}
+ if session then
+  for _,entry in ipairs(session.Recent)do
+   if now-entry.At<=1 then table.insert(parts,string.format("%d@%.4fs",entry.Id,now-entry.At))end
+  end
+ end
+ return #parts,table.concat(parts,",")
+end
+local function clockSample()
+ local ok,server=pcall(function()return workspace:GetServerTimeNow()end)
+ local pingOK,ping=pcall(function()return stats.Network.ServerStatsItem["Data Ping"]:GetValueString()end)
+ log("CLOCK","local="..os.clock().." unix="..os.time().." server="..(ok and tostring(server)or "unavailable").." ping="..(pingOK and sample(ping)or "unavailable"))
 end
 local function roots(model)
  local hum=model and model:FindFirstChildOfClass("Humanoid")
@@ -2127,35 +2195,106 @@ local function roots(model)
  return root,hum
 end
 local function threat(model)
- if not model or not model:IsDescendantOf(workspace)then return false end
+ if not model or not model:IsDescendantOf(workspace)then return false,"actor_unloaded",""end
  local char=player.Character
  local root=roots(char)
  local other=roots(model)
- if not root or not other or model==char then return false end
+ if not root or not other or model==char then return false,"invalid_roots",""end
  local delta=root.Position-other.Position
  local distance=delta.Magnitude
- if distance<.1 or distance>8 then return false end
+ if distance<.1 then return false,"overlapping_roots","distance="..distance end
  local direction=delta.Unit
- if other.CFrame.LookVector:Dot(direction)<.2 or root.CFrame.LookVector:Dot(-direction)<0 then return false end
+ local attackerDot=other.CFrame.LookVector:Dot(direction)
+ local selfDot=root.CFrame.LookVector:Dot(-direction)
+ local detail=string.format("distance=%.3f vertical=%.3f attackerDot=%.3f selfDot=%.3f",distance,delta.Y,attackerDot,selfDot)
+ if distance>8 then return false,"out_of_range",detail end
+ if attackerDot<.2 then return false,"attacker_facing",detail end
+ if selfDot<0 then return false,"self_facing",detail end
  local params=RaycastParams.new()
  params.FilterType=Enum.RaycastFilterType.Exclude
  params.FilterDescendantsInstances={char,model}
- if workspace:Raycast(other.Position,delta,params)then return false end
- return true
+ local hit=workspace:Raycast(other.Position,delta,params)
+ if hit then return false,"line_of_sight",detail.." obstacle="..sample(hit.Instance)end
+ return true,"clear",detail.." los=clear"
+end
+
+local card=ui.Card(ui.Pages.Auto,"AUTO PARRY // EXPERIMENTAL","Two recorded melee attacks only. Full diagnostics start automatically; save/copy in Recorders.",232)
+for _,child in ipairs(card:GetChildren())do
+ if child:IsA("TextLabel") and child.Position.Y.Offset==31 then child.Size=UDim2.new(1,-28,0,54)end
+end
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,142),Size=UDim2.new(1,-28,0,76),BackgroundTransparency=1,
+ Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Off. Does not cover heavy attacks, projectiles, or other fighting styles. Never enables itself after reload."},card)
+local function release(reason)
+ if not held then return true end
+ local now=os.clock()
+ if now<nextReleaseRetry then return false end
+ local ok,err=pcall(function()vim:SendKeyEvent(false,Enum.KeyCode.F,false,game)end)
+ log("F_UP",string.format("attempt=%d ok=%s heldFor=%.4f lateBy=%.4f reason=%s error=%s",heldAttempt,tostring(ok),now-heldAt,math.max(0,now-releaseAt),reason or "deadline",ok and "none"or sample(err)))
+ if ok then held=false else nextReleaseRetry=now+.1 end
+ -- Persist failed-release recovery even after a session has stopped.
+ if session and not session.Open then save(session.StopReason)end
+ return ok
+end
+local function clearWatch(reason)
+ for _,entry in pairs(watched)do
+  entry.Connection:Disconnect()
+  for _,connection in pairs(entry.Tracks)do connection:Disconnect()end
+ end
+ for _,cue in ipairs(pending)do skip("queue_cleared","cue="..cue.Serial.." reason="..reason)end
+ table.clear(watched);table.clear(pending)
+end
+local function stop(reason)
+ local active=session and session.Open
+ enabled=false;clearWatch(reason)
+ local released=release("stop")
+ if stopProbe then stopProbe();stopProbe=nil end
+ if button then button.Text="Auto Parry: OFF"end
+ status.Text=reason..(released and ""or " F release failed; press and release F manually.")
+ if active then
+  log("STOP","reason="..sample(reason).." released="..tostring(released))
+  session.StopReason=reason;session.Ended=os.clock();session.Open=false;save(reason)
+ end
+end
+local function guarded(label,callback)
+ return function(...)
+  local ok,err=pcall(callback,...)
+  if not ok then log("LOGGER_ERROR","callback="..label.." error="..sample(err))end
+ end
 end
 local function observe(model,track)
- if not enabled or (seen[track] and os.clock()-seen[track]<.2)then return end
+ if not enabled then return end
+ local now=os.clock()
+ local detail="actor="..actor(model).." "..trackData(track)
+ session.CueSerial+=1
+ local serial=session.CueSerial
+ detail="cue="..serial.." "..detail
+ log("ANIM_START",detail)
+ local entry=watched[model]
+ if entry and not entry.Tracks[track]then
+  if entry.TrackCount<12 then
+   entry.TrackCount+=1
+   entry.Tracks[track]=track.Stopped:Connect(guarded("AnimationStopped",function()
+    log("ANIM_STOP","cue="..serial.." actor="..actor(model).." "..trackData(track))
+    if entry.Tracks[track]then entry.Tracks[track]:Disconnect();entry.Tracks[track]=nil;entry.TrackCount-=1 end
+   end))
+  else log("TRACK_LIMIT","actor="..actor(model).." max=12")end
+ end
+ if seen[track] and now-seen[track]<.2 then skip("duplicate_track",detail);return end
  local id=track.Animation and track.Animation.AnimationId:match("%d+")
  local delay=id and attacks[id]
- if delay==nil or not threat(model)then return end
- seen[track]=os.clock()
- if #pending>=8 then return end
- table.insert(pending,{Model=model,Track=track,Id=id,At=os.clock()+delay,Expires=os.clock()+.25})
- log("CUE animation="..id)
+ if delay==nil then skip("unmapped_animation",detail);return end
+ local valid,reason,geometry=threat(model)
+ if not valid then skip(reason,"stage=observe "..detail.." "..geometry);return end
+ seen[track]=now
+ if #pending>=8 then skip("queue_full",detail);return end
+ table.insert(pending,{Model=model,Track=track,Id=id,Serial=serial,At=now+delay,SeenAt=now,Expires=now+.25})
+ log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
 end
 local function sync()
  local live=workspace:FindFirstChild("Live")
  local wanted={}
+ if session.LivePresent~=(live~=nil)then session.LivePresent=live~=nil;log("COVERAGE","Workspace.Live="..tostring(live~=nil))end
  if live then
   for _,model in ipairs(live:GetChildren())do
    local root,hum=roots(model)
@@ -2164,70 +2303,204 @@ local function sync()
     local animator=hum:FindFirstChildOfClass("Animator")
     if animator then
      wanted[model]=true
-     if watched[model] and watched[model].Animator~=animator then watched[model].Connection:Disconnect();watched[model]=nil end
+     if watched[model] and watched[model].Animator~=animator then
+      watched[model].Connection:Disconnect()
+      for _,connection in pairs(watched[model].Tracks)do connection:Disconnect()end
+      watched[model]=nil;log("WATCH_REPLACED","actor="..actor(model))
+     end
      if not watched[model]then
-      watched[model]={Animator=animator,Connection=animator.AnimationPlayed:Connect(function(track)observe(model,track)end)}
+      watched[model]={Animator=animator,Tracks={},TrackCount=0,Connection=animator.AnimationPlayed:Connect(guarded("AnimationPlayed",function(track)observe(model,track)end))}
+      log("WATCH_ADD","actor="..actor(model).." distance="..(root.Position-localRoot.Position).Magnitude)
+      for _,track in ipairs(animator:GetPlayingAnimationTracks())do log("ANIM_EXISTING","actor="..actor(model).." "..trackData(track))end
      end
     end
    end
   end
  end
- for model,entry in pairs(watched)do if not wanted[model]then entry.Connection:Disconnect();watched[model]=nil end end
+ for model,entry in pairs(watched)do
+  if not wanted[model]then
+   entry.Connection:Disconnect();for _,connection in pairs(entry.Tracks)do connection:Disconnect()end
+   watched[model]=nil;log("WATCH_REMOVE","actor="..actor(model).." reason=outside_scope_or_missing_animator")
+  end
+ end
+end
+local function relevant(key)
+ key=key:lower()
+ for _,part in ipairs({"parr","counter","block","defend","stun","combo","attack","rag","iframe","invul","fatigue","combat","power","health"})do
+  if key:find(part,1,true)then return true end
+ end
+ return key=="ki" or key=="busy"
+end
+local function stateSample()
+ local _,hum=roots(ownCharacter)
+ if not hum then return end
+ local current={Health=sample(hum.Health),MaxHealth=sample(hum.MaxHealth)}
+ for _,pair in ipairs({{"character",ownCharacter},{"humanoid",hum},{"player",player}})do
+  for key,value in pairs(pair[2]:GetAttributes())do if relevant(key)then current[pair[1].."@"..key]=sample(value)end end
+ end
+ for _,child in ipairs(ownCharacter:GetChildren())do
+  if child:IsA("ValueBase") and relevant(child.Name)then current["character."..child.Name]=sample(child.Value)end
+ end
+ for key,value in pairs(current)do if session.State[key]~=value then log("STATE","field="..sample(key).." value="..value)end end
+ for key in pairs(session.State)do if current[key]==nil then log("STATE_REMOVED","field="..sample(key))end end
+ session.State=current
 end
 button=ui.Button(card,"Auto Parry: OFF",14,96,180,function()
  if enabled then stop("Disabled.");return end
  if not vim then status.Text="Virtual input unavailable.";return end
- if not release()then status.Text="Release F manually before enabling.";return end
+ if controller.IsSparklingRecording and controller.IsSparklingRecording()then status.Text="Stop + Save the manual combat recording before enabling Auto Parry.";return end
+ if not release("before_start")then status.Text="Release F manually before enabling.";return end
+ local id=tostring(os.time()).."_"..http:GenerateGUID(false)
+ session={Open=true,Id=id,Path=rootPath.."sparkling_auto_parry_"..id..".txt",Unix=os.time(),Started=os.clock(),
+  Lines={},Bytes=0,Dropped=0,Counts={},Skips={},Actors=setmetatable({},{__mode="k"}),ActorSerial=0,CueSerial=0,Recent={},
+  Single=0,Ambiguous=0,Unmatched=0,Damage=0,State={},NextState=0,NextClock=0,NextSave=os.clock()+5,Gate=nil}
+ attempts=0;confirmed=0
  enabled=true;ownCharacter=player.Character;nextScan=0;nextPulse=0
  seen=setmetatable({},{__mode="k"})
- button.Text="Auto Parry: ON";log("START")
+ button.Text="Auto Parry: ON"
+ log("START","remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
+ local coverage="outgoing hooks unavailable"
+ if controller.BeginSparklingParryObservation then
+  local ok,disconnect,description=pcall(controller.BeginSparklingParryObservation,guarded("ActionProbe",function(remote,direction,args,started,id,result,path)
+   if not session or not session.Open or started<session.Started then return end
+   log("ACTION","direction="..sample(direction).." call="..id.." requestStart="..string.format("%.4f",started-session.Started)
+    .." path="..sample(path).." action="..sample(args[1]).." value="..sample(args[2]).." extra3="..sample(args[3]).." argc="..tostring(args.n or #args)
+    .." duringAttempt="..tostring(sendingAttempt or (held and heldAttempt)or "none").." returned="..tostring(result~=nil))
+  end))
+  if ok then stopProbe=disconnect;coverage=description or coverage else log("LOGGER_ERROR","probe="..sample(disconnect))end
+ end
+ local requests=rs:FindFirstChild("Requests")
+ log("COVERAGE",coverage.." CooldownNT="..tostring(requests and requests:FindFirstChild("CooldownNT")~=nil).." Effects="..tostring(requests and requests:FindFirstChild("Effects")~=nil))
+ actor(ownCharacter);clockSample();save("RUNNING")
 end,ui.Colors.AccentSoft)
 button.Size=UDim2.new(1,-28,0,34)
-local function update()
+
+local logCard=ui.Card(ui.Pages.Recorders,"SPARKLING PARRY DIAGNOSTICS","Starts with Auto Parry. Stop Auto Parry to finalize the session; logs save automatically.",224)
+for _,child in ipairs(logCard:GetChildren())do
+ if child:IsA("TextLabel") and child.Position.Y.Offset==31 then child.Size=UDim2.new(1,-28,0,54)end
+end
+diagnosticStatus=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,142),Size=UDim2.new(1,-28,0,68),BackgroundTransparency=1,
+ Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Ready. Records accepted/skipped cues, timing, F press/release, state, damage and self-counter events."},logCard)
+ui.FitColumn(ui.Button(logCard,"Save Log",0,0,180,function()
+ if not session then diagnosticStatus.Text="Enable Auto Parry to begin a diagnostic session.";return end
+ save()
+end,ui.Colors.AccentSoft),0,96)
+ui.FitColumn(ui.Button(logCard,"Copy Log",0,0,180,function()
+ local text=report()
+ if not text then diagnosticStatus.Text="No session yet. Enable Auto Parry first.";return end
+ local ok=type(setclipboard)=="function" and pcall(setclipboard,text)
+ diagnosticStatus.Text=ok and "Current log copied." or "Clipboard unavailable. Use Save Log."
+end,ui.Colors.AccentSoft),1,96)
+
+local function update(dt)
  local now=os.clock()
- if held and (now>=releaseAt or not enabled)then release()end
+ if held and (now>=releaseAt or not enabled)then release("deadline_or_disabled")end
  if not enabled or closed then return end
+ if dt>.1 then log("FRAME_GAP","dt="..dt)end
  if player.Character~=ownCharacter or not roots(ownCharacter)then stop("Character changed or died. Enable again when ready.");return end
- if input:GetFocusedTextBox() or guiService.MenuIsOpen then release();table.clear(pending);return end
+ local gate=input:GetFocusedTextBox() and "text_entry" or (guiService.MenuIsOpen and "menu" or "ready")
+ if session.Gate~=gate then session.Gate=gate;log("GATE",gate)end
+ if now>=session.NextState then session.NextState=now+.5;stateSample()end
+ if now>=session.NextClock then session.NextClock=now+5;clockSample()end
+ if now>=session.NextSave then session.NextSave=now+5;save("RUNNING")end
+ if gate~="ready" then
+  release(gate)
+  for _,cue in ipairs(pending)do skip(gate,"cue="..cue.Serial.." stage=queue")end
+  table.clear(pending);return
+ end
  if now>=nextScan then nextScan=now+.2;sync()end
  for i=#pending,1,-1 do
   local cue=pending[i]
   if now>=cue.At then
    table.remove(pending,i)
-   if now<=cue.Expires and not held and now>=nextPulse and now>=cooldownUntil and not input:IsKeyDown(Enum.KeyCode.F)
-    and cue.Track.IsPlaying and threat(cue.Model) then
-    local ok=pcall(function()vim:SendKeyEvent(true,Enum.KeyCode.F,false,game)end)
-    if not ok then stop("F input failed.");return end
-    held=true;releaseAt=now+.12;nextPulse=now+.3
-    attempts+=1;lastAttempt=now
-    log("F_DOWN attempt="..attempts.." animation="..cue.Id)
+   local valid,geometryReason,geometry=threat(cue.Model)
+   local manualF=input:IsKeyDown(Enum.KeyCode.F)
+   local detail=string.format("cue=%d actor=%s age=%.4f scheduledLate=%.4f held=%s pulseRemaining=%.4f counterRemaining=%.4f inputF=%s %s %s",
+    cue.Serial,actor(cue.Model),now-cue.SeenAt,now-cue.At,tostring(held),math.max(0,nextPulse-now),math.max(0,cooldownUntil-now),tostring(manualF),trackData(cue.Track),geometry)
+   local reason=now>cue.Expires and "expired" or held and "already_held" or now<nextPulse and "pulse_cooldown"
+    or now<cooldownUntil and "counter_cooldown" or manualF and "f_already_down" or not cue.Track.IsPlaying and "track_stopped" or not valid and geometryReason
+   if reason then skip(reason,"stage=execute "..detail)else
+    log("CUE_ACCEPTED",detail)
+    sendingAttempt=attempts+1
+    local ok,err=pcall(function()vim:SendKeyEvent(true,Enum.KeyCode.F,false,game)end)
+    sendingAttempt=nil
+    if not ok then log("F_DOWN_FAILED","cue="..cue.Serial.." error="..sample(err));stop("F input failed.");return end
+    held=true;heldAt=now;releaseAt=now+.12;nextPulse=now+.3;nextReleaseRetry=0
+    attempts+=1;heldAttempt=attempts
+    table.insert(session.Recent,{Id=attempts,At=now})
+    if #session.Recent>16 then table.remove(session.Recent,1)end
+    log("F_DOWN","attempt="..attempts.." cue="..cue.Serial.." apiReturned=true plannedHold=0.12 "..detail)
    end
   end
  end
- status.Text=string.format("Experimental ON · %d attempts · %d counters after attempts\n8-stud range; only two mapped attacks.",attempts,confirmed)
+ status.Text=string.format("Experimental ON · %d attempts · %d self counter events\nDiagnostics active; outcomes may be ambiguous.",attempts,confirmed)
 end
-controller.Connect(run.Heartbeat,function()
- local ok,err=pcall(update)
- if not ok then stop("Error: "..tostring(err):sub(1,120))end
+controller.Connect(run.Heartbeat,function(dt)
+ local ok,err=pcall(update,dt)
+ if not ok then log("ERROR",sample(err));stop("Error: "..tostring(err):sub(1,120))end
 end)
 local requests=rs:FindFirstChild("Requests")
 local cooldown=requests and requests:FindFirstChild("CooldownNT")
-if cooldown and cooldown:IsA("RemoteEvent")then controller.Connect(cooldown.OnClientEvent,function(data)
- if type(data)=="table" and data.name=="Counter" and type(data.duration)=="number" and data.duration==data.duration and data.duration>=0 and data.duration<=30 then
-  cooldownUntil=os.clock()+data.duration
- end
-end)end
+if cooldown and cooldown:IsA("RemoteEvent")then controller.Connect(cooldown.OnClientEvent,guarded("CooldownNT",function(data)
+ if type(data)=="table" then
+  log("COOLDOWN","name="..sample(data.name).." duration="..sample(data.duration))
+  if data.name=="Counter" and type(data.duration)=="number" and data.duration==data.duration and data.duration>=0 and data.duration<=30 then
+   cooldownUntil=os.clock()+data.duration;log("COUNTER_COOLDOWN","duration="..data.duration.." untilLocal="..cooldownUntil)
+  end
+ else log("COOLDOWN_UNPARSED","type="..typeof(data))end
+end))end
 local effects=requests and requests:FindFirstChild("Effects")
-if effects and effects:IsA("RemoteEvent")then controller.Connect(effects.OnClientEvent,function(kind,model,message)
- if enabled and kind=="Weave" and model==player.Character and (message=="Counter Parry!" or message=="Perfect Counter!")
-  and os.clock()-lastAttempt<=1 and attempts~=lastConfirmedAttempt then
-  lastConfirmedAttempt=attempts;confirmed+=1;log("COUNTER_AFTER_ATTEMPT "..message.." attempt="..attempts)
+if effects and effects:IsA("RemoteEvent")then controller.Connect(effects.OnClientEvent,guarded("Effects",function(kind,model,message)
+ if not enabled then return end
+ local modelId=typeof(model)=="Instance" and actor(model) or "none"
+ log("EFFECT","kind="..sample(kind).." actor="..modelId.." self="..tostring(model==player.Character).." message="..sample(message))
+ if kind=="Weave" and model==player.Character and (message=="Counter Parry!" or message=="Perfect Counter!")then
+  local count,list=candidates(os.clock())
+  confirmed+=1
+  if count==1 then session.Single+=1 elseif count>1 then session.Ambiguous+=1 else session.Unmatched+=1 end
+  log("SELF_COUNTER","message="..sample(message).." candidateCount="..count.." attempts=["..list.."] attribution="..(count==0 and "none" or count==1 and "temporal_only" or "ambiguous"))
  end
-end)end
+end))end
+local healthConnection
+local function bindHealth(character)
+ if healthConnection then healthConnection:Disconnect();healthConnection=nil end
+ local hum=character and character:FindFirstChildOfClass("Humanoid")
+ if not hum then return end
+ local previous=hum.Health
+ healthConnection=hum.HealthChanged:Connect(guarded("HealthChanged",function(value)
+  local delta=value-previous;previous=value
+  if not enabled or character~=ownCharacter then return end
+  if delta<0 then session.Damage+=1 end
+  local count,list=candidates(os.clock())
+  log("SELF_HEALTH",string.format("value=%.4f delta=%.4f candidateCount=%d attempts=[%s]",value,delta,count,list))
+ end))
+end
+-- Recheck Humanoid at each enable, without waiting on a respawning character.
+local healthCharacter,healthHumanoid
+controller.Connect(run.Heartbeat,guarded("HealthBinding",function()
+ if not enabled then return end
+ local char=player.Character
+ local hum=char and char:FindFirstChildOfClass("Humanoid")
+ if char~=healthCharacter or hum~=healthHumanoid then healthCharacter=char;healthHumanoid=hum;bindHealth(char)end
+end))
+local function inputEvent(direction,object,processed)
+ if not enabled or input:GetFocusedTextBox()then return end
+ local key=object.KeyCode.Name
+ local mouse=object.UserInputType.Name
+ if key=="F" or key=="G" or key=="Q" or mouse=="MouseButton1" or mouse=="MouseButton2"then
+  log("INPUT","direction="..direction.." key="..key.." type="..mouse.." processed="..tostring(processed).." syntheticOrigin=unknown")
+ end
+end
+controller.Connect(input.InputBegan,guarded("InputBegan",function(object,processed)inputEvent("DOWN",object,processed)end))
+controller.Connect(input.InputEnded,guarded("InputEnded",function(object,processed)inputEvent("UP",object,processed)end))
 controller.Connect(input.WindowFocusReleased,function()if enabled then stop("Paused: game lost focus. Enable again to resume.")end end)
 controller.Connect(player.OnTeleport,function()stop("Teleport")end)
 controller.StopSparklingAutoParry=stop
-controller.RegisterCleanup(function()closed=true;stop("Unloaded")end)
+controller.RegisterCleanup(function()
+ closed=true;stop("Unloaded")
+ if healthConnection then healthConnection:Disconnect()end
+end)
 
 end)()
 if anomalyProfile == 'HunterXEnter' then

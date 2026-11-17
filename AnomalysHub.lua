@@ -271,7 +271,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -76, 0, 20), Size = UDim2.fromOffset(146, 18),
-	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v17" or "UNIVERSAL // ACTIVE",
+	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v18" or "UNIVERSAL // ACTIVE",
 	TextColor3 = colors.Accent, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1494,7 +1494,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v17",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v18",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1504,7 +1504,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v17 loaded; persistent Infinite Stamina and Shop Access capture available.")
+print("[Anomaly] Hunter X Enter adapter v18 loaded; bounded Hunger Value Test available.")
 
 end)()
 ;(function()
@@ -3256,6 +3256,113 @@ controller.Connect(run.Heartbeat,function()
 	if now>=c.NextSample then c.NextSample=now+.25;local ok=pcall(sample,c);if not ok then stop("SAMPLE_FAILED");return end end
 	if now>=c.NextSave then c.NextSave=now+5;if not save(c,"RECORDING")then stop("SAVE_FAILED");return end end
 	status.Text=string.format("Recording %.0fs / 15s. Reading shop access code.\nNo purchases or changes are made.",now-c.Started)
+end)
+controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
+controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)
+
+end)()
+;(function()
+-- One bounded local attribute probe. No game requests or continuous hunger spoofing.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter"then return end
+local player=game:GetService("Players").LocalPlayer
+local run=game:GetService("RunService")
+local http=game:GetService("HttpService")
+local ui=controller.UI
+local card=ui.Card(ui.Pages.Recorders,"HUNGER VALUE TEST // v1","20 seconds: observe, set local Hunger to 100 once, watch for replacement, then restore if unchanged. Stand still; do not eat.",186)
+card.LayoutOrder=85
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,58),BackgroundTransparency=1,
+ Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Ready. Requires hunger above 10% and at most 90%. A full local bar does not prove starvation is prevented."},card)
+local active,closed,button=nil,false,nil
+local function finite(n)return type(n)=="number" and n==n and math.abs(n)<math.huge end
+local function log(c,message)
+ if #c.Lines<500 then table.insert(c.Lines,string.format("%.3f %s",os.clock()-c.Started,tostring(message):sub(1,1500)))end
+end
+local function save(c,reason)
+ local text="HUNTER HUNGER VALUE TEST v1\nOne local Hunger=100 write plus conditional restoration. No game requests.\nExternal attribute changes do not identify their writer; a full bar does not establish server hunger or prevent starvation.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
+ if type(writefile)~="function"then return false end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ local a=pcall(writefile,"AnomalyHub/universal/hunter_hunger_probe_latest.txt",text)
+ local b=pcall(writefile,c.Path,text)
+ return a or b
+end
+local function restore(c)
+ if c.Restored then return end;c.Restored=true
+ if not c.Wrote then return end
+ local h=c.Character and c.Character:FindFirstChildOfClass("Humanoid")
+ if player.Character~=c.Character or not h or h.Health<=0 then log(c,"RESTORE_SKIPPED character changed or dead");return end
+ if c.Replaced or c.Ate or player:GetAttribute("Hunger")~=100 then log(c,"RESTORE_SKIPPED game value changed or eating observed; newer state preserved");return end
+ c.Writing=true
+ local ok,err=pcall(function()player:SetAttribute("Hunger",c.Before)end)
+ c.Writing=false
+ log(c,"RESTORE original="..tostring(c.Before).." success="..tostring(ok and player:GetAttribute("Hunger")==c.Before)..(ok and "" or " error="..tostring(err)))
+end
+local function stop(reason)
+ local c=active;if not c then return end
+ restore(c)
+ if c.Connection then c.Connection:Disconnect()end
+ log(c,"STOP "..reason)
+ active=nil
+ local saved=save(c,reason)
+ button.Text="Test Hunger Value"
+ status.Text=saved and ("Saved: "..reason..". "..(c.Replaced and "The test value was replaced; check the report." or "No replacement established. This is not proof of infinite hunger.")) or "Report save failed. Test stopped."
+end
+local function sample(c)
+ local h=c.Character and c.Character:FindFirstChildOfClass("Humanoid")
+ local hunger=player:GetAttribute("Hunger")
+ local saturation=player:GetAttribute("Saturation")
+ log(c,"SAMPLE phase="..c.Phase.." hunger="..tostring(hunger).." saturation="..tostring(saturation).." health="..tostring(h and h.Health).." maxHealth="..tostring(h and h.MaxHealth))
+end
+button=ui.Button(card,"Test Hunger Value",14,72,180,function()
+ if closed then return end
+ if active then stop("MANUAL_STOP");return end
+ local char=player.Character
+ local h=char and char:FindFirstChildOfClass("Humanoid")
+ local value=player:GetAttribute("Hunger")
+ if not h or h.Health<=0 or not finite(value) or value<=10 or value>90 then
+  status.Text="Wait for a living character with hunger above 10% and at most 90%. Eat first if it is too low.";return
+ end
+ local ok,id=pcall(http.GenerateGUID,http,false)
+ local c={Started=os.clock(),Character=char,Lines={},Phase="BASELINE",NextSample=0,NextSave=0,
+  Path="AnomalyHub/universal/hunter_hunger_probe_"..os.time().."_"..tostring(ok and id or os.clock()):gsub("[^%w%-]","")..".txt"}
+ active=c;log(c,"START hunger="..value);sample(c)
+ if not save(c,"RECORDING")then stop("SAVE_FAILED");return end
+ c.Connection=player.AttributeChanged:Connect(function(key)
+  if active~=c or (key~="Hunger" and key~="Saturation")then return end
+  local v=player:GetAttribute(key)
+  log(c,"ATTRIBUTE "..key.."="..tostring(v).." ownWrite="..tostring(c.Writing==true))
+  if c.Wrote and not c.Writing and not c.Restored then
+   if key=="Hunger" and v~=100 then c.Replaced=true end
+   if key=="Saturation" and finite(v) and finite(c.Saturation) and v>c.Saturation+.001 then c.Ate=true end
+  end
+ end)
+ button.Text="Stop + Save"
+end)
+controller.Connect(run.Heartbeat,function()
+ local c=active;if not c then return end
+ local now=os.clock();local elapsed=now-c.Started
+ local h=c.Character and c.Character:FindFirstChildOfClass("Humanoid")
+ if player.Character~=c.Character then stop("CHARACTER_CHANGED");return end
+ if not h or h.Health<=0 then stop("DEATH");return end
+ if elapsed>=20 then stop("COMPLETE");return end
+ if elapsed>=5 and not c.Wrote then
+  -- A long stalled frame must not start a probe after its observation window.
+  if elapsed>=15 then stop("MISSED_WINDOW");return end
+  c.Before=player:GetAttribute("Hunger");c.Saturation=player:GetAttribute("Saturation")
+  if not finite(c.Before) or c.Before<=10 or c.Before>90 then stop("VALUE_CHANGED_BEFORE_TEST");return end
+  c.Phase="OBSERVE";c.Wrote=true;c.Writing=true
+  log(c,"ONE_WRITE before="..c.Before.." test=100")
+  local ok,err=pcall(function()player:SetAttribute("Hunger",100)end)
+  c.Writing=false
+  if not ok then log(c,"WRITE_ERROR "..tostring(err));stop("WRITE_FAILED");return end
+  log(c,"IMMEDIATE_READ "..tostring(player:GetAttribute("Hunger")))
+ end
+ if elapsed>=15 and not c.Restored then restore(c);c.Phase="AFTER"end
+ if now>=c.NextSample then c.NextSample=now+.25;sample(c)end
+ if now>=c.NextSave then c.NextSave=now+2;if not save(c,"RECORDING")then stop("SAVE_FAILED");return end end
+ status.Text=string.format("%s · %.0f / 20 seconds. Stand still; do not eat.\nOnly one test write; watching what happens next.",c.Phase,elapsed)
 end)
 controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
 controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)

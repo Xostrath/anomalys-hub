@@ -50,7 +50,7 @@ Observed combat-related paths under `ReplicatedStorage.Requests` include `Action
 - Limits: 120 seconds, 16,000 lines / 4 MB; saves every five seconds.
 - Stops on death, character changes, teleport, unload, or manual Stop + Save.
 - Reports outgoing hook coverage. Direct/namecall paths may duplicate an observation; do not sum them as distinct requests without examining their timing and nesting.
-- Compiled successfully; runtime behavior and combat semantics require review of live recordings.
+- Compiled successfully; two live tutorial captures have been reviewed (see findings below). Further combat semantics remain unconfirmed.
 
 ## Source and publishing
 
@@ -70,3 +70,28 @@ Build with `tools/build_public.ps1 -Url https://raw.githubusercontent.com/Xostra
 Public output: `dist/AnomalysHub.lua`. Private output: `dist/private/AnomalyPrivate.lua`. **Never upload the private output**, `secrets.local.lua`, raw diagnostic evidence, or the entire working directory.
 
 Use an isolated publishing checkout when another checkout contains unrelated edits. Transplant only the intended change onto current `main`; never replace it with a stale full build or force-push. Update source/build integration so future rebuilds retain the change. Verify the pushed commit and report compilation separately from live testing.
+
+## Sparkling tutorial recordings reviewed (2026-11-17)
+
+Two local captures were reviewed: a 120-second session ending at the time limit, and a 78.55-second session stopped manually. They contain 46 and 23 outgoing Action observations respectively, all through the namecall path, each with its matching return. No direct-hook duplicate OUT observations appeared in these two captures. FireServer returns are not server acknowledgments.
+
+Observed input-to-Action mappings:
+
+| Input/context | Observed Action arguments |
+| --- | --- |
+| Left click | MouseButton1; some calls also contain a boolean and vector-like third argument |
+| Right click | MouseButton2; observed variants include a missing second argument or Up, plus a vector-like third argument |
+| G | Grab |
+| A during grab sequence | Grab, Throw |
+| D during grab sequence | Grab, Slam |
+| F down / release | Defend, true / false |
+| M | Meditate |
+| Left Shift | Descend |
+
+Do not assign an exact meaning to the attack boolean or vector from serialization alone. In the second capture, MouseButton1 calls changed shape after the One-key input; that is correlation, not proof of the cause.
+
+Incoming CooldownNT payloads advertised Heavy=2 seconds and Grab=5 seconds. Defense-related payloads included Counter durations of 5, 4, and 0.5 seconds, Block=5, and ZVanish=3. These are observed client notifications, not independently verified server enforcement timings.
+
+The first capture included incoming Effects messages labelled Perfect Counter! (about 50.714 seconds) and Counter Parry! (about 65.849 seconds). PBlock, KiSlap, and CounterCooldown changes provide additional defense signals. These observations do not yet establish a reliable timing window for automatic defense.
+
+The recorder also observed health changes, animation starts/stops, Ki, Fatigue, PowerLevel, CombatTimer, and grab-related state. GUI discovery reached its 600-object bound in both sessions; actor discovery reached 1,000 objects, and one session reached the character-stat scan bound. No callback/capture errors or report-size limit were reported. Prioritize Workspace.Live and relevant HUD branches before treating missing actor or UI observations as absence. Raw captures and player identifiers remain local.

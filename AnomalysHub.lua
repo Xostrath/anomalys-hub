@@ -267,7 +267,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v6\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v7\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
 	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1397,7 +1397,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v6",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v7",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1407,7 +1407,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v6 loaded; background training ready.")
+print("[Anomaly] Hunter X Enter adapter v7 loaded; background training ready.")
 
 end)()
 ;(function()
@@ -1971,7 +1971,7 @@ local ui=controller.UI
 local modes={
 	{Id="meditation",Name="Meditation",Key="M",Stat="MeditationPoints",GainLabel="Meditation points",Help="Answers each current key prompt. Starts with M; stops at the meditation limit."},
 	{Id="strength",Name="Strength",Key="K",Stat="PushupPoints",GainLabel="Push-ups",Help="Keeps doing push-ups until the game ends them, then rests to 90% stamina and restarts."},
-	{Id="speed",Name="Speed",Stat="Physics_Running",GainLabel="Running training",Help="Runs in your camera direction, including against a wall. Rests for stamina and continues while tabbed out."},
+	{Id="speed",Name="Speed",Stat="Physics_Running",GainLabel="Running training",Help="Runs into walls or in your camera direction. Retries unconfirmed sprints; watches stamina and works tabbed out."},
 	{Id="climb",Name="Climb",Stat="Physics_Climbing",GainLabel="Climbing training",Help="Face a nearby wall. Climbs, waits to land, then repeats. Rests for stamina; stops if the wall is lost."},
 }
 local active,closed,focused=nil,false,true
@@ -2000,7 +2000,7 @@ end
 local function save(c,reason)
 	if type(writefile)~="function" then return end
 	if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal") end
-	local report="HUNTER X ENTER AUTO "..c.Mode.Name:upper().." v3\nRoblox-internal keyboard inputs; no OS keyboard input or remote calls.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
+	local report="HUNTER X ENTER AUTO "..c.Mode.Name:upper().." v4\nRoblox-internal keyboard inputs; no OS keyboard input or remote calls.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
 	pcall(writefile,"AnomalyHub/universal/hunter_auto_"..c.Mode.Id.."_test.txt",report)
 	pcall(writefile,c.Archive,report)
 end
@@ -2139,14 +2139,24 @@ local function movement(c,humanoid,root,now)
 			local floor=cast(c,root.Position+dir*6,Vector3.new(0,-10,0))
 			if not floor or floor.Material==Enum.Material.Water or floor.Normal.Y<.5 then stop("Ledge or unsafe ground ahead");return end
 		end
+		local function retrySprint(reason)
+			if not release("W") then stop("Sprint key release failed");return end
+			c.SprintRetries=(c.SprintRetries or 0)+1
+			c.Phase="retry";c.Next=now+.35
+			note(c,"SPRINT_RETRY "..c.SprintRetries.." "..reason)
+		end
+		if c.Phase=="retry" then
+			if now<c.Next then return end
+			c.Phase="start"
+		end
 		if c.Phase=="start" then
 			c.Phase="tap";c.Next=now+.14;press(c,"W",.065)
 		elseif c.Phase=="tap" and now>=c.Next and not held.W then
 			c.Phase="run";c.RunAt=now;c.Position=root.Position;c.CheckMotion=now+2;press(c,"W")
 		elseif c.Phase=="run" then
-			if now-c.RunAt>2 and c.Character:GetAttribute("Running")~=true then stop("Sprint was not confirmed");return end
+			if now-c.RunAt>2 and c.Character:GetAttribute("Running")~=true then retrySprint("not confirmed");return end
 			if now>=c.CheckMotion then
-				if not obstacle and (root.Position-c.Position).Magnitude<1 then stop("Not moving; stopped");return end
+				if not obstacle and (root.Position-c.Position).Magnitude<1 then retrySprint("not moving");return end
 				c.Position=root.Position;c.CheckMotion=now+2
 			end
 		end
@@ -2232,7 +2242,7 @@ local function start(mode)
 	note(c,"START mode="..mode.Id);save(c,"RUNNING")
 end
 for index,mode in ipairs(modes)do
-	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v3",mode.Help,218);card.LayoutOrder=-50+index
+	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v4",mode.Help,218);card.LayoutOrder=-50+index
 	mode.Button=ui.FitColumn(ui.Button(card,"Auto "..mode.Name..": OFF",0,0,180,function()start(mode)end),0,72)
 	mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,88),BackgroundTransparency=1,Font=Enum.Font.Gotham,
 		TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
@@ -2285,6 +2295,7 @@ local function update()
 	local gain=finite(stat)and finite(c.StartStat)and string.format(" · %s %+.3f",c.Mode.GainLabel,stat-c.StartStat)or ""
 	c.Mode.Status.Text=(c.WallRunning and "Wall running · " or "")..(status or "Meditation")..gain
 		..string.format("\n%s · Confirmed: %d · Perfect: %d · Climbs: %d",focused and "Foreground" or "Background",c.Confirmed,c.Perfect,c.Cycles)
+		..(c.Mode.Id=="speed" and (" · Sprint retries: "..(c.SprintRetries or 0)) or "")
 end
 controller.Connect(run.Heartbeat,function()
 	local ok,err=pcall(update)

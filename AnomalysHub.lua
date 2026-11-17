@@ -267,7 +267,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v5\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v6\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
 	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1397,7 +1397,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v5",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v6",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1407,7 +1407,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v5 loaded; background training ready.")
+print("[Anomaly] Hunter X Enter adapter v6 loaded; background training ready.")
 
 end)()
 ;(function()
@@ -1970,7 +1970,7 @@ local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
 local ui=controller.UI
 local modes={
 	{Id="meditation",Name="Meditation",Key="M",Stat="MeditationPoints",GainLabel="Meditation points",Help="Answers each current key prompt. Starts with M; stops at the meditation limit."},
-	{Id="strength",Name="Strength",Key="K",Stat="PushupPoints",GainLabel="Push-ups",Help="Starts push-ups with K and times Space to the current gauge. Rests when stamina is low."},
+	{Id="strength",Name="Strength",Key="K",Stat="PushupPoints",GainLabel="Push-ups",Help="Keeps doing push-ups until the game ends them, then rests to 90% stamina and restarts."},
 	{Id="speed",Name="Speed",Stat="Physics_Running",GainLabel="Running training",Help="Runs in your camera direction, including against a wall. Rests for stamina and continues while tabbed out."},
 	{Id="climb",Name="Climb",Stat="Physics_Climbing",GainLabel="Climbing training",Help="Face a nearby wall. Climbs, waits to land, then repeats. Rests for stamina; stops if the wall is lost."},
 }
@@ -2000,7 +2000,7 @@ end
 local function save(c,reason)
 	if type(writefile)~="function" then return end
 	if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal") end
-	local report="HUNTER X ENTER AUTO "..c.Mode.Name:upper().." v2\nRoblox-internal keyboard inputs; no OS keyboard input or remote calls.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
+	local report="HUNTER X ENTER AUTO "..c.Mode.Name:upper().." v3\nRoblox-internal keyboard inputs; no OS keyboard input or remote calls.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
 	pcall(writefile,"AnomalyHub/universal/hunter_auto_"..c.Mode.Id.."_test.txt",report)
 	pcall(writefile,c.Archive,report)
 end
@@ -2069,7 +2069,12 @@ local function installPrompts(c)
 		if who~=player then return end
 		if action=="Start" then c.Training=true;note(c,"TRAINING_STARTED")
 		elseif action=="Stop" then
-			if c.Rest then
+			if c.Mode.Id=="strength" then
+				-- Observe the local player's actual stop; low stamina alone is
+				-- not a reason to stop answering an active push-up gauge.
+				c.Rest=true;c.Training=false;c.StartAttempt=nil;c.Pending=nil;c.Awaiting=nil
+				releaseAll();note(c,"PUSHUPS_ENDED_REST_TO_90")
+			elseif c.Rest then
 				c.Training=false;c.StartAttempt=nil;c.Pending=nil;c.Awaiting=nil;note(c,"TRAINING_STOPPED_WHILE_RESTING")
 			else stop("Game stopped training")end
 		end
@@ -2227,11 +2232,13 @@ local function start(mode)
 	note(c,"START mode="..mode.Id);save(c,"RUNNING")
 end
 for index,mode in ipairs(modes)do
-	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v2",mode.Help,218);card.LayoutOrder=-50+index
+	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v3",mode.Help,218);card.LayoutOrder=-50+index
 	mode.Button=ui.FitColumn(ui.Button(card,"Auto "..mode.Name..": OFF",0,0,180,function()start(mode)end),0,72)
 	mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,88),BackgroundTransparency=1,Font=Enum.Font.Gotham,
 		TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
-		Text=mode.Id=="meditation" and "Off. One training macro at a time." or "Off. Rest at 15% stamina; resume at 90%. One macro at a time."},card)
+		Text=mode.Id=="meditation" and "Off. One training macro at a time."
+			or mode.Id=="strength" and "Off. Rest only after the game ends push-ups; restart at 90% stamina."
+			or "Off. Rest at 15% stamina; resume at 90%. One macro at a time."},card)
 end
 local function update()
 	local now=os.clock()
@@ -2257,7 +2264,7 @@ local function update()
 		if fraction==nil then
 			releaseAll();c.SecondAt=nil;c.Rest=true;c.Pending=nil;c.Phase="start";c.Mode.Status.Text=reason.."; no training inputs sent";return
 		end
-		if fraction<=.15 then
+		if c.Mode.Id~="strength" and fraction<=.15 then
 			if not c.Rest then note(c,"STAMINA_REST "..fraction)end
 			c.Rest=true;c.Pending=nil;c.SecondAt=nil;c.Phase="start";releaseAll()
 		end

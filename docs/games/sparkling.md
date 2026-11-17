@@ -9,7 +9,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. User-supplied entry place: `120525873606470`.
 - Current objective: collect enough diagnostics to explain every automatic-defense attempt or skip before changing its timings.
 - Current defense: off-by-default hits 2-5 trial, with first-hit animation recorded but no first-hit F input. PvP/PvE filters and continuous diagnostics remain; see SP-T023.
-- Latest implementation: **Combat page v8 / diagnostics v5**. First-hit disabled for later-hit trials; 157 mocked assertions and source/both-build compilation passed. Awaiting live validation of this mode (SP-T023). Prior v5 correlation/LOS live results remain in SP-T022.
+- Latest implementation: **Combat page v8 / diagnostics v5**. First-hit disabled for later-hit trials; 157 mocked assertions and source/both-build compilation passed. First-hit exclusion and later-hit input verified live (SP-T024). Prior v5 correlation/LOS live results remain in SP-T022.
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -26,7 +26,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
 | Auto parry | Five shared combo trials, configurable range/timing, facing/LOS gates and F input | Active v7 / diagnostics v5 reviewed through SP-T022 | Reliable timing and input/outcome attribution unverified |
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v8 (SP-T023) | HITS 2-5 TEST; first hit logged/skipped; existing timing/correlation/LOS retained | 157 mocked assertions and compilation passed; mode untested live | Verify no first-hit input and evaluate later-hit outcomes separately |
+| Combat page v8 (SP-T023) | HITS 2-5 TEST; first hit logged/skipped; existing timing/correlation/LOS retained | 157 mocked assertions and compilation passed; first-hit exclusion verified live in SP-T024 | Isolate mixed hits 3/4; hit 5 still needs an eligible exchange |
 | Parry diagnostics v5 | Recent API/input/request correlation; early releases and intervening input flags; bounded LOS object properties | Live: 25 release pairs and one unmatched cycle correctly separated (SP-T022) | Early-release/ambiguous-window branches remain mock-tested |
 
 ## Sources and capture workflow
@@ -674,3 +674,30 @@ Hits 2–5 keep their existing seeds: combo 2=0.04 s, 3=0 s, 4=0 s, 5=0.04 s. Ra
 **157 mocked assertions passed:** 47 logger/lifecycle, 44 active-feature/catalog checks (including first-hit animation logged/skipped with no generated input and all four remaining hits still active), 26 PvP/PvE, 6 settings/reload, 34 correlation/LOS. Source and both staged builds compile. This change is not live-validated yet. Source and exact module replacements preserve the concurrent Visuals tab / Profile Scan change from commit 2bac7ed and the latest installed private contents.
 
 **Next check:** reload the installed hub, enable the HITS 2-5 TEST, and retain offset=0 / hold=120. Verify first-hit skip events and no combo-1 F_DOWN; then inspect subsequent combo attempts, request/counter receipts and cooldowns. First-hit damage is expected to become visible when its automatic defense is intentionally disabled; distinguish it from a failed later-hit attempt. Actual cooldown or other gates may still prevent a later hit from being attempted. Keep the user's live session under their control and record later findings here.
+
+
+## SP-017 / SP-T024 — later-hit trial verified live (2026-11-17)
+
+Reviewed finalized session starting Unix 1794952746, main-world place 110405289082842, Combat page v8 / diagnostics v5. Manually disabled at 72.016 s. Config confirms combo1:disabled, offset=0 ms, hold=120 ms, range=8 and both target filters enabled. All actual attempts target the Thug5 NPC binding. No runtime code/settings changed during this review.
+
+**First-hit exclusion verified live:** 17 first-hit animation cues logged first_hit_disabled; zero first-hit F_DOWN attempts. Later hits still generated 11 attempts. All 11 successful API releases have corresponding observed Defend=false with correct cycleAttempt and no intervening down. No error, input/release failure, dropped line or frame-gap events; final held=false. One additional F cycle at 38.1999–38.6155 s is correctly unmatched, with no assigned automatic attempt.
+
+| Combo | Attempts | Sole-candidate self counters | Negative health within 0.5 s |
+| --- | --- | --- | --- |
+| 1 | 0 (17 deliberately skipped cues) | Not applicable | Not an automatic-defense trial |
+| 2 | 6 | 5 | 0 |
+| 3 | 4 | 1 | 2 |
+| 4 | 1 | 0 | 1 |
+| 5 | 0 | Not tested | Not tested |
+
+Seven total self-counter messages: six have a sole recent automatic candidate with no input conflict, while the message at 12.6651 s has two candidates, attempts 2 (combo 2, 649 ms earlier) and 3 (combo 3, 148 ms earlier). It flags inputConflicts=[2] and remains ambiguous. Do not allocate it to either combo or derive a confirmed success rate from the table. Combo 3's sole-candidate counter at 7.9995 s follows attempt 1 by 133 ms. Its other no-counter attempts are mixed: attempt 8 at 33.1032 s and attempt 11 at 52.6479 s precede damage by 477.5 and 130.8 ms respectively.
+
+The only combo-4 attempt, 9 at 33.4969 s, precedes damage by 83.8 ms while its key is still held. This is the **same negative-health event** at 33.5807 s counted after combo-3 attempt 8; do not count it as two independently proven failed attacks. No self counter accompanies that exchange. Overall there are 27 negative-health observations, including exchanges where the first hit is intentionally not parried.
+
+Combo 5 has no attempt: two cues were blocked by observed Counter cooldown (4.4183 s remaining at 34.1327 s, 1.1689 s at 41.3830 s); a third was blocked by real map geometry at 62.3629 s. The other LOS skip, combo 4 at 61.5981 s, also hit Workspace.Map.Model.MeshPart. Both observed parts are CanCollide=true, CanQuery=true, Anchored=true, approximately size (9.733,10.247,0.471). The narrow cosmetic exclusion correctly leaves these map blockers in place. No head-effect exclusion was exercised in this report.
+
+Six other-counter messages produced five possible-parried correlations, still heuristic. No automatic key was held at those five timestamps. No DEFER event occurred. Other skip totals: cooldown 6, attacker facing 2, range 2, self facing 1, unmapped animation 355. Many idle/movement animation observations are unmapped; do not equate that total with 355 missed attacks.
+
+Input-to-Defend delay remains 15.7–22.7 ms (median 16.9); API holds 131.5–140.4 ms; adjacent request spans 110.0–122.7 ms. Ordinary request correlation remains functional without adjusting timing.
+
+**Handoff:** retain first-hit-disabled mode as requested. Hit 2 has repeated strong counter correlations, hit 3 remains mixed, hit 4 has another damage-associated trial, and hit 5 was not eligible here. Next investigation should isolate hits 3/4 and compare their animation phases/request timing, preserving hit 2's seed. To get hit-5 evidence, obtain an eligible exchange with cooldown clear and unobstructed geometry; do not bypass actual cooldown or wall checks. Current evidence does not determine an exact replacement timing. The mode itself is live-validated; broader parry reliability remains unproven.

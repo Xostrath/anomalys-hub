@@ -271,7 +271,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -76, 0, 20), Size = UDim2.fromOffset(146, 18),
-	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v13" or "UNIVERSAL // ACTIVE",
+	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v14" or "UNIVERSAL // ACTIVE",
 	TextColor3 = colors.Accent, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -311,6 +311,7 @@ local pageMeta = {
 	General = {"GENERAL", "Spectate players and control Noclip"},
 	ESP = {"ESP", "Player and NPC overlays together, with independent controls"},
 	Auto = {"AUTO", "Automatic activities and setup controls"},
+	Recorders = {"RECORDERS", "Capture manual play to prepare or improve game features"},
 	Combat = {"COMBAT", "Combat recording and defense tools"},
 	Servers = {"SERVER NAVIGATION", "Rejoin or move to another public server"},
 	Settings = {"SETTINGS", "Persistence, keybind, reload, and cleanup"},
@@ -322,7 +323,7 @@ local function makePage(name)
 		ScrollBarThickness = 4, ScrollBarImageColor3 = colors.Accent,
 	}, content)
 	create("UIPadding", {PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12)}, page)
-	if env.__AnomalyDetectedProfile=="HunterXEnter" and (name=="Auto" or name=="Settings")then
+	if env.__AnomalyDetectedProfile=="HunterXEnter" and (name=="Auto" or name=="Settings" or name=="Recorders")then
 		page.AutomaticCanvasSize=Enum.AutomaticSize.None
 		panelLayouts[page]={Cards={},Busy=false,Serial=0}
 		connect(page:GetPropertyChangedSignal("AbsoluteSize"),function()arrangePanels(page)end)
@@ -333,6 +334,7 @@ end
 for _, name in ipairs({"Home", "General", "ESP", "Servers", "Settings"}) do makePage(name) end
 if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
 if env.__AnomalyDetectedProfile == "HunterXEnter" then makePage("Auto") end
+if env.__AnomalyDetectedProfile == "HunterXEnter" then makePage("Recorders") end
 
 local function selectTab(name)
 	if not pages[name] then return end
@@ -358,6 +360,7 @@ if pages.Auto then table.insert(tabNames,{"Auto","Auto",nil,"↻"})end
 if pages.Combat then table.insert(tabNames,{"Combat","Combat",nil,"◇"})end
 table.insert(tabNames,{"ESP","Player & NPC ESP","VISION","◎"})
 table.insert(tabNames,{"Servers","Servers","UTILITIES","≡"})
+if pages.Recorders then table.insert(tabNames,{"Recorders","Recorders",nil,"◌"})end
 table.insert(tabNames,{"Settings","Settings",nil,"⚙"})
 for order, definition in ipairs(tabNames) do
 	local name, text = definition[1], definition[2]
@@ -455,6 +458,41 @@ local function optionGrid(parent, definitions, settings, firstY)
 		end, enabled and colors.AccentSoft or colors.Surface)
 		fitColumn(control, (index - 1) % 2, firstY + math.floor((index - 1) / 2) * 42)
 	end
+end
+
+local function section(page,title,height,expanded)
+	local open=expanded~=false
+	local frame=card(page,"",nil,open and height+38 or 38)
+	local body=create("Frame",{Position=UDim2.fromOffset(0,38),Size=UDim2.new(1,0,0,height),BackgroundTransparency=1,Visible=open},frame)
+	local heading=button(frame,title..(open and "  ^" or "  v"),24,0,180,nil)
+	heading.Size=UDim2.new(1,-38,0,36);heading.BackgroundTransparency=1;heading.TextXAlignment=Enum.TextXAlignment.Left
+	for _,child in ipairs(heading:GetChildren())do if child:IsA("UIStroke")then child.Transparency=1 end end
+	local control={Frame=frame,Body=body,Height=height}
+	function control.SetHeight(value)
+		control.Height=value;body.Size=UDim2.new(1,0,0,value)
+		frame.Size=UDim2.new(frame.Size.X.Scale,frame.Size.X.Offset,0,open and value+38 or 38)
+	end
+	connect(heading.Activated,function()
+		open=not open;body.Visible=open;heading.Text=title..(open and "  ^" or "  v");control.SetHeight(control.Height)
+	end)
+	return control
+end
+local function checkbox(parent,label,text,callback)
+	local object=button(parent,text,14,0,180,callback)
+	object.Size=UDim2.new(1,-28,0,28);object.TextTransparency=1;object.BackgroundTransparency=1
+	for _,child in ipairs(object:GetChildren())do if child:IsA("UIStroke")then child.Transparency=1 end end
+	local box=create("Frame",{Position=UDim2.fromOffset(0,6),Size=UDim2.fromOffset(15,15),BackgroundColor3=colors.Surface,BorderSizePixel=0},object)
+	create("UICorner",{CornerRadius=UDim.new(0,2)},box)
+	local border=create("UIStroke",{Color=colors.Stroke,Thickness=1},box)
+	local mark=create("TextLabel",{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,Text="✓",TextColor3=colors.Text,TextSize=12,Font=Enum.Font.GothamBold,Visible=false},box)
+	create("TextLabel",{Position=UDim2.fromOffset(24,0),Size=UDim2.new(1,-24,1,0),BackgroundTransparency=1,
+		Font=Enum.Font.Gotham,Text=label,TextColor3=colors.Text,TextSize=11,TextXAlignment=Enum.TextXAlignment.Left},object)
+	local function refresh()
+		local checked=object.Text:find(": ON",1,true)~=nil
+		mark.Visible=checked;box.BackgroundColor3=checked and colors.AccentSoft or colors.Surface;border.Color=checked and colors.Accent or colors.Stroke
+	end
+	connect(object:GetPropertyChangedSignal("Text"),refresh);refresh()
+	return object
 end
 
 -- ESP controls share one scrolling page, with a separate card per actor type.
@@ -822,6 +860,7 @@ controller.UI = {
 	Colors = colors, Create = create, Card = card, Button = button, ValueBox = valueBox,
 	PlayerEspCard = espCard, FitColumn = fitColumn, OptionGrid = optionGrid,
 	SpectateRecordButton = spectateRecordButton, SpectateRecordStatus = spectateRecordStatus,
+	Section=section,Checkbox=checkbox,
 }
 controller.State = state
 controller.Connect = connect
@@ -1454,7 +1493,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v13",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v14",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1464,7 +1503,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v13 loaded; Nen recorder available in Auto.")
+print("[Anomaly] Hunter X Enter adapter v14 loaded; Auto Nen and stamina hold available.")
 
 end)()
 ;(function()
@@ -1633,6 +1672,7 @@ local modes = {
 	{Id="speed", Name="Speed", Page="Auto", Help="Walk, start running, turn, stop, and rest. Repeat using your usual sprint controls."},
 	{Id="nen", Name="Nen", Page="Auto", Help="Choose a skill below. Manually activate it, let the shared bar drain, turn it off, and record a full refill."},
 }
+for _,mode in ipairs(modes)do mode.Page="Recorders"end
 local nenChoices={"Nen","Ten","Ren","Zetsu","In","Gyo","Shu","Ken","Ko","En"}
 local selectedNen="Nen"
 local nenPreference="AnomalyHub/universal/hunter_nen_selection.txt"
@@ -1987,6 +2027,7 @@ local function start(mode)
 	if active and active.Mode==mode then stop("STOPPED");return end
 	if active then stop("SWITCHED_ACTIVITY") end
 	if controller.StopHunterTraining then controller.StopHunterTraining("Manual recording started") end
+	if controller.StopHunterAutoNen then controller.StopHunterAutoNen("Manual recording started")end
 	serial+=1
 	local ok,nonce=pcall(Http.GenerateGUID,Http,false)
 	if not ok then nonce=tostring(math.floor(os.clock()*1000000)).."_"..serial end
@@ -2148,7 +2189,7 @@ end
 local function save(c,reason)
 	if type(writefile)~="function" then return end
 	if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal") end
-	local report="HUNTER X ENTER AUTO "..c.Mode.Name:upper().." v5\nRoblox-internal keyboard inputs; no OS keyboard input or remote calls.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
+	local report="HUNTER X ENTER AUTO "..c.Mode.Name:upper().." v6\nRoblox-internal keyboard inputs; no OS keyboard input or remote calls.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
 	pcall(writefile,"AnomalyHub/universal/hunter_auto_"..c.Mode.Id.."_test.txt",report)
 	pcall(writefile,c.Archive,report)
 end
@@ -2185,6 +2226,9 @@ stop=function(reason)
 	note(c,"STOP "..reason);save(c,reason)
 end
 controller.StopHunterTraining=stop
+controller.HunterTrainingInputBusy=function()
+	return active and active.Mode.Key and (active.Pending~=nil or active.Awaiting~=nil or next(held)~=nil) or false
+end
 local function visible(object)
 	if not object then return false end
 	while object and object~=player do
@@ -2336,8 +2380,14 @@ local function movement(c,humanoid,root,now)
 	end
 end
 local function prompts(c,now)
+	c.NenWait=false
+	if controller.HunterNenInputUntil and now<controller.HunterNenInputUntil then return end
 	if not c.Remote.Parent then stop("Training interface unloaded");return end
 	if not c.Training then
+		if c.Mode.Id=="strength" and not c.StartAttempt and type(controller.HunterNenNeedsActivationWindow)=="function"
+			and controller.HunterNenNeedsActivationWindow()then
+			c.NenWait=true;c.Mode.Status.Text="Waiting for Auto Nen activation before the next push-up set.";return
+		end
 		local cooldown=c.Character:GetAttribute(c.Mode.Id=="meditation" and "MeditateCooldown" or "PushUpsCooldown")
 		if cooldown then c.StartWait=c.StartWait or now;if now-c.StartWait>8 then stop("Training cooldown did not clear")end;return end
 		if not c.StartAttempt then c.StartAttempt=now;press(c,c.Mode.Key,.08)
@@ -2389,14 +2439,29 @@ local function start(mode)
 	mode.Button.Text="Auto "..mode.Name..": ON";mode.Button.BackgroundColor3=ui.Colors.AccentSoft
 	note(c,"START mode="..mode.Id);save(c,"RUNNING")
 end
+local trainingSection
+if ui.Section and ui.Checkbox then
+	trainingSection=ui.Section(ui.Pages.Auto,"Auto Training",284,true)
+	trainingSection.Frame.LayoutOrder=-50
+	trainingSection.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,184),Size=UDim2.new(1,-28,0,44),BackgroundTransparency=1,
+		Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+		Text="Choose one physical training. Nen can run alongside it."},trainingSection.Body)
+	ui.TrainingSection=trainingSection
+end
 for index,mode in ipairs(modes)do
-	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v5",mode.Help,180);card.LayoutOrder=-50+index
+	if trainingSection then
+		mode.Button=ui.Checkbox(trainingSection.Body,mode.Name,"Auto "..mode.Name..": OFF",function()start(mode)end)
+		mode.Button.Position=UDim2.fromOffset(14,(index-1)*28)
+		mode.Status=trainingSection.Status
+	else
+	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v6",mode.Help,180);card.LayoutOrder=-50+index
 	mode.Button=ui.FitColumn(ui.Button(card,"Auto "..mode.Name..": OFF",0,0,180,function()start(mode)end),0,72)
 	mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,52),BackgroundTransparency=1,Font=Enum.Font.Gotham,
 		TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
 		Text=mode.Id=="meditation" and "Off. One training macro at a time."
 			or mode.Id=="strength" and "Off. Rest only after the game ends push-ups; restart at 90% stamina."
 			or "Off. Rest at 15% stamina; resume at 90%. One macro at a time."},card)
+	end
 end
 local function update()
 	local now=os.clock()
@@ -2414,8 +2479,6 @@ local function update()
 	if not h or h.Health<=0 or not root then stop("Character unavailable");return end
 	if h.Health<c.Health then stop("Damage taken");return end;c.Health=h.Health
 	if now>=c.NextSave then c.NextSave=now+5;save(c,"RUNNING")end
-	local hunger=player:GetAttribute("Hunger")
-	if finite(hunger)and hunger<=30 then stop("Hunger is low");return end
 	local status
 	if c.Mode.Id~="meditation" then
 		local fraction,reason=stamina(c)
@@ -2439,6 +2502,7 @@ local function update()
 	end
 	if c.Mode.Key then prompts(c,now)else movement(c,h,root,now)end
 	if active~=c then return end
+	if c.NenWait then return end
 	local stat=player:GetAttribute(c.Mode.Stat)
 	local gain=finite(stat)and finite(c.StartStat)and string.format(" · %s %+.3f",c.Mode.GainLabel,stat-c.StartStat)or ""
 	c.Mode.Status.Text=(c.WallRunning and "Wall running · " or "")..(status or "Meditation")..gain
@@ -2460,6 +2524,442 @@ controller.Connect(input.WindowFocused,function()focusChanged(true)end)
 controller.Connect(input.TextBoxFocused,function()stop("Text entry opened")end)
 controller.Connect(player.OnTeleport,function()stop("Teleport")end)
 controller.RegisterCleanup(function()stop("Unload");closed=true end)
+
+end)()
+;(function()
+-- Independent Nen upkeep. Uses the recorded L key; never sends skill/XP requests.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter" then return end
+local player=game:GetService("Players").LocalPlayer
+local input=game:GetService("UserInputService")
+local menu=game:GetService("GuiService")
+local rs=game:GetService("ReplicatedStorage")
+local run=game:GetService("RunService")
+local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
+local ui=controller.UI
+local choices={"Nen","Ten","Ren","Zetsu","In","Gyo","Shu","Ken","Ko","En"}
+local preference="AnomalyHub/universal/hunter_nen_selection.txt"
+local selected="Nen"
+if type(readfile)=="function"then local ok,value=pcall(readfile,preference);if ok and table.find(choices,value)then selected=value end end
+local state={Enabled=false,Closed=false,Character=player.Character,Pushups=false,NextAttempt=0,Attempts=0,KeyDown=false,ReleaseAt=0}
+local group=ui.TrainingSection
+local card=group and group.Body or ui.Card(ui.Pages.Auto,"AUTO NEN // v1","Keeps the selected aura training. Refills fully between cycles; waits for push-ups to end.",226)
+if not group then card.LayoutOrder=-40 end
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,group and 232 or 162),Size=UDim2.new(1,-28,0,44),BackgroundTransparency=1,
+	Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+	Text="Off. Nen is confirmed; other skills need a recording."},card)
+local button,picker
+local logLines,nextLog={},0
+local function saveReport(reason)
+	if #logLines>=300 then table.remove(logLines,1)end
+	table.insert(logLines,string.format("%.3f selected=%s active=%s attempts=%d %s",os.clock(),selected,tostring(player:GetAttribute("ActiveNenSkill")),state.Attempts,reason))
+	if type(writefile)=="function"then
+		if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+		pcall(writefile,"AnomalyHub/universal/hunter_auto_nen_test.txt","HUNTER AUTO NEN v1 // recorded L key only\n"..table.concat(logLines,"\n"))
+	end
+end
+local list=ui.Create("Frame",{Position=UDim2.fromOffset(0,group and 180 or 112),Size=UDim2.new(1,0,0,206),BackgroundTransparency=1,Visible=false},card)
+local expanded=false
+local function show(open)
+	expanded=open;list.Visible=open
+	local offset=open and 210 or 0
+	if group then
+		group.SetHeight(284+offset);group.Status.Position=UDim2.fromOffset(14,184+offset)
+		button.Position=UDim2.fromOffset(14,112);status.Position=UDim2.fromOffset(14,232+offset)
+	else
+		card.Size=UDim2.new(1,0,0,226+offset)
+		button.Position=UDim2.fromOffset(14,116+offset);button.Size=UDim2.new(1,-28,0,34)
+		status.Position=UDim2.fromOffset(14,162+offset)
+	end
+	picker.Text="Training: "..selected..(open and " ^" or " v")
+end
+local function finite(n)return type(n)=="number" and n==n and math.abs(n)<math.huge end
+local function fraction()
+	local char=player.Character
+	local bar=char and char:FindFirstChild("NenBar3D")
+	local container=bar and bar:FindFirstChild("Container")
+	local fill=container and container:FindFirstChild("Fill")
+	local label=container and container:FindFirstChild("PctLabel")
+	if not fill or not fill:IsA("Frame") or not label or not label:IsA("TextLabel")then return nil end
+	local value=fill.Size.Y.Scale
+	local percent=tonumber(label.Text:match("^%s*(%d+)%s*%%%s*$"))
+	if not finite(value) or value<0 or value>1 or fill.Size.Y.Offset~=0 or not percent or percent>100 or math.abs(value-percent/100)>.035 then return nil end
+	return math.min(value,percent/100)
+end
+local function activeSkill()
+	local value=player:GetAttribute("ActiveNenSkill")
+	return type(value)=="string" and value~="" and value~="None" and value~="none" and value or nil
+end
+local function busyPushups()
+	local char=player.Character
+	if state.Pushups or char and char:GetAttribute("PushingUp")==true then return true end
+	local pg=player:FindFirstChildOfClass("PlayerGui")
+	local screen=pg and pg:FindFirstChild("PushupUI")
+	local gauge=screen and screen:FindFirstChild("PushupGauge")
+	if not gauge then return false end
+	local object=gauge
+	while object and object~=pg do
+		if object:IsA("GuiObject") and not object.Visible then return false end
+		if object:IsA("LayerCollector") and not object.Enabled then return false end
+		object=object.Parent
+	end
+	return object==pg
+end
+local function release()
+	if not state.KeyDown then return true end
+	local ok=pcall(function()vim:SendKeyEvent(false,Enum.KeyCode.L,false,game)end)
+	if ok then state.KeyDown=false;controller.HunterNenInputUntil=nil end
+	return ok
+end
+local function stop(reason)
+	state.Enabled=false;state.Pending=nil;release()
+	button.Text="Auto Nen: OFF";button.BackgroundColor3=ui.Colors.Surface
+	status.Text=reason or "Off. Existing aura is left to the game."
+	saveReport(status.Text)
+end
+controller.StopHunterAutoNen=stop
+controller.HunterNenNeedsActivationWindow=function()
+	if not state.Enabled or selected~="Nen" or state.Attempts>=3 or activeSkill() then return false end
+	if input:GetFocusedTextBox() or menu.MenuIsOpen then return false end
+	if player:GetAttribute("Unlocked_Nen")~=true and player:GetAttribute("NenUnlocked")~=true then return false end
+	local value=fraction()
+	return state.Pending~=nil or value and value>=.995 or value==nil and not state.Bootstrapped
+end
+local function toggle()
+	if state.Enabled then stop();return end
+	if selected~="Nen"then status.Text=selected.." needs a recording before automatic activation is available.";return end
+	if not vim then status.Text="Roblox input is unavailable.";return end
+	if controller.StopHunterRecording then controller.StopHunterRecording("Auto Nen started")end
+	state.Enabled=true;state.Attempts=0;state.Pending=nil;state.NextAttempt=0;state.Bootstrapped=false
+	button.Text="Auto Nen: ON";button.BackgroundColor3=ui.Colors.AccentSoft;show(false)
+end
+button=group and ui.Checkbox(card,"Nen","Auto Nen: OFF",toggle) or ui.Button(card,"Auto Nen: OFF",14,116,180,toggle)
+button.Position=UDim2.fromOffset(14,group and 112 or 116)
+button.Size=UDim2.new(1,-28,0,group and 28 or 34)
+picker=ui.Button(card,"Training: "..selected.." v",14,group and 144 or 72,180,function()show(not expanded)end)
+picker.Size=UDim2.new(1,-28,0,group and 28 or 34)
+for index,name in ipairs(choices)do
+	ui.FitColumn(ui.Button(list,name=="Nen" and "Nen" or name.." (unmapped)",0,0,180,function()
+		selected=name;state.Attempts=0;state.Pending=nil;show(false)
+		status.Text=name=="Nen" and "Nen selected. Ready for shared-bar training." or name.." needs a recording; no activation will be sent."
+		if type(writefile)=="function"then
+			if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+			pcall(writefile,preference,name)
+		end
+	end),(index-1)%2,math.floor((index-1)/2)*42)
+end
+local events=rs:FindFirstChild("RemoteEvents")
+local sync=events and events:FindFirstChild("PushupSync")
+if sync and sync:IsA("RemoteEvent")then controller.Connect(sync.OnClientEvent,function(who,action)
+	if who~=player then return end
+	if action=="Start"then state.Pushups=true elseif action=="Stop"then state.Pushups=false;state.NextAttempt=math.max(state.NextAttempt,os.clock()+.25)end
+end)end
+local function update()
+	local now=os.clock()
+	if state.KeyDown and (not state.Enabled or now>=state.ReleaseAt)then release()end
+	if state.Closed or not state.Enabled then return end
+	if state.Character~=player.Character then
+		release();state.Character=player.Character;state.Pushups=false;state.Pending=nil;state.Attempts=0;state.Bootstrapped=false;state.NextAttempt=now+1
+	end
+	local char=player.Character;local hum=char and char:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health<=0 then status.Text="Waiting for your character.";return end
+	if selected~="Nen"then status.Text=selected.." needs a recording. Other autos keep running.";return end
+	local skill=activeSkill()
+	local value=fraction()
+	if skill then
+		state.Pending=nil;state.Attempts=0
+		status.Text=skill==selected and ("Training Nen"..(value and string.format(" · aura %.0f%%",value*100)or "").."\nOther training can run alongside.") or ("Waiting: "..skill.." is active.")
+		return
+	end
+	if player:GetAttribute("Unlocked_Nen")~=true and player:GetAttribute("NenUnlocked")~=true then status.Text="Nen unlock not confirmed.";return end
+	if state.Pending then
+		if now-state.Pending<4 then status.Text="Waiting for aura activation.";return end
+		state.Pending=nil;state.NextAttempt=now+2
+	end
+	if state.Attempts>=3 then status.Text="Activation not confirmed. Toggle Auto Nen to retry.";return end
+	if value and value<.995 then status.Text=string.format("Refilling aura: %.0f%% / 100%%",value*100);return end
+	if not value and state.Bootstrapped then status.Text="Waiting for the shared Nen bar.";return end
+	if busyPushups()then status.Text="Waiting for push-ups to finish before activating aura.";return end
+	if type(controller.HunterTrainingInputBusy)=="function" and controller.HunterTrainingInputBusy()then status.Text="Waiting for the current training input.";return end
+	if input:GetFocusedTextBox() or menu.MenuIsOpen then status.Text="Waiting for chat or Roblox menu to close.";return end
+	if now<state.NextAttempt or state.KeyDown then return end
+	state.Attempts+=1;state.Bootstrapped=true;state.KeyDown=true;state.ReleaseAt=now+.08
+	controller.HunterNenInputUntil=state.ReleaseAt
+	local ok=pcall(function()vim:SendKeyEvent(true,Enum.KeyCode.L,false,game)end)
+	if not ok then stop("Nen input failed; stopped.");return end
+	state.Pending=now;state.NextAttempt=now+2;status.Text="Activating Nen..."
+	saveReport("KEY_L activation requested")
+end
+controller.Connect(run.Heartbeat,function()
+	local ok=pcall(update);if not ok then stop("Nen update failed; stopped.")end
+	if state.Enabled and os.clock()>=nextLog then nextLog=os.clock()+5;saveReport(status.Text)end
+end)
+controller.Connect(player.OnTeleport,function()stop("Teleport")end)
+controller.RegisterCleanup(function()stop("Unload");state.Closed=true;controller.HunterNenNeedsActivationWindow=nil end)
+
+end)()
+;(function()
+-- UI wrapper around the successfully tested client stamina hold. No server requests are altered.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter" then return end
+local ui=controller.UI
+local group=ui.Section and ui.Section(ui.Pages.General,"General",88,true)
+local card=group and group.Body or ui.Card(ui.Pages.General,"GENERAL","Local stamina control",172)
+if group then group.Frame.LayoutOrder=-100 else card.LayoutOrder=-100 end
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,group and 34 or 116),Size=UDim2.new(1,-28,0,44),BackgroundTransparency=1,
+ Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Off. Uses the successful 30-second test; restores the starting value when disabled."},card)
+local function runHold()
+-- Temporary client-only experiment. Does not hook or send remote requests.
+local env=(getgenv and getgenv()) or shared
+if game.GameId~=9857379797 then warn("[Anomaly stamina] Hunter X Enter only.");return end
+if type(env.__AnomalyStaminaNoDrainTest)=="table" then
+	local previous=env.__AnomalyStaminaNoDrainTest
+	if type(previous.Stop)=="function" then previous.Stop("MANUAL_STOP")end
+	return
+end
+local player=game:GetService("Players").LocalPlayer
+local character=player.Character
+local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+local globals=type(_G)=="table" and _G or {}
+local system=globals.StaminaSystem
+if type(system)~="table"then
+	local runtime=env.getrenv or getrenv
+	if type(runtime)=="function"then
+		local ok,value=pcall(runtime)
+		if ok and type(value)=="table" and type(value._G)=="table"then globals=value._G;system=globals.StaminaSystem end
+	end
+end
+local d=debug or {}
+local readUpvalues=d.getupvalues or env.getupvalues
+local writeUpvalue=d.setupvalue or env.setupvalue
+local function finite(n)return type(n)=="number" and n==n and math.abs(n)<math.huge end
+local path="AnomalyHub/universal/hunter_stamina_hold_latest.txt"
+local lines={"HUNTER STAMINA HOLD v1","Client experiment only; no remote hooks or calls. Server acceptance is unknown."}
+local function save()
+	if type(writefile)~="function" then return false end
+	if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+	return pcall(writefile,path,table.concat(lines,"\n"))
+end
+local function notice(message)
+	status.Text=message
+	warn("[Anomaly stamina] "..message)
+	pcall(function()game:GetService("StarterGui"):SetCore("SendNotification",{Title="Anomaly stamina test",Text=message,Duration=12})end)
+end
+local function unavailable(message)
+	table.insert(lines,"UNAVAILABLE: "..message);save();notice(message)
+end
+if not humanoid or humanoid.Health<=0 then unavailable("Wait for a living character.");return end
+if type(system)~="table" or type(system.GetStamina)~="function" or type(system.GetMaxStamina)~="function" then
+	unavailable("The game's live stamina reader is not exposed here.");return
+end
+if type(readUpvalues)~="function" or type(writeUpvalue)~="function" then
+	unavailable("Volt does not expose the required upvalue functions here.");return
+end
+local getter,maxGetter=system.GetStamina,system.GetMaxStamina
+local ok,original,maximum=pcall(function()return getter(),maxGetter()end)
+if not ok or not finite(original) or not finite(maximum) or maximum<=0 or original<0 or original>maximum then
+	unavailable("Invalid live stamina values; nothing changed.");return
+end
+local readOK,upvalues=pcall(readUpvalues,getter)
+local count=0
+if readOK and type(upvalues)=="table"then for _ in pairs(upvalues)do count+=1 end end
+-- The captured GetStamina has exactly one upvalue: the current stamina number.
+if not readOK or type(upvalues)~="table" or count~=1 or upvalues[1]~=original then
+	unavailable("The live stamina function does not match the captured version; nothing changed.");return
+end
+local started=os.clock()
+local state={Connections={},Closed=false,Changed=false}
+local samples,drains,lowest,previousRunning=0,0,maximum,nil
+local nextSample,nextSave=0,0
+local function log(message)if #lines>=500 then table.remove(lines,3)end;table.insert(lines,string.format("%.3f %s",os.clock()-started,message))end
+local function sameCharacter()
+	return player.Character==character and globals.StaminaSystem==system and system.GetStamina==getter
+end
+function state.Stop(reason)
+	if state.Closed then return end
+	state.Closed=true
+	for _,connection in ipairs(state.Connections)do connection:Disconnect()end
+	if state.Changed and sameCharacter()then
+		local restored,result=pcall(function()
+			local cap=maxGetter()
+			if not finite(cap) or cap<=0 then error("invalid maximum")end
+			local value=math.min(original,cap)
+			writeUpvalue(getter,1,value)
+			return getter()==value
+		end)
+		log("RESTORE_ORIGINAL "..tostring(restored and result))
+	elseif state.Changed then log("RESTORE_SKIPPED character/module changed; new character left untouched")end
+	log("STOP "..reason.." samples="..samples.." drainObservations="..drains.." lowestBeforeRefill="..lowest)
+	log("Result requires in-game observation; a full local bar does not prove server acceptance.")
+	local saved=save()
+	if env.__AnomalyStaminaNoDrainTest==state then env.__AnomalyStaminaNoDrainTest=nil end
+	notice("Stamina hold ended: "..reason..(saved and ". Report saved." or ". Report could not be saved."))
+end
+log("START original="..original.." maximum="..maximum.." duration=until disabled")
+if not save()then unavailable("Cannot save the test report; nothing changed.");return end
+env.__AnomalyStaminaNoDrainTest=state
+-- Set Changed before calling: an executor failure may occur after a partial write.
+state.Changed=true
+local setOK,setResult=pcall(function()writeUpvalue(getter,1,maximum);return getter()==maximum end)
+if not setOK or not setResult then state.Stop("INITIAL_WRITE_FAILED");return end
+table.insert(state.Connections,game:GetService("RunService").Heartbeat:Connect(function()
+	if state.Closed then return end
+	if not sameCharacter()then state.Stop("CHARACTER_CHANGED");return end
+	if humanoid.Health<=0 then state.Stop("DEATH");return end
+	local now=os.clock()
+
+	local success,err=pcall(function()
+		local current,cap=getter(),maxGetter()
+		if not finite(current) or not finite(cap) or cap<=0 or current<0 or current>cap then error("invalid live stamina")end
+		if current<cap-.001 then drains+=1 end
+		lowest=math.min(lowest,current)
+		local running=character:GetAttribute("Running")==true
+		if now>=nextSample or running~=previousRunning then
+			nextSample=now+.25;previousRunning=running;samples+=1
+			local root=character:FindFirstChild("HumanoidRootPart")
+			log("SAMPLE current="..current.." max="..cap.." running="..tostring(running).." speed="..tostring(humanoid.WalkSpeed)
+				.." position="..tostring(root and root.Position).." training="..tostring(player:GetAttribute("Physics_Running")))
+		end
+		writeUpvalue(getter,1,cap)
+		if getter()~=cap then error("write did not stick")end
+	end)
+	if not success then log("ERROR "..tostring(err));state.Stop("READ_OR_WRITE_FAILED");return end
+	if now>=nextSave then nextSave=now+5;if not save()then state.Stop("SAVE_FAILED")end end
+end))
+table.insert(state.Connections,player.OnTeleport:Connect(function()state.Stop("TELEPORT")end))
+notice("Stamina hold enabled. Disable it to restore the starting value.")
+
+end
+local button=group and ui.Checkbox(card,"Infinite Stamina","Stamina Hold: OFF",function()runHold()end)
+ or ui.Button(card,"Stamina Hold: OFF",14,72,180,function()runHold()end)
+controller.Connect(game:GetService("RunService").Heartbeat,function()
+ local running=type(env.__AnomalyStaminaNoDrainTest)=="table"
+ local text=running and "Stamina Hold: ON" or "Stamina Hold: OFF"
+ if button.Text~=text then button.Text=text;button.BackgroundColor3=running and ui.Colors.AccentSoft or ui.Colors.Surface end
+end)
+controller.RegisterCleanup(function()
+ local active=env.__AnomalyStaminaNoDrainTest
+ if type(active)=="table" and type(active.Stop)=="function"then active.Stop("HUB_UNLOAD")end
+end)
+
+end)()
+;(function()
+-- Passive hunger investigation. Does not alter values, invoke remotes, or execute captured scripts.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter" then return end
+local player=game:GetService("Players").LocalPlayer
+local rs=game:GetService("ReplicatedStorage")
+local run=game:GetService("RunService")
+local http=game:GetService("HttpService")
+local ui=controller.UI
+local card=ui.Card(ui.Pages.Recorders,"HUNGER INVESTIGATION // v1","Observe hunger while idle or after eating. Captures matching client scripts if readable; changes nothing.",180)
+card.LayoutOrder=80
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,52),BackgroundTransparency=1,
+	Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+	Text="Ready. Capture 45 seconds; eat once if convenient."},card)
+local active,button,closed=nil,nil,false
+local function write(path,value)
+	if type(writefile)~="function"then return false end
+	if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+	return pcall(writefile,path,value)
+end
+local function log(c,value)
+	if active~=c or #c.Lines>=1000 then return end
+	table.insert(c.Lines,string.format("%.3f %s",os.clock()-c.Started,tostring(value):sub(1,1200)))
+end
+local function save(c,reason)
+	local report="HUNTER HUNGER INVESTIGATION v1 // READ ONLY\nClient source cannot establish server authority.\nNo inputs, game requests, mutations, require, or execution of captured scripts.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
+	local latest=write("AnomalyHub/universal/hunter_hunger_capture_latest.txt",report)
+	local history=write(c.Path..".txt",report)
+	return latest or history
+end
+local function stop(reason)
+	local c=active;if not c then return end
+	log(c,"STOP "..reason);active=nil
+	local saved=save(c,reason)
+	button.Text="Capture Hunger";button.BackgroundColor3=ui.Colors.Surface
+	status.Text=saved and ("Saved: "..reason..". Client source results are listed in the report.") or "Saving failed."
+end
+local function sourceTargets(c)
+	local roots={}
+	for _,root in pairs({player:FindFirstChildOfClass("PlayerScripts"),rs:FindFirstChild("Modules"),player:FindFirstChildOfClass("PlayerGui")})do table.insert(roots,root)end
+	local queue={};for _,root in pairs(roots)do if root then table.insert(queue,{root,0})end end
+	local index,targets=1,{}
+	while index<=#queue and index<=1500 do
+		local pair=queue[index];index+=1
+		local object,depth=pair[1],pair[2]
+		local name=object.Name:lower()
+		if not name:find("admin",1,true)then
+			if (object:IsA("LocalScript") or object:IsA("ModuleScript")) and (name:find("hunger",1,true) or name:find("saturation",1,true))then
+				table.insert(targets,object);if #targets>=3 then log(c,"LIMIT maximum 3 matching client scripts");break end
+			end
+			if depth<6 then for _,child in ipairs(object:GetChildren())do
+				if #queue>=1500 then log(c,"LIMIT discovery 1500 objects");break end
+				table.insert(queue,{child,depth+1})
+			end end
+		end
+	end
+	log(c,"SOURCE_TARGETS "..#targets.." scanned="..(index-1))
+	return targets
+end
+local function captureSource(c,object,index)
+	local path=object:GetFullName();log(c,"SOURCE_TARGET "..path)
+	local resolved=false
+	local function finish(value,reason)
+		if resolved or active~=c then return end;resolved=true
+		if type(value)=="string" and value:match("%S") and #value<=2000000
+			and not value:lower():find("failed to decompile",1,true) and not value:lower():find("decompilation failed",1,true)then
+			local file=c.Path.."_"..index.."_"..object.Name:gsub("[^%w_]","")..".lua"
+			log(c,write(file,value) and ("SOURCE_SAVED "..file.." bytes="..#value.." path="..path) or ("SOURCE_SAVE_FAILED "..path))
+		else log(c,"SOURCE_UNAVAILABLE "..path.." "..reason)end
+		save(c,"RECORDING")
+	end
+	task.delay(5,function()finish(nil,"5s deadline; late results ignored")end)
+	task.spawn(function()
+		local ok,value=pcall(function()return object.Source end)
+		if ok and type(value)=="string" and value:match("%S")then finish(value,"empty or larger than 2MB");return end
+		if resolved or active~=c then return end
+		local reader=env.decompile or decompile
+		if type(reader)~="function"then finish(nil,"decompiler unavailable");return end
+		local success,result=pcall(reader,object)
+		finish(success and result or nil,"unreadable, failed, empty or larger than 2MB")
+	end)
+end
+local function sample(c)
+	for _,key in ipairs({"Hunger","Saturation","HungerMult"})do
+		local value=tostring(player:GetAttribute(key))
+		if c.Previous[key]~=value then c.Previous[key]=value;log(c,"PLAYER@"..key.."="..value)end
+	end
+	local char=player.Character;local hum=char and char:FindFirstChildOfClass("Humanoid")
+	if hum and c.Health~=hum.Health then c.Health=hum.Health;log(c,"HEALTH="..hum.Health)end
+end
+button=ui.Button(card,"Capture Hunger",14,72,180,function()
+	if closed then return end
+	if active then stop("STOPPED");return end
+	local ok,id=pcall(http.GenerateGUID,http,false);if not ok then id=tostring(os.clock())end
+	local c={Started=os.clock(),Previous={},Lines={},NextSave=0,NextSample=0,Character=player.Character,
+		Path="AnomalyHub/universal/hunter_hunger_"..os.time().."_"..tostring(id):gsub("[^%w%-]","")}
+	active=c;sample(c)
+	if not save(c,"RECORDING")then stop("SAVE_FAILED");return end
+	button.Text="Stop + Save";button.BackgroundColor3=ui.Colors.AccentSoft
+	local success,targets=pcall(sourceTargets,c)
+	if success then for index,object in ipairs(targets)do captureSource(c,object,index)end else log(c,"DISCOVERY_FAILED "..tostring(targets))end
+end)
+controller.Connect(run.Heartbeat,function()
+	local c=active;if not c then return end
+	local now=os.clock()
+	if player.Character~=c.Character then stop("CHARACTER_CHANGED");return end
+	if now-c.Started>=45 then stop("COMPLETE");return end
+	if now>=c.NextSample then c.NextSample=now+.25;local ok=pcall(sample,c);if not ok then stop("SAMPLE_FAILED");return end end
+	if now>=c.NextSave then c.NextSave=now+5;if not save(c,"RECORDING")then stop("SAVE_FAILED");return end end
+	status.Text=string.format("Recording %.0fs / 45s. Idle, or eat once normally.\nNo hunger values are changed.",now-c.Started)
+end)
+controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
+controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)
 
 end)()
 ;(function()

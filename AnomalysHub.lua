@@ -267,7 +267,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v4\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v5\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
 	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1397,7 +1397,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v4",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v5",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1405,9 +1405,9 @@ ui.Create("TextLabel", {
 	BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 11,
 	TextColor3 = ui.Colors.Muted, TextWrapped = true,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Text = "Auto: meditation, strength, speed and climbing. Physical training watches the stamina bar.",
+	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v4 loaded; training macros ready.")
+print("[Anomaly] Hunter X Enter adapter v5 loaded; background training ready.")
 
 end)()
 ;(function()
@@ -1969,10 +1969,10 @@ local http=game:GetService("HttpService")
 local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
 local ui=controller.UI
 local modes={
-	{Id="meditation",Name="Meditation",Key="M",Stat="MeditationPoints",Help="Answers each current key prompt. Starts with M; stops at the meditation limit."},
-	{Id="strength",Name="Strength",Key="K",Stat="PushupPoints",Help="Starts push-ups with K and times Space to the current gauge. Rests when stamina is low."},
-	{Id="speed",Name="Speed",Stat="Physics_Running",Help="Double-taps W, then runs in your camera direction. Stops at obstacles or ledges; rests for stamina."},
-	{Id="climb",Name="Climb",Stat="Physics_Climbing",Help="Face a nearby wall. Climbs, waits to land, then repeats. Rests for stamina; stops if the wall is lost."},
+	{Id="meditation",Name="Meditation",Key="M",Stat="MeditationPoints",GainLabel="Meditation points",Help="Answers each current key prompt. Starts with M; stops at the meditation limit."},
+	{Id="strength",Name="Strength",Key="K",Stat="PushupPoints",GainLabel="Push-ups",Help="Starts push-ups with K and times Space to the current gauge. Rests when stamina is low."},
+	{Id="speed",Name="Speed",Stat="Physics_Running",GainLabel="Running training",Help="Runs in your camera direction, including against a wall. Rests for stamina and continues while tabbed out."},
+	{Id="climb",Name="Climb",Stat="Physics_Climbing",GainLabel="Climbing training",Help="Face a nearby wall. Climbs, waits to land, then repeats. Rests for stamina; stops if the wall is lost."},
 }
 local active,closed,focused=nil,false,true
 local held={}
@@ -2000,7 +2000,7 @@ end
 local function save(c,reason)
 	if type(writefile)~="function" then return end
 	if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal") end
-	local report="HUNTER X ENTER AUTO "..c.Mode.Name:upper().." v1\nNormal keyboard inputs; no remote calls.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
+	local report="HUNTER X ENTER AUTO "..c.Mode.Name:upper().." v2\nRoblox-internal keyboard inputs; no OS keyboard input or remote calls.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
 	pcall(writefile,"AnomalyHub/universal/hunter_auto_"..c.Mode.Id.."_test.txt",report)
 	pcall(writefile,c.Archive,report)
 end
@@ -2015,7 +2015,9 @@ local function releaseAll()
 	return next(held)==nil
 end
 local function readyForInput()
-	return focused and not input:GetFocusedTextBox() and not guiService.MenuIsOpen
+	-- VirtualInputManager targets Roblox, including while its window is inactive.
+	-- Never fall back to OS/executor-global keyboard injection here.
+	return not input:GetFocusedTextBox() and not guiService.MenuIsOpen
 end
 local function press(c,key,duration)
 	if active~=c or not readyForInput() or held[key] then return false end
@@ -2124,9 +2126,14 @@ local function movement(c,humanoid,root,now)
 	local dir=direction();if not dir then stop("Face the direction you want to train");return end
 	if c.Mode.Id=="speed" then
 		if humanoid.FloorMaterial==Enum.Material.Air then stop("Ground lost; running stopped");return end
-		if cast(c,root.Position,dir*6)then stop("Obstacle ahead");return end
-		local floor=cast(c,root.Position+dir*6,Vector3.new(0,-10,0))
-		if not floor or floor.Material==Enum.Material.Water or floor.Normal.Y<.5 then stop("Ledge or unsafe ground ahead");return end
+		local obstacle=cast(c,root.Position,dir*6)
+		c.WallRunning=obstacle~=nil
+		-- A wall is an intentional training spot. Check ahead for ledges only
+		-- when the route is open; the space behind a wall need not have a floor.
+		if not obstacle then
+			local floor=cast(c,root.Position+dir*6,Vector3.new(0,-10,0))
+			if not floor or floor.Material==Enum.Material.Water or floor.Normal.Y<.5 then stop("Ledge or unsafe ground ahead");return end
+		end
 		if c.Phase=="start" then
 			c.Phase="tap";c.Next=now+.14;press(c,"W",.065)
 		elseif c.Phase=="tap" and now>=c.Next and not held.W then
@@ -2134,7 +2141,7 @@ local function movement(c,humanoid,root,now)
 		elseif c.Phase=="run" then
 			if now-c.RunAt>2 and c.Character:GetAttribute("Running")~=true then stop("Sprint was not confirmed");return end
 			if now>=c.CheckMotion then
-				if (root.Position-c.Position).Magnitude<1 then stop("Not moving; stopped");return end
+				if not obstacle and (root.Position-c.Position).Magnitude<1 then stop("Not moving; stopped");return end
 				c.Position=root.Position;c.CheckMotion=now+2
 			end
 		end
@@ -2203,7 +2210,8 @@ local function start(mode)
 	if active and active.Mode==mode then stop("Disabled");return end
 	if active then stop("Switched activity")end
 	if next(held)then mode.Status.Text="Waiting for held keys to release";return end
-	if not vim or not readyForInput()then mode.Status.Text="Focus Roblox and close chat/menu first";return end
+	if not vim then mode.Status.Text="Roblox input is unavailable";return end
+	if not readyForInput()then mode.Status.Text="Close Roblox chat/menu first";return end
 	local character=player.Character;local humanoid=character and character:FindFirstChildOfClass("Humanoid")
 	if not humanoid or humanoid.Health<=0 then mode.Status.Text="Wait for your character";return end
 	if controller.StopHunterRecording then controller.StopHunterRecording("MACRO_STARTED")end
@@ -2219,7 +2227,7 @@ local function start(mode)
 	note(c,"START mode="..mode.Id);save(c,"RUNNING")
 end
 for index,mode in ipairs(modes)do
-	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v1",mode.Help,218);card.LayoutOrder=-50+index
+	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v2",mode.Help,218);card.LayoutOrder=-50+index
 	mode.Button=ui.FitColumn(ui.Button(card,"Auto "..mode.Name..": OFF",0,0,180,function()start(mode)end),0,72)
 	mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,88),BackgroundTransparency=1,Font=Enum.Font.Gotham,
 		TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
@@ -2229,7 +2237,13 @@ local function update()
 	local now=os.clock()
 	for key,info in pairs(held)do if not active or now>=info.Until then release(key)end end
 	local c=active;if not c then return end
-	if not readyForInput()then stop("Stopped for chat, menu, or lost focus");return end
+	if not readyForInput()then stop("Stopped for Roblox chat or menu");return end
+	if c.Rearm then
+		if not releaseAll()then stop("Key release failed");return end
+		c.Rearm=nil;c.SecondAt=nil
+		if not c.Mode.Key then c.Phase="start";c.AttemptAt=now end
+		note(c,"FOCUS_INPUTS_RESET")
+	end
 	if player.Character~=c.Character then stop("Character changed");return end
 	local h=c.Character:FindFirstChildOfClass("Humanoid");local root=c.Character:FindFirstChild("HumanoidRootPart")
 	if not h or h.Health<=0 or not root then stop("Character unavailable");return end
@@ -2261,15 +2275,22 @@ local function update()
 	if c.Mode.Key then prompts(c,now)else movement(c,h,root,now)end
 	if active~=c then return end
 	local stat=player:GetAttribute(c.Mode.Stat)
-	local gain=finite(stat)and finite(c.StartStat)and string.format(" · Gain %.3f",stat-c.StartStat)or ""
-	c.Mode.Status.Text=(status or "Meditation")..gain..string.format("\nConfirmed: %d · Perfect: %d · Climbs: %d",c.Confirmed,c.Perfect,c.Cycles)
+	local gain=finite(stat)and finite(c.StartStat)and string.format(" · %s %+.3f",c.Mode.GainLabel,stat-c.StartStat)or ""
+	c.Mode.Status.Text=(c.WallRunning and "Wall running · " or "")..(status or "Meditation")..gain
+		..string.format("\n%s · Confirmed: %d · Perfect: %d · Climbs: %d",focused and "Foreground" or "Background",c.Confirmed,c.Perfect,c.Cycles)
 end
 controller.Connect(run.Heartbeat,function()
 	local ok,err=pcall(update)
 	if not ok then if active then note(active,"ERROR "..tostring(err))end;stop("Macro error; stopped")end
 end)
-controller.Connect(input.WindowFocusReleased,function()focused=false;stop("Roblox lost focus")end)
-controller.Connect(input.WindowFocused,function()focused=true end)
+local function focusChanged(value)
+	focused=value
+	if active then
+		active.Rearm=true;note(active,value and "FOCUS_RETURNED" or "BACKGROUND_CONTINUE");save(active,"RUNNING")
+	end
+end
+controller.Connect(input.WindowFocusReleased,function()focusChanged(false)end)
+controller.Connect(input.WindowFocused,function()focusChanged(true)end)
 controller.Connect(input.TextBoxFocused,function()stop("Text entry opened")end)
 controller.Connect(player.OnTeleport,function()stop("Teleport")end)
 controller.RegisterCleanup(function()stop("Unload");closed=true end)

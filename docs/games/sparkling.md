@@ -26,7 +26,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
 | Auto parry | Two animation IDs, 8-stud range, facing and line-of-sight gates, brief F input | First v1 log reviewed; outcomes ambiguous | Reliable timing, coverage, and causality unverified |
 | NPC ESP v1 (SP-T010) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-T012): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v6 (SP-T017) | **Combat → Auto Parry // TIMING TEST**. Five shared combo trials, timing/hold controls, actual F input and continuous diagnostics; possible opponent-parry correlation | 121 mocked assertions and source/public/private compilation passed; active v6 untested live | Short active timing trial at offset=0 ms / hold=120 ms |
+| Combat page v6 (SP-T017) | **Combat → Auto Parry // TIMING TEST**. Five shared combo trials, timing/hold controls, actual F input and continuous diagnostics; possible opponent-parry correlation | 121 mocked assertions and compilation passed; live inputs/logging reviewed in SP-T018, timing reliability unproven | Investigate head-effect LOS and delayed request correlation before further timing changes |
 | Parry diagnostics v2 | Decision/geometry/input/action/state/outcome logs with session histories | 47 mocked assertions and build compilation | Real executor hook coverage and live results |
 
 ## Sources and capture workflow
@@ -446,3 +446,48 @@ Report header is diagnostics **v4 // ACTIVE TIMING TEST** with trial seeds, timi
 **Validation:** 121 mocked assertions passed (47 logger/lifecycle regressions, 42 active-catalog/timing/LOS/counter tests, 26 PvP/PvE tests, 6 settings/migration checks). Changed source and public/private variants compile. No live active timing test was performed by this chat. Mock checks include walls behind dummies, near-expiry cooldown rechecks with changed geometry, all five combo IDs, both target types, recipient-counter pairing in both orders, unrelated/distant/stale/wrong-duration exclusions, key-up cleanup and timing bounds.
 
 Next: reload the updated hub; retain offset=0 and hold=120 for the first short active trial so the starting configuration is reproducible. Enable desired target types and Auto Parry. Disable it after the exchange to finalize. Inspect actual F_DOWN/observed Defend/F_UP, damage and self/other counter timing, deferrals and release errors before changing one timing parameter at a time. Do not equate a counter-message ratio or absence of damage with confirmed success. Keep raw captures and player identifiers local.
+
+
+## SP-011 / SP-T018 — first active baseline results (2026-11-17)
+
+Reviewed diagnostics-v4 histories starting Unix **1794949315** and **1794949417**, both in main-world place `110405289082842`. Configuration: active test, PvP/PvE enabled, range 8, offset **0 ms**, hold **120 ms**, no setting changes. Raw captures remain local.
+
+| Session | Duration / stop | F attempts | Self-counter messages | Other-counter messages | Possible-parried correlations | Negative health events |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1794949315 | 66.404 s / focus loss | 2 | 1 | 8 | 0 | 17 |
+| 1794949417 | 67.990 s / manual disable | 19 | 2 | 5 | 3 | 36 |
+
+Both ended with `held=false`, zero dropped lines, no error/input-failure/release-failure/frame-gap events. All 21 attempted F-down calls had one corresponding observed `Defend,true`; all 21 F-up API calls succeeded and were followed by observed `Defend,false`. All actual attempts in these two sessions targeted Thug5; other player candidates were observed but did not produce attempts.
+
+### Important input-path timing
+
+Observed request timestamps are **client hook receipt**, not server receipt. Pair each true call using its `duringAttempt` ID, then pair the first false call within 150 ms after the corresponding successful F_UP. All 21 releases have such a false call.
+
+| Measurement | Earlier session | Latest session |
+| --- | --- | --- |
+| F_DOWN log → observed `Defend,true` | 40.7–51.5 ms | **37.9–59.2 ms**, median 46.6 ms |
+| F_UP log → observed `Defend,false` | 0.9–1.3 ms | 0.9–2.6 ms, median 1.1 ms |
+| Observed true → false request span | 83.6–92.9 ms | **81.4–115.6 ms**, median 91.1 ms |
+| Actual API-key hold from F_UP field | 123.1–143.9 ms | 123.7–160.7 ms |
+
+This is evidence of a delayed game request after the synthetic F press and asymmetric press/release processing. A 120 ms configured key hold does not mean a 120 ms observed Defend-request span. The logs do not establish why the delay occurs or its server-side effect. Do not “correct” a delay simply by subtracting network ping.
+
+**Logging limitation:** delayed false requests have `duringAttempt=none` because the module clears its held flag after the F-up API succeeds, before the game processes the event. That does not mean release was absent. Future request correlation should retain recent release IDs/timestamps and explicitly mark temporal matches without claiming manual/synthetic origin is proven.
+
+### Outcomes and attribution limits
+
+The earlier self counter at 17.9765 followed attempt 1 by about 0.3435 s. The latest session's two self counters are both ambiguous: at **17.9543**, attempts 6/7/8 fell in the preceding second; at **38.9380**, attempts 14/15 did. Counter-message count divided by attempt count is not a valid measured success rate.
+
+In the latest session, 16 of 19 attempts were followed by a negative-health observation within 0.5 s, and 17 within 1 s. Some successive attempts share the same later damage event; these are not independent failures or proof of which attack caused damage. Attempts 8 and 19 had no negative-health event in the next second, which likewise does not prove success. The baseline is **not established as reliable** despite functioning input and logging.
+
+Three `POSSIBLE_PARRIED` events occurred at **28.6463, 37.2402, 41.5476 seconds** against the nearby NPC binding. Recent local attack ages were about 0.044, 0.100 and 0.180 s; distances about 3.305, 6.001 and 6.000 studs; the paired local half-second cooldown notices followed the other counter by about 1.7–2.1 ms. These meet the implemented correlation rules, but attacker identity remains unconfirmed. No key was held at these three moments, so this session verifies correlation logging, not a live counter-triggered key-release path.
+
+### Remaining obstructions / decisions
+
+The latest session logged **three** LOS rejections, all naming `Workspace.Visuals.anotherHead<local-character>` at **12.0895, 35.4161 and 63.3236 seconds**, at distances 6.335, 2.057 and 7.216 studs with facing checks passing. The earlier session also logged two of these head-effect obstructions. The current narrow Z-vanish-dummy exclusion deliberately does not cover this separate object; no successful proposal in these sessions logged an ignored Z-vanish dummy, so its live benefit is not demonstrated here.
+
+Other earlier-session LOS blockers were a real nearby NPC's arm/GripBrick and a map tree's Leaves. Do not fix visual obstructions by ignoring every rig or all level geometry. Inspect/identify the exact local head-effect object and scope any exclusion to it.
+
+Latest mapped rejection reasons besides LOS: Counter cooldown 10, attacker facing 4, manual/input F already down 2, out of range 8. There were no DEFER events in either session, so short-cooldown rechecks remain mock-validated only. Existing shared combo coverage remains enabled.
+
+Verdict: **live active input/cleanup/request observation and opponent-counter correlation logging verified; timings and actual parry reliability unproven.** No code or timing values changed during this review. Next priority is the repeatedly observed head-effect obstruction and better delayed-request/release correlation, then timing trials that account for the measured input-to-request lag. Preserve this baseline and change one timing variable at a time; do not infer reliable timing from raw counter ratios.

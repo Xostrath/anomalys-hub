@@ -344,6 +344,7 @@ local pageMeta = {
 	Auto = {"AUTO", "Automatic activities and setup controls"},
 	Recorders = {"RECORDERS", "Capture manual play to prepare or improve game features"},
 	Combat = {"COMBAT", "Combat recording and defense tools"},
+	Visuals = {"VISUALS", "Profile details for you or another player"},
 	Servers = {"SERVER NAVIGATION", "Rejoin or move to another public server"},
 	Settings = {"SETTINGS", "Persistence, keybind, reload, and cleanup"},
 }
@@ -367,7 +368,7 @@ for _, name in ipairs({"Home", "General", "ESP", "Servers", "Settings"}) do make
 if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
 if env.__AnomalyDetectedProfile == "HunterXEnter" then makePage("Auto") end
 -- Sparkling has no autos yet; its Auto Parry lives on Combat.
-if env.__AnomalyDetectedProfile == "Sparkling" then makePage("Combat") end
+if env.__AnomalyDetectedProfile == "Sparkling" then makePage("Combat"); makePage("Visuals") end
 if env.__AnomalyDetectedProfile == "HunterXEnter" or env.__AnomalyDetectedProfile == "Sparkling" then makePage("Recorders") end
 
 local function selectTab(name)
@@ -392,6 +393,7 @@ end
 local tabNames = {{"Home", "Dashboard","MAIN","◈"}, {"General", "General",nil,"◉"}}
 if pages.Auto then table.insert(tabNames,{"Auto","Auto",nil,"↻"})end
 if pages.Combat then table.insert(tabNames,{"Combat","Combat",nil,"◇"})end
+if pages.Visuals then table.insert(tabNames,{"Visuals","Visuals",nil,"◐"})end
 table.insert(tabNames,{"ESP","Player & NPC ESP","VISION","◎"})
 table.insert(tabNames,{"Servers","Servers","UTILITIES","≡"})
 if pages.Recorders then table.insert(tabNames,{"Recorders","Recorders",nil,"◌"})end
@@ -2390,6 +2392,223 @@ controller.RegisterCleanup(function()
 	stopWatching()
 end)
 if state.NpcEspEnabled then startWatching() end
+
+end)()
+;(function()
+-- Sparkling Visuals tab: profile details for you or a selected player. Read-only; sends no game requests.
+-- Each field reads only a source confirmed in a capture. Unconfirmed fields say so instead of guessing (2026-11-17).
+-- Recorders -> Sparkling Profile Scan finds the sources for the rest.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local players=game:GetService("Players")
+local rs=game:GetService("ReplicatedStorage")
+local run=game:GetService("RunService")
+local ui=controller.UI
+local colors=ui.Colors
+local page=ui.Pages.Visuals
+if not page then return end
+local localPlayer=players.LocalPlayer
+
+local function finite(value)return type(value)=="number" and value==value and math.abs(value)<math.huge end
+local function commas(n)
+ local text=tostring(math.floor(n+.5))
+ return (text:reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,",""):gsub("^%-,","-"))
+end
+-- A source is {Root="Character"|"Player", Path={child names...}, Attribute=name?}; the first one that resolves wins.
+local function read(target,source)
+ local object=source.Root=="Player" and target or target.Character
+ for _,name in ipairs(source.Path or {})do
+  object=object and object:FindFirstChild(name)
+ end
+ if not object then return nil end
+ if source.Attribute then return object:GetAttribute(source.Attribute)end
+ if object:IsA("ValueBase")then return object.Value end
+ return nil
+end
+local function show(value)
+ if value==nil then return nil end
+ if finite(value)then return math.abs(value)>=1000 and commas(value) or (value%1==0 and tostring(value) or string.format("%.1f",value))end
+ if type(value)=="string" and value:match("%S")then return value end
+ if type(value)=="boolean" then return value and "Yes" or "No" end
+ return nil
+end
+-- Confirmed sources only. Everything with Sources={} still needs the Profile Scan.
+local FIELDS={
+ {Label="Combat Experience (CEXP)",Sources={}},
+ {Label="Battle Power",Sources={{Root="Character",Path={"PowerLevel"}}}},
+ {Label="Stats",Sources={}},
+ {Label="Personality",Sources={}},
+ {Label="Race",Sources={{Root="Character",Attribute="Race"}}},
+ {Label="Race Variant",Sources={}},
+ {Label="Form Mastery",Sources={}},
+ {Label="Limit Break Progress",Sources={}},
+ {Label="Karma",Sources={}},
+ {Label="Latent Power",Sources={}},
+ {Label="Emotion",Sources={}},
+ {Label="Relationships",Sources={}},
+}
+
+-- Player picker: defaults to you; the list rebuilds as players join and leave.
+local target=localPlayer
+local pickSection=ui.Section(page,"Player",40,true)
+pickSection.Frame.LayoutOrder=1
+local picker=ui.Button(pickSection.Body,"",14,0,180,nil)
+picker.Size=UDim2.new(1,-28,0,32)
+local list=ui.Create("ScrollingFrame",{Position=UDim2.fromOffset(14,38),Size=UDim2.new(1,-28,0,160),BackgroundColor3=colors.Surface,
+ BorderSizePixel=0,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollBarThickness=4,ScrollBarImageColor3=colors.Accent,Visible=false},pickSection.Body)
+ui.Create("UICorner",{CornerRadius=UDim.new(0,4)},list)
+ui.Create("UIListLayout",{Padding=UDim.new(0,3),SortOrder=Enum.SortOrder.LayoutOrder},list)
+ui.Create("UIPadding",{PaddingTop=UDim.new(0,4),PaddingBottom=UDim.new(0,4),PaddingLeft=UDim.new(0,4),PaddingRight=UDim.new(0,4)},list)
+local function label(player)return player==localPlayer and ("You ("..player.DisplayName..")") or (player.DisplayName.." (@"..player.Name..")")end
+local function refreshPicker()picker.Text="Viewing: "..(target and label(target) or "nobody").."  "..(list.Visible and "^" or "v")end
+local function setOpen(open)
+ list.Visible=open;pickSection.SetHeight(open and 206 or 40);refreshPicker()
+end
+local function rebuild()
+ for _,child in ipairs(list:GetChildren())do if child:IsA("GuiButton")then child:Destroy()end end
+ local everyone=players:GetPlayers()
+ table.sort(everyone,function(a,b)
+  if a==localPlayer then return true elseif b==localPlayer then return false end
+  return a.DisplayName:lower()<b.DisplayName:lower()
+ end)
+ for index,player in ipairs(everyone)do
+  local option=ui.Button(list,label(player),0,0,180,function()target=player;setOpen(false)end,player==target and colors.AccentSoft or nil)
+  option.Size=UDim2.new(1,-8,0,28);option.LayoutOrder=index;option.TextXAlignment=Enum.TextXAlignment.Left
+ end
+end
+controller.Connect(picker.Activated,function()if not list.Visible then rebuild()end;setOpen(not list.Visible)end)
+controller.Connect(players.PlayerAdded,function()if list.Visible then rebuild()end end)
+controller.Connect(players.PlayerRemoving,function(player)
+ if player==target then target=localPlayer end
+ if list.Visible then task.defer(rebuild)end
+ refreshPicker()
+end)
+setOpen(false)
+
+-- Profile rows: label on the left, value on the right.
+local ROW=24
+local profile=ui.Section(page,"Profile",#FIELDS*ROW+30,true)
+profile.Frame.LayoutOrder=2
+local values={}
+for index,field in ipairs(FIELDS)do
+ local y=(index-1)*ROW
+ ui.Create("TextLabel",{Position=UDim2.fromOffset(14,y),Size=UDim2.new(.5,-14,0,ROW),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=11,
+  TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text=field.Label},profile.Body)
+ values[index]=ui.Create("TextLabel",{Position=UDim2.new(.5,0,0,y),Size=UDim2.new(.5,-14,0,ROW),BackgroundTransparency=1,Font=Enum.Font.GothamSemibold,TextSize=11,
+  TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Right,TextTruncate=Enum.TextTruncate.AtEnd,Text=""},profile.Body)
+end
+ui.Create("TextLabel",{Position=UDim2.fromOffset(14,#FIELDS*ROW+4),Size=UDim2.new(1,-28,0,24),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=9,
+ TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="\"Not found yet\" means the game's source for that field hasn't been located. Run Recorders -> Sparkling Profile Scan with your stats menu open."},profile.Body)
+
+local elapsed=0
+controller.Connect(run.Heartbeat,function(dt)
+ elapsed+=dt
+ if elapsed<.5 or not page.Visible then return end
+ elapsed=0
+ if not target or target.Parent~=players then target=localPlayer;refreshPicker()end
+ for index,field in ipairs(FIELDS)do
+  local text
+  if #field.Sources==0 then text="Not found yet"
+  else
+   for _,source in ipairs(field.Sources)do
+    local ok,value=pcall(read,target,source)
+    text=ok and show(value) or nil
+    if text then break end
+   end
+   text=text or (target.Character and "Unavailable" or "No character")
+  end
+  values[index].Text=text
+  values[index].TextColor3=(text=="Not found yet" or text=="Unavailable" or text=="No character") and colors.Muted or colors.Text
+ end
+end)
+
+-- Recorders: one bounded, read-only scan to locate every requested field.
+local KEYWORDS={"cexp","exp","combat","karma","latent","emotion","mood","relation","friend","rival","bond","personality","trait","variant",
+ "mastery","limit","break","stat","strength","durability","agility","speed","power","race","form","potential","level"}
+local function matches(text)
+ text=tostring(text):lower()
+ for _,word in ipairs(KEYWORDS)do if text:find(word,1,true)then return word end end
+ return nil
+end
+local card=ui.Card(ui.Pages.Recorders,"SPARKLING PROFILE SCAN","Finds where CEXP, stats, personality, karma and the other Visuals fields live. Open your in-game stats/profile menu first. No requests are sent.",200)
+card.LayoutOrder=31
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,70),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Ready. Output: sparkling_profile_scan_latest.txt"},card)
+local busy=false
+local function scan()
+ if busy or controller.IsUnloaded()then return end
+ busy=true;status.Text="Scanning..."
+ local ok,err=pcall(function()
+  local lines={"SPARKLING PROFILE SCAN v1 // READ ONLY","place="..game.PlaceId.." universe="..game.GameId,
+   "Locates Visuals fields. VALUE/ATTRIBUTE = replicated data; UI = text in your PlayerGui (only the game's menu, may be local-only).",
+   "Own Player and Character: every value and attribute. Other players and ReplicatedStorage: keyword matches only. Limits are reported."}
+  local function log(s)if #lines<6000 then table.insert(lines,s)end end
+  local function dump(object,all)
+   local hit=all or matches(object.Name)
+   if object:IsA("ValueBase") and hit then log("VALUE "..object:GetFullName().." ["..object.ClassName.."]="..tostring(object.Value):sub(1,160))end
+   for key,value in pairs(object:GetAttributes())do
+    if all or matches(key) or hit then log("ATTRIBUTE "..object:GetFullName().."@"..key.." ["..typeof(value).."]="..tostring(value):sub(1,160))end
+   end
+  end
+  local function walk(root,all,limit,skip)
+   local queue,index={root},1
+   while index<=#queue do
+    local object=queue[index];index+=1
+    if index>limit then log("LIMIT "..root:GetFullName().." "..limit.." objects");break end
+    if not (skip and skip(object))then
+     dump(object,all)
+     for _,child in ipairs(object:GetChildren())do table.insert(queue,child)end
+    end
+   end
+  end
+  local private=function(object)return object:IsA("PlayerGui") or object:IsA("PlayerScripts") or object:IsA("Backpack")end
+  for _,player in ipairs(players:GetPlayers())do
+   local own=player==localPlayer
+   log("PLAYER "..(own and "self" or "other").." "..player:GetFullName())
+   walk(player,own,own and 4000 or 1500,private)
+   -- Character parts carry many unrelated values; own character still dumps everything under 3000 objects.
+   if player.Character then walk(player.Character,own,own and 3000 or 1500,nil)end
+  end
+  log("REPLICATEDSTORAGE")
+  local names={}
+  for _,player in ipairs(players:GetPlayers())do names[player.Name:lower()]=true;names[tostring(player.UserId)]=true end
+  local seen=0
+  for _,object in ipairs(rs:GetDescendants())do
+   seen+=1
+   if seen>40000 then log("LIMIT ReplicatedStorage 40000 objects");break end
+   if names[object.Name:lower()] or ((object:IsA("ValueBase") or object:IsA("Folder") or object:IsA("Configuration")) and matches(object.Name))then
+    log("RS "..object:GetFullName().." ["..object.ClassName.."]"..(object:IsA("ValueBase") and ("="..tostring(object.Value):sub(1,120)) or ""))
+   end
+  end
+  log("UI (your PlayerGui text matching keywords; open the stats/profile menu before scanning)")
+  local gui=localPlayer:FindFirstChildOfClass("PlayerGui")
+  if gui then
+   local count,shown=0,0
+   for _,object in ipairs(gui:GetDescendants())do
+    count+=1
+    if count>40000 then log("LIMIT PlayerGui 40000 objects");break end
+    if (object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox")) and object.Text:match("%S") and not object:IsDescendantOf(ui.Gui) then
+     if matches(object.Text) or matches(object.Name) or matches(object.Parent and object.Parent.Name or "") then
+      shown+=1
+      if shown<=1500 then log("UI "..object:GetFullName().." visible="..tostring(object.Visible).." text="..string.format("%q",object.Text:sub(1,120)))end
+     end
+    end
+   end
+   log("UI matches="..shown)
+  end
+  log("END")
+  local report=table.concat(lines,"\n")
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  local saved=type(writefile)=="function" and pcall(writefile,"AnomalyHub/universal/sparkling_profile_scan_latest.txt",report)
+  status.Text=saved and ("Saved "..#lines.." lines to sparkling_profile_scan_latest.txt.") or "Save failed."
+ end)
+ busy=false
+ if not ok then status.Text="Scan failed: "..tostring(err):sub(1,160)end
+end
+local button=ui.Button(card,"Run Profile Scan",14,72,180,scan,colors.AccentSoft)
+button.Size=UDim2.new(1,-28,0,34)
 
 end)()
 ;(function()

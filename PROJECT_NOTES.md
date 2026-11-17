@@ -158,3 +158,10 @@ The user explicitly superseded record-only mode and requested active auto parry 
 ### Sparkling correlation and LOS diagnostics (2026-11-17)
 
 Combat page v7 / diagnostics v5 retains recent F pulses for asynchronous request correlation, flags early releases/intervening inputs, and logs bounded LOS object properties. LOS reraycasts past the exact current local head-effect BasePart under Workspace.Visuals. Timings are unchanged; v5 is compile/mock validated and awaits live testing. See [Sparkling SP-T021](docs/games/sparkling.md) for fields, evidence limits and the next check.
+
+
+### Sparkling Visuals tab (2026-11-17)
+
+Sparkling has a **Visuals** tab (`src/SparklingVisuals.lua`; page created in `src/UniversalHub.lua`, after Combat in the sidebar). A player dropdown at the top defaults to you. Profile rows cover CEXP, battle power, stats, personality, race and race variant, form mastery, limit break progress, karma, latent power, emotion and relationships.
+
+Only fields with a confirmed source are read (battle power, race). The rest show "Not found yet" until **Recorders → Sparkling Profile Scan** locates them. ESP/Visuals experiment IDs use the separate **SP-V###** series; see the [Sparkling note](docs/games/sparkling.md).

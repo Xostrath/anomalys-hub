@@ -267,7 +267,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v3\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v4\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
 	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1390,24 +1390,24 @@ local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "HunterXEnter" then return end
 
-controller.AdapterStatus = "Player/NPC ESP and macro recorders ready"
+controller.AdapterStatus = "ESP, training macros and recorders ready"
 controller.GameIdentity = {
 	UniverseId = 9857379797,
 	ObservedPlaceId = 76571518635501,
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v3",
-	"Player/NPC ESP and manual-play recorders are ready. Macros are not automated yet.", 116)
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v4",
+	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 72), Size = UDim2.new(1, -28, 0, 28),
 	BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 11,
 	TextColor3 = ui.Colors.Muted, TextWrapped = true,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Text = "Training recorders are in Auto. Each capture keeps its own session history.",
+	Text = "Auto: meditation, strength, speed and climbing. Physical training watches the stamina bar.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v3 loaded; ESP and macro recorders ready.")
+print("[Anomaly] Hunter X Enter adapter v4 loaded; training macros ready.")
 
 end)()
 ;(function()
@@ -1886,6 +1886,7 @@ local function start(mode)
 	if closed or controller.IsUnloaded() then return end
 	if active and active.Mode==mode then stop("STOPPED");return end
 	if active then stop("SWITCHED_ACTIVITY") end
+	if controller.StopHunterTraining then controller.StopHunterTraining("Manual recording started") end
 	serial+=1
 	local ok,nonce=pcall(Http.GenerateGUID,Http,false)
 	if not ok then nonce=tostring(math.floor(os.clock()*1000000)).."_"..serial end
@@ -1948,8 +1949,330 @@ controller.Connect(Run.Heartbeat,function()
 	c.Mode.Status.Text=string.format("Recording %.0fs / 120s · %d lines%s\n%s\n%s",now-c.Started,#c.Lines,
 		c.Mode.Id=="block" and (" · nearby actors: "..tostring(c.Nearby)) or "",c.Mode.Help,c.Coverage or "")
 end)
+controller.StopHunterRecording=stop
 controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
 controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)
+
+end)()
+;(function()
+-- Normal-key training macros. Incoming prompts only; never submit game requests.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter" then return end
+local player=game:GetService("Players").LocalPlayer
+local input=game:GetService("UserInputService")
+local guiService=game:GetService("GuiService")
+local run=game:GetService("RunService")
+local world=game:GetService("Workspace")
+local rs=game:GetService("ReplicatedStorage")
+local http=game:GetService("HttpService")
+local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
+local ui=controller.UI
+local modes={
+	{Id="meditation",Name="Meditation",Key="M",Stat="MeditationPoints",Help="Answers each current key prompt. Starts with M; stops at the meditation limit."},
+	{Id="strength",Name="Strength",Key="K",Stat="PushupPoints",Help="Starts push-ups with K and times Space to the current gauge. Rests when stamina is low."},
+	{Id="speed",Name="Speed",Stat="Physics_Running",Help="Double-taps W, then runs in your camera direction. Stops at obstacles or ledges; rests for stamina."},
+	{Id="climb",Name="Climb",Stat="Physics_Climbing",Help="Face a nearby wall. Climbs, waits to land, then repeats. Rests for stamina; stops if the wall is lost."},
+}
+local active,closed,focused=nil,false,true
+local held={}
+local stop
+local function finite(n)return type(n)=="number" and n==n and math.abs(n)<math.huge end
+-- Captured character HUD: Y scale .936822295 paired with PctLabel "94%".
+-- It may hide when full. Read its live values even then, never infer full from absence.
+function controller.ReadHunterStamina()
+	local character=player.Character
+	local bar=character and character:FindFirstChild("StaminaBar3D")
+	local container=bar and bar:FindFirstChild("Container")
+	local fill=container and container:FindFirstChild("Fill")
+	local label=container and container:FindFirstChild("PctLabel")
+	if not fill or not fill:IsA("Frame") or not label or not label:IsA("TextLabel") then return nil end
+	local fraction=fill.Size.Y.Scale
+	local percent=tonumber(label.Text:match("^%s*(%d+)%s*%%%s*$"))
+	if not finite(fraction)or fraction<0 or fraction>1 or fill.Size.Y.Offset~=0 or not percent or percent<0 or percent>100 then return nil end
+	if math.abs(fraction-percent/100)>.035 then return nil end
+	return math.min(fraction,percent/100),"Character.StaminaBar3D.Container.Fill"
+end
+local function note(c,text)
+	if #c.Lines>=1000 then table.remove(c.Lines,1)end
+	table.insert(c.Lines,string.format("%.4f %s",os.clock()-c.Started,text))
+end
+local function save(c,reason)
+	if type(writefile)~="function" then return end
+	if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal") end
+	local report="HUNTER X ENTER AUTO "..c.Mode.Name:upper().." v1\nNormal keyboard inputs; no remote calls.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
+	pcall(writefile,"AnomalyHub/universal/hunter_auto_"..c.Mode.Id.."_test.txt",report)
+	pcall(writefile,c.Archive,report)
+end
+local function release(key)
+	if not held[key] then return true end
+	local ok=pcall(function()vim:SendKeyEvent(false,Enum.KeyCode[key],false,game)end)
+	if ok then held[key]=nil end
+	return ok
+end
+local function releaseAll()
+	for key in pairs(held)do for _=1,3 do if release(key)then break end end end
+	return next(held)==nil
+end
+local function readyForInput()
+	return focused and not input:GetFocusedTextBox() and not guiService.MenuIsOpen
+end
+local function press(c,key,duration)
+	if active~=c or not readyForInput() or held[key] then return false end
+	held[key]={Until=duration and (os.clock()+duration) or math.huge}
+	local ok=pcall(function()vim:SendKeyEvent(true,Enum.KeyCode[key],false,game)end)
+	if not ok then stop("Input unavailable");return false end
+	note(c,"KEY_DOWN "..key)
+	return active==c
+end
+stop=function(reason)
+	local c=active;active=nil
+	local released=releaseAll()
+	if not c then return end
+	for _,connection in ipairs(c.Connections)do connection:Disconnect()end
+	c.Mode.Button.Text="Auto "..c.Mode.Name..": OFF";c.Mode.Button.BackgroundColor3=ui.Colors.Surface
+	c.Mode.Status.Text=reason..(released and "" or "; key release failed—retrying")
+	note(c,"STOP "..reason);save(c,reason)
+end
+controller.StopHunterTraining=stop
+local function visible(object)
+	if not object then return false end
+	while object and object~=player do
+		if object:IsA("GuiObject") and not object.Visible then return false end
+		if object:IsA("LayerCollector") and not object.Enabled then return false end
+		object=object.Parent
+	end
+	return true
+end
+local function trainingGui(mode)
+	local pg=player:FindFirstChildOfClass("PlayerGui")
+	local screen=pg and pg:FindFirstChild(mode=="strength" and "PushupUI" or "MeditationUI")
+	return screen and screen:FindFirstChild(mode=="strength" and "PushupGauge" or "KeyFrame")
+end
+local function bind(c,remote,callback)
+	if not remote or not remote:IsA("RemoteEvent") then return false end
+	table.insert(c.Connections,remote.OnClientEvent:Connect(function(...)
+		if active~=c then return end
+		local ok,err=pcall(callback,...)
+		if not ok then note(c,"ERROR "..tostring(err));stop("Prompt handling failed")end
+	end))
+	return true
+end
+local function installPrompts(c)
+	local folder=rs:FindFirstChild("RemoteEvents")
+	local prefix=c.Mode.Id=="strength" and "Pushup" or "Meditation"
+	c.Remote=folder and folder:FindFirstChild(prefix.."UI")
+	local sync=folder and folder:FindFirstChild(prefix.."Sync")
+	if not bind(c,sync,function(who,action)
+		if who~=player then return end
+		if action=="Start" then c.Training=true;note(c,"TRAINING_STARTED")
+		elseif action=="Stop" then
+			if c.Rest then
+				c.Training=false;c.StartAttempt=nil;c.Pending=nil;c.Awaiting=nil;note(c,"TRAINING_STOPPED_WHILE_RESTING")
+			else stop("Game stopped training")end
+		end
+	end)then return false end
+	return bind(c,c.Remote,function(action,a,b,id)
+		if c.Mode.Id=="meditation" then
+			if action=="ShowKey" then
+				if type(a)~="string" or not a:match("^[A-Z]$") or not finite(b) or b<=0 or b>10 or not finite(id) or id%1~=0 then return end
+				if c.LastId and id<=c.LastId then return end
+				c.LastId=id;c.Training=true;c.Pending={Id=id,Key=a,Due=os.clock()+.12,Expires=os.clock()+b-.1}
+				note(c,"PROMPT key="..a.." id="..id)
+			elseif action=="Correct" and c.Awaiting and c.Awaiting.Key==a and os.clock()<c.Awaiting.Expires then
+				c.Confirmed+=1;c.Misses=0;c.Awaiting=nil;c.Pending=nil;note(c,"CONFIRMED key="..tostring(a))
+			elseif action=="HideKey" then c.Pending=nil;c.Awaiting=nil end
+		elseif action=="ShowGauge" then
+			if type(a)~="table" then return end
+			for _,key in ipairs({"id","t0","period","phase","center","width","deadline"})do if not finite(a[key])then return end end
+			if a.period<.2 or a.period>10 or a.center<=0 or a.center>=1 or a.width<=0 or a.width>1 or a.id%1~=0 then return end
+			if c.LastId and a.id<=c.LastId then return end
+			local server=world:GetServerTimeNow()
+			if a.deadline<=server or a.deadline-server>30 then return end
+			c.LastId=a.id;c.Training=true;c.Pending={Id=a.id,Gauge=table.clone(a)}
+			note(c,"GAUGE id="..a.id.." center="..a.center.." period="..a.period)
+		elseif action=="GaugeResult" and c.Awaiting and c.Awaiting.Id==a then
+			if b=="Perfect" or b=="Complete" then c.Confirmed+=1;c.Misses=0;if b=="Perfect"then c.Perfect+=1 end
+			else c.Misses+=1 end
+			note(c,"RESULT id="..tostring(a).." "..tostring(b));c.Awaiting=nil;c.Pending=nil
+		end
+	end)
+end
+local function stamina(c)
+	local read=controller.ReadHunterStamina
+	if type(read)~="function" then return nil,"Stamina bar not mapped yet" end
+	local ok,fraction,source=pcall(read)
+	if not ok or not finite(fraction) or fraction<0 or fraction>1 then return nil,"Stamina bar unavailable" end
+	return fraction,source
+end
+local function direction()
+	local camera=world.CurrentCamera
+	if not camera then return end
+	local look=camera.CFrame.LookVector
+	local flat=Vector3.new(look.X,0,look.Z)
+	return flat.Magnitude>.1 and flat.Unit or nil
+end
+local function cast(c,origin,delta)
+	local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude;params.FilterDescendantsInstances={c.Character};params.IgnoreWater=false
+	return world:Raycast(origin,delta,params)
+end
+local function wall(c,root,dir)
+	local hit=cast(c,root.Position,dir*5)
+	return hit and math.abs(hit.Normal.Y)<.6
+end
+local function movement(c,humanoid,root,now)
+	local dir=direction();if not dir then stop("Face the direction you want to train");return end
+	if c.Mode.Id=="speed" then
+		if humanoid.FloorMaterial==Enum.Material.Air then stop("Ground lost; running stopped");return end
+		if cast(c,root.Position,dir*6)then stop("Obstacle ahead");return end
+		local floor=cast(c,root.Position+dir*6,Vector3.new(0,-10,0))
+		if not floor or floor.Material==Enum.Material.Water or floor.Normal.Y<.5 then stop("Ledge or unsafe ground ahead");return end
+		if c.Phase=="start" then
+			c.Phase="tap";c.Next=now+.14;press(c,"W",.065)
+		elseif c.Phase=="tap" and now>=c.Next and not held.W then
+			c.Phase="run";c.RunAt=now;c.Position=root.Position;c.CheckMotion=now+2;press(c,"W")
+		elseif c.Phase=="run" then
+			if now-c.RunAt>2 and c.Character:GetAttribute("Running")~=true then stop("Sprint was not confirmed");return end
+			if now>=c.CheckMotion then
+				if (root.Position-c.Position).Magnitude<1 then stop("Not moving; stopped");return end
+				c.Position=root.Position;c.CheckMotion=now+2
+			end
+		end
+	else
+		if c.SecondAt and now>=c.SecondAt and not held.Space then
+			c.SecondAt=nil;press(c,"Space",2.7)
+		end
+		local climbing=c.Character:GetAttribute("IsClimbing")==true
+		if climbing then
+			if not c.Attached then c.Attached=true;c.Cycles+=1;note(c,"CLIMB_CONFIRMED cycle="..c.Cycles)end
+			c.Phase="attached"
+			if now-(c.AttemptAt or now)>6 then stop("Climb did not finish");return end
+			return
+		end
+		if c.Phase=="attached" then releaseAll();c.SecondAt=nil;c.Attached=false;c.Phase="landing";c.Next=now+.6 end
+		if c.Phase=="landing" then
+			if now>=c.Next and humanoid.FloorMaterial~=Enum.Material.Air then c.Phase="start" end
+			return
+		end
+		if c.Phase=="start" then
+			if humanoid.FloorMaterial==Enum.Material.Air then return end
+			if not wall(c,root,dir) then stop("Face a climbable wall within 5 studs");return end
+			c.Phase="wait_attach";c.AttemptAt=now;c.SecondAt=now+.22
+			press(c,"W");press(c,"Space",.08)
+		elseif c.Phase=="wait_attach" and now-c.AttemptAt>1.5 then
+			releaseAll();c.Misses+=1;c.Phase="landing";c.Next=now+.6
+			if c.Misses>=3 then stop("Wall attachment failed three times")end
+		end
+	end
+end
+local function prompts(c,now)
+	if not c.Remote.Parent then stop("Training interface unloaded");return end
+	if not c.Training then
+		local cooldown=c.Character:GetAttribute(c.Mode.Id=="meditation" and "MeditateCooldown" or "PushUpsCooldown")
+		if cooldown then c.StartWait=c.StartWait or now;if now-c.StartWait>8 then stop("Training cooldown did not clear")end;return end
+		if not c.StartAttempt then c.StartAttempt=now;press(c,c.Mode.Key,.08)
+		elseif now-c.StartAttempt>8 then stop("Training did not start; start it manually and enable again")end
+		return
+	end
+	local pending=c.Pending
+	if c.Awaiting and now>c.Awaiting.Expires then c.Misses+=1;c.Awaiting=nil;note(c,"NO_RESULT")end
+	if c.Misses>=3 then stop("Three inputs were not confirmed");return end
+	if not pending or c.Awaiting then return end
+	if c.Mode.Id=="meditation" then
+		if now>pending.Expires then c.Pending=nil;c.Misses+=1;return end
+		local frame=trainingGui("meditation")
+		local label=frame and frame:FindFirstChild("KeyLabel")
+		if now>=pending.Due and visible(frame) and label and label.Text==pending.Key then
+			c.Pending=nil;c.Awaiting={Id=pending.Id,Key=pending.Key,Expires=now+2.5};press(c,pending.Key,.06)
+		end
+	else
+		local gauge=pending.Gauge
+		local server=world:GetServerTimeNow()
+		if server>=gauge.deadline-.06 then c.Pending=nil;c.Misses+=1;return end
+		local cycle=((server-gauge.t0)/gauge.period+gauge.phase)%1
+		local value=1-math.abs(2*cycle-1)
+		local tolerance=math.min(.025,gauge.width*.12)
+		if visible(trainingGui("strength")) and math.abs(value-gauge.center)<=tolerance then
+			c.Pending=nil;c.Awaiting={Id=pending.Id,Expires=now+3}
+			note(c,"GAUGE_TAP id="..pending.Id.." position="..value);press(c,"Space",.06)
+		end
+	end
+end
+local function start(mode)
+	if closed then return end
+	if active and active.Mode==mode then stop("Disabled");return end
+	if active then stop("Switched activity")end
+	if next(held)then mode.Status.Text="Waiting for held keys to release";return end
+	if not vim or not readyForInput()then mode.Status.Text="Focus Roblox and close chat/menu first";return end
+	local character=player.Character;local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health<=0 then mode.Status.Text="Wait for your character";return end
+	if controller.StopHunterRecording then controller.StopHunterRecording("MACRO_STARTED")end
+	local ok,guid=pcall(http.GenerateGUID,http,false);if not ok then guid=tostring(os.clock())end
+	local c={Mode=mode,Character=character,Health=humanoid.Health,Started=os.clock(),Phase="start",Connections={},Lines={},Confirmed=0,Perfect=0,Misses=0,Cycles=0,
+		StartStat=player:GetAttribute(mode.Stat),NextSave=os.clock()+5,Archive="AnomalyHub/universal/hunter_auto_"..mode.Id.."_"..os.time().."_"..tostring(guid):gsub("[^%w%-]","")..".txt"}
+	active=c
+	if mode.Key then
+		c.Training=visible(trainingGui(mode.Id)) or (mode.Id=="meditation" and character:GetAttribute("Meditating")==true)
+		if not installPrompts(c)then stop("Training signals unavailable");return end
+	end
+	mode.Button.Text="Auto "..mode.Name..": ON";mode.Button.BackgroundColor3=ui.Colors.AccentSoft
+	note(c,"START mode="..mode.Id);save(c,"RUNNING")
+end
+for index,mode in ipairs(modes)do
+	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v1",mode.Help,218);card.LayoutOrder=-50+index
+	mode.Button=ui.FitColumn(ui.Button(card,"Auto "..mode.Name..": OFF",0,0,180,function()start(mode)end),0,72)
+	mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,88),BackgroundTransparency=1,Font=Enum.Font.Gotham,
+		TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+		Text=mode.Id=="meditation" and "Off. One training macro at a time." or "Off. Rest at 15% stamina; resume at 90%. One macro at a time."},card)
+end
+local function update()
+	local now=os.clock()
+	for key,info in pairs(held)do if not active or now>=info.Until then release(key)end end
+	local c=active;if not c then return end
+	if not readyForInput()then stop("Stopped for chat, menu, or lost focus");return end
+	if player.Character~=c.Character then stop("Character changed");return end
+	local h=c.Character:FindFirstChildOfClass("Humanoid");local root=c.Character:FindFirstChild("HumanoidRootPart")
+	if not h or h.Health<=0 or not root then stop("Character unavailable");return end
+	if h.Health<c.Health then stop("Damage taken");return end;c.Health=h.Health
+	if now>=c.NextSave then c.NextSave=now+5;save(c,"RUNNING")end
+	local hunger=player:GetAttribute("Hunger")
+	if finite(hunger)and hunger<=30 then stop("Hunger is low");return end
+	local status
+	if c.Mode.Id~="meditation" then
+		local fraction,reason=stamina(c)
+		if fraction==nil then
+			releaseAll();c.SecondAt=nil;c.Rest=true;c.Pending=nil;c.Phase="start";c.Mode.Status.Text=reason.."; no training inputs sent";return
+		end
+		if fraction<=.15 then
+			if not c.Rest then note(c,"STAMINA_REST "..fraction)end
+			c.Rest=true;c.Pending=nil;c.SecondAt=nil;c.Phase="start";releaseAll()
+		end
+		if c.Rest and fraction<.9 then c.Pending=nil;c.Mode.Status.Text=string.format("Resting: stamina %.0f%% / 90%%",fraction*100);return end
+		if c.Rest then
+			c.Rest=false;c.Phase="start";c.Attached=false;c.Awaiting=nil
+			if not c.Training then c.StartAttempt=nil end
+			note(c,"STAMINA_RECOVERED "..fraction)
+		end
+		status=string.format("Stamina %.0f%%",fraction*100)
+	else
+		local points,maximum=player:GetAttribute("MeditationPoints"),player:GetAttribute("MeditationMax")
+		if finite(points)and finite(maximum)and maximum>0 and points>=maximum then stop("Meditation limit reached");return end
+	end
+	if c.Mode.Key then prompts(c,now)else movement(c,h,root,now)end
+	if active~=c then return end
+	local stat=player:GetAttribute(c.Mode.Stat)
+	local gain=finite(stat)and finite(c.StartStat)and string.format(" · Gain %.3f",stat-c.StartStat)or ""
+	c.Mode.Status.Text=(status or "Meditation")..gain..string.format("\nConfirmed: %d · Perfect: %d · Climbs: %d",c.Confirmed,c.Perfect,c.Cycles)
+end
+controller.Connect(run.Heartbeat,function()
+	local ok,err=pcall(update)
+	if not ok then if active then note(active,"ERROR "..tostring(err))end;stop("Macro error; stopped")end
+end)
+controller.Connect(input.WindowFocusReleased,function()focused=false;stop("Roblox lost focus")end)
+controller.Connect(input.WindowFocused,function()focused=true end)
+controller.Connect(input.TextBoxFocused,function()stop("Text entry opened")end)
+controller.Connect(player.OnTeleport,function()stop("Teleport")end)
+controller.RegisterCleanup(function()stop("Unload");closed=true end)
 
 end)()
 end

@@ -1120,6 +1120,8 @@ local function updateEsp(target, localRoot)
 		-- followed by energy and stamina with a two-pixel gap between bars.
 		entry.Health = makeResourceBar("Health", 9, Color3.fromRGB(239, 55, 62))
 		entry.Energy = makeResourceBar("Energy", 18, Color3.fromRGB(48, 145, 255))
+		entry.KiUnknown = create("TextLabel", {Size=UDim2.fromScale(1,1),BackgroundTransparency=1,
+			Text="?",Font=Enum.Font.GothamBold,TextSize=10,TextColor3=colors.Muted,Visible=false,ZIndex=6},entry.Energy.Background)
 		entry.Stamina = makeResourceBar("Stamina", 27, Color3.fromRGB(255, 205, 75))
 		entry.HealthBinding = controller.BindEspHealth(entry.Health, humanoid, function()
 			return espEnabledFor(target) and state.EspSettings.Health and target.Character == character
@@ -1155,11 +1157,6 @@ local function updateEsp(target, localRoot)
 	if settings.Level and (not controller.EspKnownResourcesOnly or levelText ~= "--") then table.insert(lines, "LEVEL // " .. levelText) end
 	if controller.Profile == "Sparkling" then
 		if settings.Race then table.insert(lines, "RACE // " .. (extra and extra.Race or "Unavailable")) end
-		if settings.Ki then
-			local ki = extra and extra.Ki
-			local text = type(ki)=="number" and ki==ki and ki>=0 and ki<math.huge and string.format("%.2f",ki) or "Unavailable"
-			table.insert(lines,"KI // "..text)
-		end
 		if settings.BattlePower then
 			local power = extra and extra.BattlePower
 			local text = type(power)=="number" and power==power and power>=0 and power<math.huge and string.format("%.2f",power) or "Unavailable"
@@ -1173,9 +1170,20 @@ local function updateEsp(target, localRoot)
 	entry.BoxStroke.Color = controller.EspActorColor or Color3.new(1,1,1)
 	entry.Gui.Enabled = #lines > 0
 	entry.BoxStroke.Enabled = settings.Box == true
-	entry.BoxGui.Enabled = settings.Box or settings.Health or settings.Energy or settings.Stamina
+	entry.BoxGui.Enabled = settings.Box or settings.Health or settings.Energy or settings.Stamina or (controller.Profile=="Sparkling" and settings.Ki)
 	entry.HealthBinding.Refresh()
-	updateResourceBar(entry.Energy, extra and extra.Energy, extra and extra.MaxEnergy, settings.Energy)
+	if controller.Profile == "Sparkling" then
+		local current, maximum = extra and extra.Ki, extra and extra.MaxKi
+		local hasCurrent = type(current)=="number" and current==current and current>=0 and current<math.huge
+		local hasMaximum = type(maximum)=="number" and maximum==maximum and maximum>0 and maximum<math.huge
+		updateResourceBar(entry.Energy, current, maximum, settings.Ki)
+		-- Never infer a maximum from a first sample or assume a fixed capacity.
+		entry.KiUnknown.Visible = settings.Ki==true and hasCurrent and not hasMaximum
+		if entry.KiUnknown.Visible then entry.Energy.Background.Visible=true end
+	else
+		entry.KiUnknown.Visible=false
+		updateResourceBar(entry.Energy, extra and extra.Energy, extra and extra.MaxEnergy, settings.Energy)
+	end
 	updateResourceBar(entry.Stamina, extra and extra.Stamina, extra and extra.MaxStamina, settings.Stamina)
 end
 
@@ -1977,10 +1985,23 @@ function controller.ResolvePlayerEspData(target,character)
  local value=power and (power:IsA("NumberValue") or power:IsA("IntValue")) and power.Value or nil
  local ki=character and character:FindFirstChild("Ki")
  local kiValue=ki and (ki:IsA("NumberValue") or ki:IsA("IntValue")) and ki.Value or nil
- return {Race=explicitRace(target,character),BattlePower=finite(value) and value or nil,Ki=finite(kiValue) and kiValue or nil}
+ local maxKi=nil
+ local conflicting=false
+ local function acceptMax(candidate)
+  if not finite(candidate) or candidate<=0 then return end
+  if maxKi and maxKi~=candidate then conflicting=true else maxKi=candidate end
+ end
+ if character then
+  acceptMax(character:GetAttribute("MaxKi"))
+  local object=character:FindFirstChild("MaxKi")
+  if object and (object:IsA("NumberValue") or object:IsA("IntValue"))then acceptMax(object.Value)end
+ end
+ if conflicting then maxKi=nil end
+ return {Race=explicitRace(target,character),BattlePower=finite(value) and value or nil,Ki=finite(kiValue) and kiValue or nil,MaxKi=maxKi}
+
 end
 ui.PlayerEspCard.Size=UDim2.new(1,0,0,324)
-ui.OptionGrid(ui.PlayerEspCard,{{"Name","Player name"},{"Race","Race"},{"BattlePower","Power level"},{"Ki","Ki level"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"},{"SelfOutline","Self ESP"}},state.EspSettings,136)
+ui.OptionGrid(ui.PlayerEspCard,{{"Name","Player name"},{"Race","Race"},{"BattlePower","Power level"},{"Ki","Ki bar"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"},{"SelfOutline","Self ESP"}},state.EspSettings,136)
 local card=ui.Card(ui.Pages.Recorders,"SPARKLING ESP DATA","Capture visible race and power fields to verify player labels. No requests are sent.",200)
 card.LayoutOrder=30
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,70),BackgroundTransparency=1,

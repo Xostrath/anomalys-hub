@@ -3224,7 +3224,7 @@ controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
 
 end)()
 ;(function()
--- Combat page v9: user-authorized active timing experiment with continuous diagnostics.
+-- Combat page v10: user-authorized active timing experiment with continuous diagnostics.
 -- Isolated hit-3 or hit-4 trial; other known hits remain recorded without defense input.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -3542,10 +3542,10 @@ end
 
 -- Combat page in the Hunter X Enter section style: an "Auto Parry" section of keybindable rows, then "Don't Parry If".
 local page=ui.Pages.Combat or ui.Pages.Auto
-local parrySection=ui.Section(page,"Auto Parry // SINGLE HIT TEST",348,true)
+local parrySection=ui.Section(page,"Auto Parry // SINGLE HIT TEST",368,true)
 parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
-local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,288),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,308),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
  Text="Off. Testing hit "..settings.TestHit.." only. Other hits are recorded without F input. Diagnostics always record while enabled."},card)
 local function release(reason,force)
@@ -3760,10 +3760,10 @@ local function setting(id)
  end
 end
 -- Active enable is never persisted; settings and keybinds are.
-button=optionRow(card,0,"Enabled","Enable Auto Parry",function()return enabled end,toggleParry)
-local rangeLabel=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,36),Size=UDim2.new(1,-28,0,14),BackgroundTransparency=1,Font=Enum.Font.Gotham,
+button=optionRow(card,44,"Enabled","Enable Auto Parry",function()return enabled end,toggleParry)
+local rangeLabel=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,80),Size=UDim2.new(1,-28,0,14),BackgroundTransparency=1,Font=Enum.Font.Gotham,
  TextSize=11,TextColor3=ui.Colors.Text,TextXAlignment=Enum.TextXAlignment.Left,Text=""},card)
-local track=ui.Create("TextButton",{Position=UDim2.fromOffset(14,56),Size=UDim2.new(1,-28,0,8),BackgroundColor3=ui.Colors.Surface,BorderSizePixel=0,
+local track=ui.Create("TextButton",{Position=UDim2.fromOffset(14,100),Size=UDim2.new(1,-28,0,8),BackgroundColor3=ui.Colors.Surface,BorderSizePixel=0,
  AutoButtonColor=false,Text=""},card)
 ui.Create("UICorner",{CornerRadius=UDim.new(0,4)},track)
 ui.Create("UIStroke",{Color=ui.Colors.Stroke,Thickness=1},track)
@@ -3793,33 +3793,44 @@ controller.Connect(input.InputEnded,function(io)
   dragging=false;saveSettings();log("SETTING","Range="..settings.Range)
  end
 end)
-optionRow(card,74,"PvE","PVE (NPCs)",function()return settings.PvE end,setting("PvE"))
-optionRow(card,104,"PvP","PVP (Players)",function()return settings.PvP end,setting("PvP"))
-targetsLabel=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,140),Size=UDim2.new(1,-28,0,32),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+optionRow(card,118,"PvE","PVE (NPCs)",function()return settings.PvE end,setting("PvE"))
+optionRow(card,148,"PvP","PVP (Players)",function()return settings.PvP end,setting("PvP"))
+targetsLabel=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,184),Size=UDim2.new(1,-28,0,32),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
  TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Enable Auto Parry to detect nearby players and NPCs."},card)
 
 -- Switching the isolated hit finalizes the current session before changing its configuration.
-local testHitButton
-testHitButton=ui.Button(card,"Test hit: "..settings.TestHit.." (click to switch)",0,0,240,function()
+local hitButtons={}
+local function refreshHitButtons()
+ for hit,object in pairs(hitButtons)do
+  object.Text="Hit "..hit..(settings.TestHit==hit and ": SELECTED" or "")
+  object.BackgroundColor3=settings.TestHit==hit and ui.Colors.AccentSoft or ui.Colors.Surface
+ end
+end
+local function selectTestHit(hit)
+ if settings.TestHit==hit then return end
  if enabled or held then stop("Test hit changed. Enable again to record the next hit.")end
  if held then return end -- A failed release must complete before changing the test.
- settings.TestHit=settings.TestHit==3 and 4 or 3
- testHitButton.Text="Test hit: "..settings.TestHit.." (click to switch)"
+ settings.TestHit=hit;refreshHitButtons()
  status.Text="Off. Testing hit "..settings.TestHit.." only. Enable Auto Parry to start a separate recording."
  saveSettings()
-end,ui.Colors.AccentSoft)
-testHitButton.Position=UDim2.fromOffset(14,176);testHitButton.Size=UDim2.new(1,-28,0,32)
+end
+for column,hit in ipairs({3,4})do
+ local selectedHit=hit
+ hitButtons[hit]=ui.FitColumn(ui.Button(card,"Hit "..hit..(settings.TestHit==hit and ": SELECTED" or ""),0,0,150,function()
+  selectTestHit(selectedHit)
+ end,settings.TestHit==hit and ui.Colors.AccentSoft or ui.Colors.Surface),column-1,0)
+end
 
 -- Timing values are trial controls, not calibrated server windows.
 local function timingBox(id,title,minimum,maximum,column)
- local label=ui.Create("TextLabel",{Position=UDim2.new(column*.5,14,0,216),Size=UDim2.new(.5,-28,0,20),BackgroundTransparency=1,
+ local label=ui.Create("TextLabel",{Position=UDim2.new(column*.5,14,0,236),Size=UDim2.new(.5,-28,0,20),BackgroundTransparency=1,
   Font=Enum.Font.Gotham,TextSize=10,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text=title},card)
  ui.FitColumn(ui.ValueBox(card,title,0,0,120,settings[id],function(box)
   settings[id]=finiteSetting(tonumber(box.Text),settings[id],minimum,maximum);box.Text=tostring(settings[id]);saveSettings()
   log("SETTING",id.."="..settings[id])
   for _,cue in ipairs(pending)do skip("timing_changed","cue="..cue.Serial)end
   table.clear(pending)
- end),column,238)
+ end),column,258)
 end
 timingBox("TimingOffsetMs","Timing offset (ms)",-80,150,0)
 timingBox("HoldMs","F hold (ms)",60,250,1)

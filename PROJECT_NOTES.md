@@ -179,3 +179,8 @@ Combat page v9 / diagnostics v5 selects hit 3 or hit 4 only. Switching stops/sav
 ### Sparkling Auto tab (2026-11-17)
 
 Sparkling has an **Auto** tab again, holding an Auto Training section with Auto Meditation (`src/SparklingAutoMeditation.lua`, which plays the Mind Training key prompts). Auto Parry stays on Combat. Visuals exposes `controller.SparklingProfile` / `SparklingRefreshProfile` for other modules. Autos use the **SP-A###** experiment series in the [Sparkling note](docs/games/sparkling.md).
+
+
+### Sparkling hit-selector visibility (2026-11-17)
+
+Combat page v10 places separate Hit 3 / Hit 4 buttons above Enable Auto Parry, visibly marking the selected choice. This replaces the lower toggle the user could not find. Timing settings and stop/save-on-change behavior remain. See [SP-T028](docs/games/sparkling.md).

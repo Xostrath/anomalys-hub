@@ -4,12 +4,12 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 
 ## Read first
 
-**Current mode: SINGLE HIT TEST (Combat page v9 / diagnostics v5), selecting hit 3 or hit 4; first hit remains disabled.** The user explicitly requested active auto parry with recording and opponent-parry handling. This supersedes the temporary passive-only instruction; see SP-T021 for the latest correlation/LOS changes. Old mode instructions remain historical.
+**Current mode: SINGLE HIT TEST (Combat page v10 / diagnostics v5), selecting hit 3 or hit 4; first hit remains disabled.** The user explicitly requested active auto parry with recording and opponent-parry handling. This supersedes the temporary passive-only instruction; see SP-T021 for the latest correlation/LOS changes. Old mode instructions remain historical.
 
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. User-supplied entry place: `120525873606470`.
 - Current objective: collect enough diagnostics to explain every automatic-defense attempt or skip before changing its timings.
 - Current defense: off-by-default isolated hit-3 / hit-4 trial. Nonselected known hits are recorded without F input. See SP-T025; existing seeds remain unchanged.
-- Latest implementation: **Combat page v9 / diagnostics v5**. Single-hit selector, separate sessions on switch; 187 mocked assertions and source/both-build compilation passed. Hit-3-only filtering and cleanup verified live against Shadow (SP-T026); hit-4 mode/switch still awaits live validation.
+- Latest implementation: **Combat page v10 / diagnostics v5**. Explicit Hit 3 / Hit 4 buttons above Enable, with SELECTED labels. 188 mocked assertions and source/both-build compilation passed. New layout and hit-4 mode await live validation (SP-T028).
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -26,7 +26,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
 | Auto parry | Selectable isolated hit-3/hit-4 trial; other hits recorded without F input | Earlier timing evidence through SP-T024; selector implemented in SP-T025 | Selected-hit outcomes and broader timing reliability unverified |
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v9 (SP-T025) | SINGLE HIT TEST selector; switch stops/saves and releases before selecting the next hit | 187 mocked assertions and compilation passed; hit-3 filtering verified live in SP-T026 | Verify hit-4 selection/switch and compare histories without pooling different target contexts |
+| Combat page v10 (SP-T028) | Explicit top-row Hit 3 / Hit 4 buttons; selected label; switch stops/saves and releases | 188 mocked assertions and compilation passed; hit-3 filtering previously verified live | Confirm Hit 4: SELECTED and validate the first hit-4 report |
 | Parry diagnostics v5 | Recent API/input/request correlation; early releases and intervening input flags; bounded LOS object properties | Live: 25 release pairs and one unmatched cycle correctly separated (SP-T022) | Early-release/ambiguous-window branches remain mock-tested |
 
 ## Sources and capture workflow
@@ -804,3 +804,18 @@ One automatic hit-3 attempt occurred at 7.0358 s: animation 95937874840716, phas
 A second selected cue at 11.4580 s was skipped with 1.0497 s Counter cooldown remaining. Other gates recorded 3 first_hit_disabled and 7 trial_hit_filtered skips; there were no nonselected automatic inputs. The session contains 13 negative-health events overall, including hits outside the sole attempt. No dropped lines, input/release/logger/errors or frame-gap events. No extra F cycle appears in this capture.
 
 **Handoff:** hit-3 filtering and request cleanup remain verified, and the Thug5 result differs from the preceding zero-damage Shadow session. The isolated hit-4 test remains outstanding; do not label this recording as hit-4 evidence. Use the Combat selector to change its visible label from Test hit: 3 to Test hit: 4, then enable a new run at offset=0 / hold=120. A successful switch should produce testHit=4 in the next report and only animation 139487903747364 in its F_DOWN events.
+
+
+## SP-021 / SP-T028 — repeated hit-3 test and clearer hit buttons (2026-11-17)
+
+Latest finalized session starts Unix 1794955088, main-world place 110405289082842, diagnostics v5, 19.846 s, manually disabled. Header still testHit=3, offset=0 / hold=120. All three automatic attempts target Thug5 using hit-3 animation 95937874840716. Press times 0.5436, 11.8570 and 17.5915 s precede negative-health observations by 95.0, 105.0 and 126.3 ms respectively; no self-counter message occurred. All three releases succeed and correlate correctly. Total negative-health observations=23; six other-counter messages are not local successes. Final held=false, no dropped lines or input/logger/error/frame-gap failures. First-hit-disabled skips=4, other-known-hit filtered skips=11. This is further hit-3 baseline evidence, **not hit-4 evidence**.
+
+The user clarified that they could not find the hit selector. Installed/source inspection found the v9 toggle below target counts, connected through the normal shared button helper; the saved settings had no TestHit entry. This does not prove a click-handler failure. The concrete usability issue is the user's inability to locate the control; the layout was changed accordingly.
+
+**Combat page v10 / diagnostics v5** replaces the buried click-to-toggle control with two explicit top-row buttons, **Hit 3** and **Hit 4**, immediately above Enable Auto Parry. The selected button says **Hit 3: SELECTED** or **Hit 4: SELECTED** and uses the shared accent color. Controls below it are shifted with non-overlapping fixed rows; section height expanded to 368 body pixels. Default remains hit 3 unless a valid saved hit-4 selection exists. Timing seeds, offset and hold settings are unchanged.
+
+Selecting a different hit retains v9's stop/save, queue clear, key release and disabled-next-run behavior. Failed release prevents the change. Clicking the already-selected hit is a no-op and does not stop a running test. Both choices directly select their named hit; neither requires inferring the current toggle direction. Existing session snapshots retain their original testHit after a change.
+
+**Validation:** 188 mocked assertions passed (47 logger/lifecycle, 41 active-feature, 26 ownership, 7 settings/reload, 1 invalid-setting fallback, 34 correlation/LOS, 32 selection/lifecycle checks). Updated source and both staged public/private variants compile. The new layout was source-inspected, not visually verified in the live game. Button behavior is mock-validated; live hit-4 testing remains outstanding.
+
+**Next action:** reload the hub, open Combat, click **Hit 4** at the top of SINGLE HIT TEST and confirm it reads **Hit 4: SELECTED**, then enable Auto Parry. Preserve offset=0 / hold=120. The resulting report must say testHit=4 and only emit automatic input for animation 139487903747364. Do not keep treating unchanged hit-3 sessions as hit-4 timing trials.

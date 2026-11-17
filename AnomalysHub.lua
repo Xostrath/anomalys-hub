@@ -364,7 +364,7 @@ end
 for _, name in ipairs({"Home", "General", "ESP", "Servers", "Settings"}) do makePage(name) end
 if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
 if env.__AnomalyDetectedProfile == "HunterXEnter" then makePage("Auto") end
-if env.__AnomalyDetectedProfile == "HunterXEnter" then makePage("Recorders") end
+if env.__AnomalyDetectedProfile == "HunterXEnter" or env.__AnomalyDetectedProfile == "Sparkling" then makePage("Recorders") end
 
 local function selectTab(name)
 	if not pages[name] then return end
@@ -1528,7 +1528,7 @@ local Run = game:GetService("RunService")
 local Http = game:GetService("HttpService")
 local rs = game:GetService("ReplicatedStorage")
 local player, ui = Players.LocalPlayer, controller.UI
-local modes = {{Id="combat",Name="Sparkling Combat",Page="General",Help="Record tutorial fights: basic attacks, heavy attacks, block and dodge normally. Stop + Save after each sequence. This recorder sends no actions."}}
+local modes = {{Id="combat",Name="Sparkling Combat",Page="Recorders",Help="Record tutorial fights: basic attacks, heavy attacks, block and dodge normally. Stop + Save after each sequence. This recorder sends no actions."}}
 local nenChoices={}
 local active, closed, serial = nil, false, 0
 local basePath = "AnomalyHub/universal/sparkling_"
@@ -1883,16 +1883,19 @@ local function start(mode)
 	c.NextSave=os.clock()+5
 end
 for _,mode in ipairs(modes) do
- local card=ui.Card(ui.Pages.General,"SPARKLING COMBAT RECORDER // v1",mode.Help,196)
+ local card=ui.Card(ui.Pages.Recorders,"SPARKLING COMBAT RECORDER // v1",mode.Help,224)
+ for _,child in ipairs(card:GetChildren()) do
+  if child:IsA("TextLabel") and child.Text==mode.Help then child.Size=UDim2.new(1,-28,0,54) end
+ end
  card.LayoutOrder=20
- mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,118),Size=UDim2.new(1,-28,0,64),BackgroundTransparency=1,
+ mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,142),Size=UDim2.new(1,-28,0,64),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left,TextColor3=ui.Colors.Muted,
  Text="Ready. Up to 120 seconds; you and 6 nearby actors. Outgoing coverage depends on executor hooks."},card)
- mode.Button=ui.FitColumn(ui.Button(card,"Record Combat",0,0,180,function()start(mode)end,ui.Colors.AccentSoft),0,72)
+ mode.Button=ui.FitColumn(ui.Button(card,"Record Combat",0,0,180,function()start(mode)end,ui.Colors.AccentSoft),0,96)
  ui.FitColumn(ui.Button(card,"Copy Recording",0,0,180,function()
  if active and active.Mode==mode then save(active,"RECORDING") end
  if mode.Report and type(setclipboard)=="function" then pcall(setclipboard,mode.Report) end
- end),1,72)
+ end),1,96)
 end
 controller.Connect(Run.Heartbeat,function()
 	local c=active; if not c then return end

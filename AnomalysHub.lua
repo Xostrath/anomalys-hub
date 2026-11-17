@@ -123,7 +123,9 @@ local state = {
 	BeyondNenParryTargets = "Auto",
 	BeyondNenChestSelection = {All = true, Types = {}},
 	NpcEspSettings = {Name = true, Distance = true, Box = true,
-		Quest = true, Enemy = true, Boss = true, Other = true},
+		Quest = true, Enemy = true, Boss = true, Other = true,
+		-- Sparkling NPC ESP fields and kinds.
+		Health = true, Power = true, Trainer = true, Npc = true},
 	Noclip = false,
 	AntiAfk = true,
 	EspEntries = {},
@@ -2078,6 +2080,221 @@ local function capture()
 end
 local button=ui.Button(card,"Capture ESP Data",14,72,180,capture,ui.Colors.AccentSoft)
 button.Size=UDim2.new(1,-28,0,34)
+
+end)()
+;(function()
+-- Sparkling NPC ESP. Reads loaded NPC models; sends no game requests.
+-- Structure reused from BeyondNenNpcESP.lua (watch Workspace once, then update tracked rigs only).
+-- Sparkling has no NPC catalog yet: names come from the model, "...Trainer" models are labelled TRAINER
+-- (observed in Workspace.Live, 2026-11-17), everything else is a plain NPC. No hostility is assumed.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "Sparkling" then return end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local ui, state = controller.UI, controller.State
+local create, colors = ui.Create, ui.Colors
+local tracked, entries = {}, {}
+local addedConnection, removingConnection
+local watching, stopped = false, false
+
+local roles = {
+	Trainer = {Label = "TRAINER", Color = Color3.fromRGB(134, 230, 173)},
+	Npc = {Label = "NPC", Color = Color3.fromRGB(130, 202, 255)},
+}
+local function finite(value)
+	return type(value) == "number" and value == value and value >= 0 and value < math.huge
+end
+local function classify(model)
+	return model.Name:match("Trainer$") and "Trainer" or "Npc"
+end
+local function displayName(model, humanoid)
+	for _, key in ipairs({"DisplayName", "NPCName"}) do
+		local value = model:GetAttribute(key)
+		if type(value) == "string" and value:match("%S") then return value end
+	end
+	local value = humanoid and humanoid.DisplayName
+	if type(value) == "string" and value:match("%S") then return value end
+	-- "WolfFangTrainer" reads as "Wolf Fang Trainer".
+	return (model.Name:gsub("(%l)(%u)", "%1 %2"))
+end
+-- Same rule as player ESP: a direct numeric PowerLevel value on the model, nothing inferred.
+local function power(model)
+	local value = model:FindFirstChild("PowerLevel")
+	if value and (value:IsA("NumberValue") or value:IsA("IntValue")) and finite(value.Value) then return value.Value end
+	return nil
+end
+local function commas(n)
+	local text = tostring(math.floor(n + 0.5))
+	return (text:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", ""))
+end
+
+local function removeEntry(model)
+	local entry = entries[model]
+	if not entry then return end
+	entry.Gui:Destroy()
+	entry.BoxGui:Destroy()
+	entries[model] = nil
+end
+
+-- Only Humanoid rigs count; Sparkling NPCs observed so far are full rigs in Workspace.Live.
+local function track(object)
+	local model
+	if object:IsA("Humanoid") then model = object.Parent
+	elseif object:IsA("Model") and object:FindFirstChildOfClass("Humanoid") then model = object end
+	if model and model:IsA("Model") and not tracked[model] then tracked[model] = true end
+end
+
+local function stopWatching()
+	watching = false
+	if addedConnection then addedConnection:Disconnect(); addedConnection = nil end
+	if removingConnection then removingConnection:Disconnect(); removingConnection = nil end
+	for model in pairs(entries) do removeEntry(model) end
+	table.clear(tracked)
+end
+
+local function startWatching()
+	if watching or stopped then return end
+	watching = true
+	-- Subscribe before the initial scan so a spawn cannot fall into a gap.
+	addedConnection = Workspace.DescendantAdded:Connect(track)
+	removingConnection = Workspace.DescendantRemoving:Connect(function(object)
+		if tracked[object] then
+			tracked[object] = nil
+			removeEntry(object)
+		elseif object:IsA("Humanoid") and object.Parent then
+			removeEntry(object.Parent)
+		end
+	end)
+	for _, object in ipairs(Workspace:GetDescendants()) do track(object) end
+end
+
+local function isPlayerCharacter(model, characters)
+	local ancestor = model
+	while ancestor and ancestor ~= Workspace do
+		if characters[ancestor] then return true end
+		ancestor = ancestor.Parent
+	end
+	return false
+end
+
+local function makeEntry(model, root)
+	local width, height, offset = 4, 6, Vector3.zero
+	local ok, bounds, size = pcall(model.GetBoundingBox, model)
+	if ok and typeof(bounds) == "CFrame" and typeof(size) == "Vector3" then
+		width = math.clamp(size.X + 0.35, 2.8, 20)
+		height = math.clamp(size.Y + 0.35, 4.5, 30)
+		offset = bounds.Position - root.Position
+	end
+	local entry = {Model = model, Root = root}
+	entry.Gui = create("BillboardGui", {
+		Name = "AnomalySparklingNPCESP", Size = UDim2.fromOffset(240, 74),
+		StudsOffsetWorldSpace = offset + Vector3.new(0, height * 0.5 + 2.1, 0),
+		AlwaysOnTop = true, LightInfluence = 0, Adornee = root,
+	}, ui.Gui)
+	entry.Label = create("TextLabel", {
+		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold,
+		TextColor3 = colors.Text, TextStrokeColor3 = Color3.new(), TextStrokeTransparency = 0.12,
+		TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
+		TextYAlignment = Enum.TextYAlignment.Bottom,
+	}, entry.Gui)
+	entry.BoxGui = create("BillboardGui", {
+		Name = "AnomalySparklingNPCBox", Size = UDim2.new(width, 8, height, 8),
+		StudsOffsetWorldSpace = offset, AlwaysOnTop = true, LightInfluence = 0,
+		Adornee = root, ClipsDescendants = false,
+	}, ui.Gui)
+	local box = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.new(1, -8, 1, -8), BackgroundTransparency = 1, BorderSizePixel = 0,
+	}, entry.BoxGui)
+	entry.Stroke = create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.4}, box)
+	return entry
+end
+
+local function updateNpc(model, localRoot, characters)
+	if not model:IsDescendantOf(Workspace) then
+		tracked[model] = nil
+		removeEntry(model)
+		return
+	end
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	local kind = classify(model)
+	local settings = state.NpcEspSettings
+	if not localRoot or not humanoid or humanoid.Health <= 0 or isPlayerCharacter(model, characters) or settings[kind] == false then
+		removeEntry(model)
+		return
+	end
+	local root = humanoid.RootPart or model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("Head")
+	if not root or not root:IsA("BasePart") or not root:IsDescendantOf(model) then removeEntry(model); return end
+	local distance = (root.Position - localRoot.Position).Magnitude
+	if distance > state.NpcEspDistance then removeEntry(model); return end
+	local entry = entries[model]
+	if not entry or entry.Humanoid ~= humanoid or entry.Root ~= root then
+		removeEntry(model)
+		entry = makeEntry(model, root)
+		entry.Humanoid = humanoid
+		entries[model] = entry
+	end
+	local lines, role = {}, roles[kind]
+	if settings.Name then table.insert(lines, displayName(model, humanoid) .. " [" .. role.Label .. "]") end
+	if settings.Health and finite(humanoid.Health) and finite(humanoid.MaxHealth) and humanoid.MaxHealth > 0 then
+		table.insert(lines, string.format("HP %s / %s", commas(humanoid.Health), commas(humanoid.MaxHealth)))
+	end
+	local level = settings.Power and power(model)
+	if level then table.insert(lines, "POWER " .. commas(level)) end
+	if settings.Distance then table.insert(lines, string.format("%d STUDS", math.floor(distance + 0.5))) end
+	entry.Label.Text = table.concat(lines, "\n")
+	entry.Label.TextColor3 = role.Color
+	entry.Gui.Enabled = #lines > 0
+	entry.Gui.MaxDistance = state.NpcEspDistance
+	entry.BoxGui.MaxDistance = state.NpcEspDistance
+	entry.BoxGui.Enabled = settings.Box == true
+	entry.Stroke.Enabled = settings.Box == true
+end
+
+local npcCard = ui.Card(ui.Pages.ESP, "NPC ESP", "Names, health, power level, distance and outlines for NPCs. Trainers are labelled; other NPCs are not classified yet.", 340)
+npcCard.LayoutOrder = 20
+ui.Create("TextLabel", {Position = UDim2.new(0.5, 4, 0, 62), Size = UDim2.new(0.5, -18, 0, 16), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = "MAX DISTANCE (STUDS)", TextColor3 = colors.Muted, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left}, npcCard)
+ui.FitColumn(ui.Button(npcCard, state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF", 0, 0, 180, function(object)
+	state.NpcEspEnabled = not state.NpcEspEnabled
+	object.Text = state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF"
+	object.BackgroundColor3 = state.NpcEspEnabled and colors.AccentSoft or colors.Surface
+	if state.NpcEspEnabled then startWatching() else stopWatching() end
+	controller.SaveConfig()
+end, state.NpcEspEnabled and colors.AccentSoft or colors.Surface), 0, 86)
+ui.FitColumn(ui.ValueBox(npcCard, "NPC range (studs)", 0, 0, 180, state.NpcEspDistance, function(box)
+	local value = tonumber(box.Text)
+	if value and value == value then state.NpcEspDistance = math.clamp(value, 100, 10000) end
+	box.Text = tostring(math.floor(state.NpcEspDistance))
+	controller.SaveConfig()
+end), 1, 86)
+ui.OptionGrid(npcCard, {{"Name", "Name / type"}, {"Health", "Health"}, {"Power", "Power level"}, {"Distance", "Distance"}, {"Box", "Body box"}}, state.NpcEspSettings, 136)
+ui.Create("TextLabel", {Position = UDim2.fromOffset(14, 268), Size = UDim2.new(1, -28, 0, 16), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold, Text = "NPC TYPES", TextColor3 = colors.Accent, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left}, npcCard)
+ui.OptionGrid(npcCard, {{"Trainer", "Trainers"}, {"Npc", "Other NPCs"}}, state.NpcEspSettings, 292)
+
+local elapsed = 0
+controller.Connect(RunService.Heartbeat, function(delta)
+	if stopped or not state.NpcEspEnabled then return end
+	elapsed += delta
+	if elapsed < 0.15 then return end
+	elapsed = 0
+	local character = Players.LocalPlayer.Character
+	local localRoot = character and character:FindFirstChild("HumanoidRootPart")
+	local characters = {}
+	for _, target in ipairs(Players:GetPlayers()) do
+		if target.Character then characters[target.Character] = true end
+	end
+	for model in pairs(tracked) do updateNpc(model, localRoot, characters) end
+end)
+controller.RegisterCleanup(function()
+	stopped = true
+	stopWatching()
+end)
+if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()

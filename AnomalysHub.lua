@@ -3224,7 +3224,7 @@ controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
 
 end)()
 ;(function()
--- Combat page v11: all five known combo hits restored with continuous diagnostics.
+-- Combat page v12: all five hits enabled; hit-3 +30 ms timing comparison with continuous diagnostics.
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -3239,8 +3239,9 @@ local stats=game:GetService("Stats")
 local okInput,vim=pcall(game.GetService,game,"VirtualInputManager")
 if not okInput then vim=nil end
 local ui=controller.UI
--- Client observations, not server parry-window measurements. Timing unchanged.
-local attacks={['114493250337466']=.04,['84394230178792']=.04,['95937874840716']=0,['139487903747364']=0,['131649056441662']=.04}
+-- SP-T033: compare hit 3 at +30 ms after repeated damage-associated zero-delay attempts.
+-- Client observations, not server parry-window measurements; other seeds are unchanged.
+local attacks={['114493250337466']=.04,['84394230178792']=.04,['95937874840716']=.03,['139487903747364']=0,['131649056441662']=.04}
 local enabled,closed=false,false
 local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local sendingAttempt
@@ -3392,8 +3393,8 @@ local function report(reason)
   .."\nDEFEND_REQUEST pairs adjacent observed requests with recent F input/API pulses (200ms window). Early releases and intervening inputs are explicit; all attribution is temporal. Stop disconnects hooks, so post-stop request receipts may be unavailable."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s; save=5s."
-  .."\nConfig: mode=active_test scope=all_five range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .."\nConfig: mode=active_test scope=all_five timingTrial=hit3_plus30ms range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0.03,combo4:0,combo5:0.04 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -3545,7 +3546,7 @@ parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Auto parry covers five known combo hits. Timing remains experimental. Diagnostics record while enabled."},card)
+ Text="Off. All five hits enabled. Hit 3: +30 ms timing trial. Diagnostics record while enabled."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -3715,7 +3716,7 @@ local function start()
  enabled=true;ownCharacter=player.Character;nextScan=0;nextPulse=0
  seen=setmetatable({},{__mode="k"})
  button.Text="Auto Parry: ON"
- log("START","mode=active_test scope=all_five offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
+ log("START","mode=active_test scope=all_five timingTrial=hit3_plus30ms offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
  local coverage="outgoing hooks unavailable"
  if controller.BeginSparklingParryObservation then
   local ok,disconnect,description=pcall(controller.BeginSparklingParryObservation,guarded("ActionProbe",function(remote,direction,args,started,id,result,path)
@@ -3889,7 +3890,7 @@ local function update(dt)
    if not reason and now<nextPulse then reason="pulse_cooldown"end
    table.remove(pending,i)
    if reason then skip(reason,"stage=execute "..detail)else
-    log("CUE_ACCEPTED","scope=all_five offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
+    log("CUE_ACCEPTED","scope=all_five timingTrial=hit3_plus30ms offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
     sendingAttempt=attempts+1;heldAttempt=sendingAttempt
     held=true;heldAt=now;releaseAt=now+settings.HoldMs/1000;nextPulse=now+.3;nextReleaseRetry=0
     table.insert(session.Pulses,{Id=heldAttempt,DownAt=now})
@@ -3904,7 +3905,7 @@ local function update(dt)
    end
   end
  end
- status.Text=string.format("AUTO PARRY · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("AUTO PARRY · Hit 3 +30 ms trial · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)

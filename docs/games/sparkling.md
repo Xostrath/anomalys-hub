@@ -9,7 +9,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. User-supplied entry place: `120525873606470`.
 - Current objective: collect enough diagnostics to explain every automatic-defense attempt or skip before changing its timings.
 - Current defense: off-by-default isolated hit-3 / hit-4 trial. Nonselected known hits are recorded without F input. See SP-T025; existing seeds remain unchanged.
-- Latest implementation: **Combat page v10 / diagnostics v5**. Explicit Hit 3 / Hit 4 buttons above Enable, with SELECTED labels. 188 mocked assertions and source/both-build compilation passed. New layout and hit-4 mode await live validation (SP-T028).
+- Latest implementation: **Combat page v10 / diagnostics v5**. Explicit Hit 3 / Hit 4 buttons above Enable, with SELECTED labels. 188 mocked assertions and source/both-build compilation passed. Hit-3/hit-4 filtering and stop/save-on-switch observed live; hit-4 baseline took damage on all four attempts (SP-T029).
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -26,7 +26,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
 | Auto parry | Selectable isolated hit-3/hit-4 trial; other hits recorded without F input | Earlier timing evidence through SP-T024; selector implemented in SP-T025 | Selected-hit outcomes and broader timing reliability unverified |
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v10 (SP-T028) | Explicit top-row Hit 3 / Hit 4 buttons; selected label; switch stops/saves and releases | 188 mocked assertions and compilation passed; hit-3 filtering previously verified live | Confirm Hit 4: SELECTED and validate the first hit-4 report |
+| Combat page v10 (SP-T028) | Explicit top-row Hit 3 / Hit 4 buttons; selected label; switch stops/saves and releases | 188 mocked assertions and compilation passed; both hit filters and switch observed live (SP-T029) | Compare hit-4 timing with one changed variable; input eligibility remains uncertain |
 | Parry diagnostics v5 | Recent API/input/request correlation; early releases and intervening input flags; bounded LOS object properties | Live: 25 release pairs and one unmatched cycle correctly separated (SP-T022) | Early-release/ambiguous-window branches remain mock-tested |
 
 ## Sources and capture workflow
@@ -819,3 +819,34 @@ Selecting a different hit retains v9's stop/save, queue clear, key release and d
 **Validation:** 188 mocked assertions passed (47 logger/lifecycle, 41 active-feature, 26 ownership, 7 settings/reload, 1 invalid-setting fallback, 34 correlation/LOS, 32 selection/lifecycle checks). Updated source and both staged public/private variants compile. The new layout was source-inspected, not visually verified in the live game. Button behavior is mock-validated; live hit-4 testing remains outstanding.
 
 **Next action:** reload the hub, open Combat, click **Hit 4** at the top of SINGLE HIT TEST and confirm it reads **Hit 4: SELECTED**, then enable Auto Parry. Preserve offset=0 / hold=120. The resulting report must say testHit=4 and only emit automatic input for animation 139487903747364. Do not keep treating unchanged hit-3 sessions as hit-4 timing trials.
+
+
+## SP-022 / SP-T029 — hit switch verified; isolated hit-4 baseline (2026-11-17)
+
+Reviewed two new finalized diagnostics-v5 histories in main-world place 110405289082842. Both use offset=0 ms, hold=120 ms, range=8 and both target filters. No runtime code or settings changed during this review.
+
+| Session start | Selection / target | Duration / stop | Attempts | Self counters | Negative-health observations |
+| --- | --- | --- | --- | --- | --- |
+| 1794955705 | Hit 3 / Thug6 | 48.497 s / Test hit changed | 3 | 1 | 13 |
+| 1794955781 | Hit 4 / Thug5 | 36.185 s / manually disabled | 4 | 0 | 39 |
+
+**Selection/switch behavior verified live:** the earlier report finalizes with the hit-change stop reason and retains testHit=3. The later report says testHit=4 and all four F_DOWN entries use animation 139487903747364, with no other automatic attack IDs. Its 10 first-hit cues and 24 other known-hit cues are explicitly filtered. Both end held=false, with no dropped lines, logger/input/release/error/frame-gap failures. All seven API key-ups succeeded and have correctly paired Defend=false receipts, with no unmatched extra F cycles. Three additional hit-4 cues were blocked by observed Counter cooldown. No LOS rejection or defer occurred in the hit-4 run.
+
+### Hit-4 baseline result
+
+| Attempt | F press | Defend=true receipt | Negative-health receipt | Press to damage |
+| --- | --- | --- | --- | --- |
+| 1 | 5.0519 s | 5.0669 s | 5.1475 s | 95.6 ms |
+| 2 | 14.3170 s | 14.3330 s | 14.3970 s | 80.0 ms |
+| 3 | 22.9657 s | 22.9834 s | 23.0637 s | 98.0 ms |
+| 4 | 30.9825 s | 30.9991 s | 31.0798 s | 97.3 ms |
+
+Each next damage delta is -1.4911; each occurs after the observed Defend=true and before API/observed release. No local counter message accompanies any attempt. All tracks run at speed 1.15, phase 0.0192–0.0240 s at execution; distances 2.259–4.541 studs with clear LOS and facing gates passing. Actual API holds were 130.8–134.3 ms, press-to-request delay 15.0–17.8 ms, request spans 116.8–118.5 ms. Each attempt is later followed by an observed Counter=5 notice. These observations demonstrate an unsuccessful damage-prevention baseline under these conditions; they do not reveal server input acceptance or prove the responsible attack. A missing synthetic press or premature key release is not supported by this capture.
+
+All four attempts were also preceded by local damage approximately 0.40–0.42 s earlier. Being hit by deliberately un-parried preceding combos is a potential confounder; the capture has no affirmative server acceptance or measured stun eligibility. Do not assume changing delay alone fixes this. Longer holds are not supported as the immediate explanation: damage occurred while F remained held.
+
+### Hit-3 follow-up and next comparison
+
+Against Thug6, attempt 1 at 7.6004 s has a sole-candidate self counter at 7.7316 s (~131 ms afterward, no input conflicts). Attempts 2 and 3 precede damage by 113.6 and 113.2 ms with no self counter. This remains mixed and must retain its target context separately from Shadow/Thug5.
+
+**Handoff:** both selected-hit filters and stop/save-on-switch are now observed live. The hit-4 zero-offset baseline has four repeated damage-associated outcomes; another unchanged generic baseline is unnecessary. A bounded next comparison can keep hit 4 selected and hold=120 while changing only offset to **+30 ms**. This deliberately tests a later press, not a claimed calibrated fix: the baseline requests precede damage by roughly 64–81 ms, leaving room for a small controlled shift in client scheduling. Server receipt order, hit-stun/eligibility and attacker attribution remain unknown. Keep the original seed at 0 and record the offset explicitly; do not update other combo seeds from this trial. The +30 ms comparison is proposed, **not applied** during this review.

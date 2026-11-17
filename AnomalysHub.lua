@@ -2466,16 +2466,94 @@ local function value(target,name)
  return object and object:IsA("ValueBase") and object.Value or nil
 end
 local OWN_ONLY="Hidden (only shown for you)"
+-- Your profile save data lives in client memory as plain tables (Hidden Value Scan v3: 16 snapshot copies, keys CharacterName,
+-- Emotion, Strength, Relations, SkillMastery...). Copies are snapshots from different moments, so take the one whose PowerLevel
+-- is closest to the live Character.PowerLevel. Read with next only; rawget lookups missed these tables in scan v2.
+local http=game:GetService("HttpService")
+local profile,profileAt,profileScanning=nil,-math.huge,false
+local function refreshProfile()
+ local gc=getgc or env.getgc
+ if profileScanning or type(gc)~="function" then return end
+ profileScanning=true
+ task.spawn(function()
+  local got,objects=pcall(gc,true)
+  local best,bestGap
+  local live=localPlayer.Character and localPlayer.Character:FindFirstChild("PowerLevel")
+  live=live and live:IsA("ValueBase") and live.Value or nil
+  if got and type(objects)=="table" then
+   local checked=0
+   for _,object in ipairs(objects)do
+    if type(object)=="table" then
+     checked+=1
+     if checked%20000==0 then task.wait()end
+     local copy
+     pcall(function()
+      local n,isProfile=0,false
+      for key in next,object do
+       n+=1;if n>80 then break end
+       if tostring(key)=="CharacterName" then isProfile=true;break end
+      end
+      if isProfile then copy={};for key,item in next,object do copy[tostring(key)]=item end end
+     end)
+     if copy and copy.Emotion~=nil and copy.Trait~=nil then
+      local gap=(finite(live) and finite(copy.PowerLevel)) and math.abs(copy.PowerLevel-live) or 0
+      if not bestGap or gap<bestGap then best,bestGap=copy,gap end
+     end
+    end
+   end
+  end
+  if best then profile=best end
+  profileAt=os.clock();profileScanning=false
+ end)
+end
+local function own(key)return profile and profile[key] end
+local function decode(text)
+ if type(text)~="string" then return nil end
+ local ok,result=pcall(function()return http:JSONDecode(text)end)
+ return ok and result or nil
+end
+local function number(n)return finite(n) and (math.abs(n)>=1000 and commas(n) or (n%1==0 and tostring(n) or string.format("%.1f",n))) or nil end
 -- Sources from the Profile Scan (2026-11-17). Character attributes/values replicate for every player; the stats menu is yours only.
 -- A field marked (?) is a likely mapping that still needs confirming.
 local FIELDS={
- {Label="Combat Experience (CEXP)",Resolve=function()return nil end},
+ -- Not in the client profile (scan v3); per the game guide only the NPC Varrik shows it.
+ {Label="Combat Experience (CEXP)",Resolve=function()return "Server only (ask Varrik)"end},
  {Label="Battle Power",Resolve=function(target)return show(value(target,"PowerLevel"))end},
- {Label="Stats",Resolve=function(target)if target~=localPlayer then return OWN_ONLY end;return ownStats() or "Open your stats menu once"end},
- {Label="Personality",Resolve=function(target)if target~=localPlayer then return OWN_ONLY end;return infoLine("Personality") or "Open your stats menu once"end},
+ {Label="Stats",Resolve=function(target)
+  if target~=localPlayer then return OWN_ONLY end
+  if profile then
+   local parts={}
+   for _,pair in ipairs({{"STR","Strength"},{"BODY","CoreStr"},{"CONC","Concentration"},{"REACT","Reactions"},{"AGI","Agility"},{"KI","Mind"}})do
+    local amount=number(own(pair[2]))
+    if amount then table.insert(parts,pair[1].." "..amount)end
+   end
+   local points,cap=number(own("StatPoints")),number(own("StatCap"))
+   if points then table.insert(parts,points.." pts"..(cap and (" / cap "..cap) or ""))end
+   if #parts>0 then return table.concat(parts," · ")end
+  end
+  return ownStats() or "Loading profile..."
+ end},
+ {Label="Personality",Resolve=function(target)
+  if target~=localPlayer then return OWN_ONLY end
+  return show(own("Personality")) or infoLine("Personality") or "Loading profile..."
+ end},
  {Label="Race",Resolve=function(target)return show(attr(target,"Race"))end},
  {Label="Race Variant",Resolve=function(target)local trait=show(attr(target,"Trait"));return trait and (trait.." (?)")end},
- {Label="Form Mastery",Resolve=function()return nil end},
+ -- Profile SkillMastery is a JSON list (empty "[]" for the user so far); GravityMastery is a number.
+ {Label="Form Mastery",Resolve=function(target)
+  if target~=localPlayer then return OWN_ONLY end
+  if not profile then return "Loading profile..." end
+  local list=decode(own("SkillMastery"))
+  local parts={}
+  if type(list)=="table" then
+   for key,item in pairs(list)do
+    if #parts>=6 then table.insert(parts,"...");break end
+    table.insert(parts,type(key)=="number" and tostring(item) or (tostring(key).." "..tostring(item)))
+   end
+  end
+  local gravity=number(own("GravityMastery"))
+  return (#parts>0 and table.concat(parts,", ") or "No skill/form mastery yet")..(gravity and (" · Gravity "..gravity) or "")
+ end},
  {Label="Limit Break Progress",Resolve=function(target)
   local progress,limit=value(target,"LimitBreak"),attr(target,"Limit")
   if not finite(progress) and not finite(limit) then return nil end
@@ -2491,20 +2569,40 @@ local FIELDS={
  {Label="Latent Power",Resolve=function(target)local potential=show(value(target,"RacePotential"));return potential and ("x"..potential.." RacePotential (?)")end},
  {Label="Emotion",Resolve=function(target)
   if target~=localPlayer then return OWN_ONLY end
-  local label,percent=infoLine("Emotion"),hudCounter("EmotionCounter")
-  if not label and not percent then return "Open your stats menu once" end
-  return (label or "?")..(percent and (" · "..percent) or "")
+  local raw,label,percent=number(own("Emotion")),infoLine("Emotion"),hudCounter("EmotionCounter")
+  if not raw and not label and not percent then return "Loading profile..." end
+  local parts={}
+  for _,part in ipairs({raw,label,percent})do if part then table.insert(parts,part)end end
+  return table.concat(parts," · ")
  end},
  -- The character carries a child named "[Rank]\n<character name>" (Profile Scan: "[Stranger]\nAlmo" on the user's own character).
  -- Ranks per the game guide: Good Friend, Friends, Familiar, Stranger, Adversary, Enemy, Nemesis.
+ -- Your profile's Relations is a JSON map of player name -> score (scan v3: e.g. -3.5, -7). Others' maps aren't sent to you,
+ -- so for another player this shows YOUR score with them plus the rank tag on their character (hypothesis).
  {Label="Relationships",Resolve=function(target)
-  local character=target.Character
-  if not character then return nil end
-  for _,child in ipairs(character:GetChildren())do
-   local rank=child.Name:match("^%[(.-)%]\n")
-   if rank and rank~="" then return (target==localPlayer and "Self tag: " or "")..rank.." (?)" end
+  local relations=profile and decode(own("Relations"))
+  if target==localPlayer then
+   if type(relations)~="table" then return profile and "None yet" or "Loading profile..." end
+   local list={}
+   for name,score in pairs(relations)do table.insert(list,{tostring(name),tonumber(score) or 0})end
+   table.sort(list,function(a,b)return math.abs(a[2])>math.abs(b[2])end)
+   if #list==0 then return "None yet" end
+   local parts={}
+   for index,item in ipairs(list)do
+    if index>4 then table.insert(parts,"+"..(#list-4).." more");break end
+    table.insert(parts,item[1].." "..number(item[2]))
+   end
+   return table.concat(parts,", ")
   end
-  return nil
+  local rank
+  for _,child in ipairs(target.Character and target.Character:GetChildren() or {})do
+   rank=child.Name:match("^%[(.-)%]\n")
+   if rank and rank~="" then break end
+   rank=nil
+  end
+  local score=type(relations)=="table" and tonumber(relations[target.Name])
+  if not rank and not score then return "Stranger (no score)" end
+  return (rank and (rank.." (?)") or "")..(score and ((rank and " · " or "").."your score "..number(score)) or "")
  end},
 }
 
@@ -2546,20 +2644,23 @@ end)
 setOpen(false)
 
 -- Profile rows: label on the left, value on the right.
-local ROW=24
-local profile=ui.Section(page,"Profile",#FIELDS*ROW+30,true)
-profile.Frame.LayoutOrder=2
-local values={}
+-- Label column 38%, value column 62%; long values (stats, relationships, mastery) get two-line rows.
+local TALL={["Stats"]=true,["Relationships"]=true,["Form Mastery"]=true,["Karma"]=true,["Emotion"]=true}
+local section=ui.Section(page,"Profile",0,true)
+section.Frame.LayoutOrder=2
+local values,rowY={},0
 for index,field in ipairs(FIELDS)do
- local y=(index-1)*ROW
- ui.Create("TextLabel",{Position=UDim2.fromOffset(14,y),Size=UDim2.new(.5,-14,0,ROW),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=11,
-  TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text=field.Label},profile.Body)
- values[index]=ui.Create("TextLabel",{Position=UDim2.new(.5,0,0,y),Size=UDim2.new(.5,-14,0,ROW),BackgroundTransparency=1,Font=Enum.Font.GothamSemibold,TextSize=11,
-  TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Right,TextTruncate=Enum.TextTruncate.AtEnd,Text=""},profile.Body)
+ local height=TALL[field.Label] and 34 or 22
+ ui.Create("TextLabel",{Position=UDim2.fromOffset(14,rowY),Size=UDim2.new(.38,-14,0,height),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=11,
+  TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,TextWrapped=true,Text=field.Label},section.Body)
+ values[index]=ui.Create("TextLabel",{Position=UDim2.new(.38,0,0,rowY),Size=UDim2.new(.62,-14,0,height),BackgroundTransparency=1,Font=Enum.Font.GothamSemibold,TextSize=11,
+  TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Right,TextWrapped=true,TextTruncate=Enum.TextTruncate.AtEnd,Text=""},section.Body)
+ rowY+=height
 end
-ui.Create("TextLabel",{Position=UDim2.fromOffset(14,#FIELDS*ROW+4),Size=UDim2.new(1,-28,0,24),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=9,
+ui.Create("TextLabel",{Position=UDim2.fromOffset(14,rowY+4),Size=UDim2.new(1,-28,0,24),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=9,
  TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="(?) = likely source, not yet confirmed. \"Not found yet\" = still hidden; Recorders -> Sparkling Profile Scan -> Hidden Value Scan searches for it."},profile.Body)
+ Text="(?) = likely source, not yet confirmed. Your stats, personality, emotion, mastery and relationships come from your own profile data, which the game only sends to you."},section.Body)
+section.SetHeight(rowY+30)
 
 local elapsed=0
 controller.Connect(run.Heartbeat,function(dt)
@@ -2567,14 +2668,15 @@ controller.Connect(run.Heartbeat,function(dt)
  if elapsed<.5 or not page.Visible then return end
  elapsed=0
  if not target or target.Parent~=players then target=localPlayer;refreshPicker()end
+ -- Re-read the profile while the tab is open: it changes as you play, and a fresh snapshot appears on each update.
+ if os.clock()-profileAt>15 then refreshProfile()end
  for index,field in ipairs(FIELDS)do
   local ok,text=pcall(field.Resolve,target)
   text=ok and text or nil
   local missing=text==nil
   if missing then
    -- CEXP, Form Mastery and Relationships have no source yet; the rest are just absent right now.
-   text=(field.Label:find("CEXP",1,true) or field.Label=="Form Mastery") and "Not found yet"
-    or (target.Character and "Unavailable" or "No character")
+   text=target.Character and "Unavailable" or "No character"
   end
   values[index].Text=text
   values[index].TextColor3=(missing or text==OWN_ONLY) and colors.Muted or colors.Text

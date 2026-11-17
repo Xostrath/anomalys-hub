@@ -153,6 +153,15 @@ SP-T005 local-clock details: attempts at 2609.3927 (`84394230178792`), 2609.8081
 ## Change history
 
 - 2026-11-17 — **ID note:** ESP/Visuals entries use their own **SP-V###** series because two chats were numbering SP-T### in parallel and collided (SP-T011–T014). The renumbered entries are V001 (was T010), V002 (T011), V003 (T012), V004 (T013) and V005 (T014). Commit messages 9189a4c, de2c942, 115adaf and 0cd2f94 still cite the old numbers. GPT's SP-T011–T014 are unrelated parry entries.
+- 2026-11-17 — Visuals v4 (SP-V010). **Hidden Value Scan v3 reviewed: the client profile table, fully dumped** (16 snapshot copies; 13 identical, 3 older ones with lower PowerLevel and Emotion).
+  - **Keys:** Ability, Age, Agility, AuraColor, AutoFire, CharacterName, CombatStyle, Concentration, CoreStr, CounterOnR, Emotion (number), Emp, EventWins, EyeColor, Faction, Fatigue, Gender, GravityMastery, HairColor, Height, Hunger, Jared, Karma, Ki, KiAwakened, KiStyle, Limit, LimitBreak, Location, MenuSettings, Mind (Ki stat), MuscleDense, NewLocation, Personality, Pose, PowerLevel, Quests (JSON), Race, Reactions, Relations (JSON map player→score), ShiftRun, SkillMastery (JSON list), SlotData (JSON), StatCap, StatPoints, Strength, TalentCards (JSON), TalentDraw, Title, Trait, Weapon, Width, Zeni.
+  - **No CEXP key.** The "CEXP" container is a reward-label table ({"5,000","COMBAT EXP"} etc.), not player data. Per the guide, only the NPC Varrik shows CEXP, so it is treated as server-only.
+  - **The profile is your own only;** other players' profiles are not in client memory.
+  - Visuals now reads stats (STR/BODY/CONC/REACT/AGI/KI, points, cap), personality, the emotion number, form mastery (SkillMastery list + GravityMastery) and relationships from the profile.
+    - The profile is refreshed every 15 s while the tab is open (getgc, next-only reads); the snapshot whose PowerLevel is closest to the live `Character.PowerLevel` is used.
+    - For another player, Relationships shows your score with them from your `Relations`, plus their character's `[Rank]` tag (hypothesis).
+    - Latent Power stays `RacePotential` (?); the profile has no latent-power key.
+  - Implemented / untested live.
 - 2026-11-17 — Visuals v3 / Hidden Value Scan v3 (SP-V009).
   - **User-confirmed:** Race Variant (`Character@Trait`) is correct.
   - **Inconclusive:** Limit Break. The user's BP is ~15k, below the first limit, so 0 is expected either way.

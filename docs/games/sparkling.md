@@ -4,12 +4,12 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 
 ## Read first
 
-**Current mode: HITS 2-5 TIMING TEST (Combat page v8 / diagnostics v5); first-hit parry disabled at user request.** The user explicitly requested active auto parry with recording and opponent-parry handling. This supersedes the temporary passive-only instruction; see SP-T021 for the latest correlation/LOS changes. Old mode instructions remain historical.
+**Current mode: SINGLE HIT TEST (Combat page v9 / diagnostics v5), selecting hit 3 or hit 4; first hit remains disabled.** The user explicitly requested active auto parry with recording and opponent-parry handling. This supersedes the temporary passive-only instruction; see SP-T021 for the latest correlation/LOS changes. Old mode instructions remain historical.
 
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. User-supplied entry place: `120525873606470`.
 - Current objective: collect enough diagnostics to explain every automatic-defense attempt or skip before changing its timings.
-- Current defense: off-by-default hits 2-5 trial, with first-hit animation recorded but no first-hit F input. PvP/PvE filters and continuous diagnostics remain; see SP-T023.
-- Latest implementation: **Combat page v8 / diagnostics v5**. First-hit disabled for later-hit trials; 157 mocked assertions and source/both-build compilation passed. First-hit exclusion and later-hit input verified live (SP-T024). Prior v5 correlation/LOS live results remain in SP-T022.
+- Current defense: off-by-default isolated hit-3 / hit-4 trial. Nonselected known hits are recorded without F input. See SP-T025; existing seeds remain unchanged.
+- Latest implementation: **Combat page v9 / diagnostics v5**. Single-hit selector, separate sessions on switch; 187 mocked assertions and source/both-build compilation passed. Awaiting live validation of this mode (SP-T025).
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -24,9 +24,9 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Power ESP | Direct Character.PowerLevel numeric value; rounded whole numbers with commas | Numeric source observed; formatting compiled | Base, effective, or suppressed power? |
 | Ki ESP | Blue bar next to red health bar; requires known Ki and explicit positive MaxKi for fill | Ki observed; bar compiled | No verified MaxKi source; unknown max shows an empty track marked `?` |
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
-| Auto parry | Five shared combo trials, configurable range/timing, facing/LOS gates and F input | Active v7 / diagnostics v5 reviewed through SP-T022 | Reliable timing and input/outcome attribution unverified |
+| Auto parry | Selectable isolated hit-3/hit-4 trial; other hits recorded without F input | Earlier timing evidence through SP-T024; selector implemented in SP-T025 | Selected-hit outcomes and broader timing reliability unverified |
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v8 (SP-T023) | HITS 2-5 TEST; first hit logged/skipped; existing timing/correlation/LOS retained | 157 mocked assertions and compilation passed; first-hit exclusion verified live in SP-T024 | Isolate mixed hits 3/4; hit 5 still needs an eligible exchange |
+| Combat page v9 (SP-T025) | SINGLE HIT TEST selector; switch stops/saves and releases before selecting the next hit | 187 mocked assertions and compilation passed; untested live | Verify selected-hit-only input and compare hit-3/hit-4 histories separately |
 | Parry diagnostics v5 | Recent API/input/request correlation; early releases and intervening input flags; bounded LOS object properties | Live: 25 release pairs and one unmatched cycle correctly separated (SP-T022) | Early-release/ambiguous-window branches remain mock-tested |
 
 ## Sources and capture workflow
@@ -701,3 +701,24 @@ Six other-counter messages produced five possible-parried correlations, still he
 Input-to-Defend delay remains 15.7–22.7 ms (median 16.9); API holds 131.5–140.4 ms; adjacent request spans 110.0–122.7 ms. Ordinary request correlation remains functional without adjusting timing.
 
 **Handoff:** retain first-hit-disabled mode as requested. Hit 2 has repeated strong counter correlations, hit 3 remains mixed, hit 4 has another damage-associated trial, and hit 5 was not eligible here. Next investigation should isolate hits 3/4 and compare their animation phases/request timing, preserving hit 2's seed. To get hit-5 evidence, obtain an eligible exchange with cooldown clear and unobstructed geometry; do not bypass actual cooldown or wall checks. Current evidence does not determine an exact replacement timing. The mode itself is live-validated; broader parry reliability remains unproven.
+
+
+## SP-018 / SP-T025 — isolated hit-3 / hit-4 selector (2026-11-17)
+
+**Authorization and purpose:** user said to continue after the later-hit review and focus on hits 3/4 while preserving hit 2's timing. Current **Combat page v9 / diagnostics v5** provides **Auto Parry // SINGLE HIT TEST** with a **Test hit: 3 (click to switch)** button. It alternates between hit 3 and hit 4; default is hit 3. This replaces simultaneous hits 2-5 for the next diagnostic trial. The selected hit persists; active auto parry still starts OFF on reload.
+
+SP-T023–SP-T024 show mixed hit-3 results and damage associated with hit 4, but do not establish a defensible replacement delay. In SP-T024, one damage event followed both a hit-3 and hit-4 attempt; one self counter likewise had hit-2/hit-3 candidates. Isolating the selected animation prevents automatic attempts for other combos from consuming the same input/cooldown window or creating these automatic-attempt overlaps. It does not eliminate other actors, manual input, or game-origin cooldowns.
+
+### Behavior
+
+- Hit 3 targets animation 95937874840716; hit 4 targets 139487903747364. Only the selected ID can queue an automatic defense. Both retain seed delay 0 s; timing offset and hold controls remain available and unchanged.
+- First-hit animation stays recorded with first_hit_disabled. Other known nonselected hits log trial_hit_filtered with testHit; unknown animations retain unmapped_animation. Hit 2's 0.04 s seed and hit 5's 0.04 s seed remain in source but are filtered out of this isolated trial. They cannot generate F input in this mode. Ownership and existing PvP/PvE filters still apply to the selected hit.
+- Switching the selector stops/saves an active session, clears watched tracks and pending cues, releases held F, disconnects the observation hook, then changes the saved selection. It never automatically enables the next run. If key release fails, the selection remains unchanged until release succeeds.
+- Each session snapshots TestHit. Header Config, START and CUE_ACCEPTED identify the selection; copying a stopped report after switching still reports the original hit. Live status identifies HIT 3 TEST or HIT 4 TEST. Old settings without TestHit default to 3; only 4 selects the alternative, with invalid values falling back to 3.
+- The shared section expands vertically to accommodate the selector above the existing timing boxes. Recorder controls, theme, LOS, cooldown gates and cleanup remain unchanged. No live game session is controlled during deployment.
+
+### Validation and next check
+
+**187 mocked assertions passed:** 47 logger/lifecycle, 41 active feature/deferral/counter checks, 26 PvP/PvE, 7 settings/reload, 1 invalid-hit fallback, 34 asynchronous correlation/LOS, and 31 selector-specific cases. Selector cases cover each known combo under both selections, first-hit logging without input, selected-hit persistence, session headers after switching, key-up on switch, stopped hooks, disabled next run, queued-cue removal, release failure/recovery and player-owned targets. Updated source and staged public/private builds compile. The selector and resulting single-hit trials are **not yet live-validated**.
+
+Next: reload, leave **Test hit: 3**, offset=0 and hold=120, then enable and finish a short exchange. For hit 4, click the selector and enable again; switching finalizes the earlier run. Inspect the histories separately. Required acceptance: no F_DOWN animation outside the selected hit, consistent testHit header, expected filtered skips, paired release requests and cleanup. Then compare selected-hit phase/request/counter/damage observations before proposing a delay adjustment. Nonselected-hit damage is expected and must not be automatically attributed to the selected attempt. Keep the previously favorable hit-2 seed intact; do not tune a global delay from mixed-combo totals.

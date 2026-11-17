@@ -2760,8 +2760,8 @@ ui.FitColumn(ui.Button(card,"Hidden Value Scan",0,0,180,hiddenScan,colors.Accent
 
 end)()
 ;(function()
--- Combat page v8: user-authorized active timing experiment with continuous diagnostics.
--- Hits 2-5 timing trial; first-hit animation is logged but cannot queue defense.
+-- Combat page v9: user-authorized active timing experiment with continuous diagnostics.
+-- Isolated hit-3 or hit-4 trial; other known hits remain recorded without defense input.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -2777,6 +2777,7 @@ if not okInput then vim=nil end
 local ui=controller.UI
 -- Client observations, not server parry-window measurements. Timing unchanged.
 local attacks={['84394230178792']=.04,['95937874840716']=0,['139487903747364']=0,['131649056441662']=.04}
+local testAnimations={[3]="95937874840716",[4]="139487903747364"}
 local enabled,closed=false,false
 local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local sendingAttempt
@@ -2794,7 +2795,7 @@ local diagnosticStatus,button
 local players=game:GetService("Players")
 -- Combat page options (user's reference layout, 2026-11-17). Auto Parry itself never turns on after a reload; only these options persist.
 local settingsPath=rootPath.."sparkling_combat_settings.json"
-local settings={Range=8,PvE=true,PvP=false,SkipKnocked=true,SkipOffScreen=false,TimingOffsetMs=0,HoldMs=120,Binds={}}
+local settings={Range=8,PvE=true,PvP=false,SkipKnocked=true,SkipOffScreen=false,TimingOffsetMs=0,HoldMs=120,TestHit=3,Binds={}}
 if type(readfile)=="function" then
  local ok,saved=pcall(function()return http:JSONDecode(readfile(settingsPath))end)
  if ok and type(saved)=="table" then
@@ -2809,6 +2810,7 @@ local function finiteSetting(value,default,minimum,maximum)
 end
 settings.TimingOffsetMs=finiteSetting(settings.TimingOffsetMs,0,-80,150)
 settings.HoldMs=finiteSetting(settings.HoldMs,120,60,250)
+settings.TestHit=settings.TestHit==4 and 4 or 3
 local function saveSettings()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
@@ -2928,7 +2930,7 @@ local function report(reason)
   .."\nDEFEND_REQUEST pairs adjacent observed requests with recent F input/API pulses (200ms window). Early releases and intervening inputs are explicit; all attribution is temporal. Stop disconnects hooks, so post-stop request receipts may be unavailable."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s; save=5s."
-  .."\nConfig: mode=active_test range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
+  .."\nConfig: mode=active_test testHit="..session.TestHit.." range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
   .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:disabled,combo2:0.04,combo3:0,combo4:0,combo5:0.04 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
@@ -3076,12 +3078,12 @@ end
 
 -- Combat page in the Hunter X Enter section style: an "Auto Parry" section of keybindable rows, then "Don't Parry If".
 local page=ui.Pages.Combat or ui.Pages.Auto
-local parrySection=ui.Section(page,"Auto Parry // HITS 2-5 TEST",312,true)
+local parrySection=ui.Section(page,"Auto Parry // SINGLE HIT TEST",348,true)
 parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
-local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,288),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Testing hits 2-5. First hit is recorded only. Diagnostics always record while enabled."},card)
+ Text="Off. Testing hit "..settings.TestHit.." only. Other hits are recorded without F input. Diagnostics always record while enabled."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -3158,6 +3160,7 @@ local function observe(model,track)
  local id=track.Animation and track.Animation.AnimationId:match("%d+")
  if id=="114493250337466"then skip("first_hit_disabled","stage=observe "..detail);return end
  local seed=id and attacks[id]
+ if seed~=nil and id~=testAnimations[settings.TestHit]then skip("trial_hit_filtered","testHit="..settings.TestHit.." stage=observe "..detail);return end
  local delay=seed and math.max(0,seed+settings.TimingOffsetMs/1000)
  if delay==nil then skip("unmapped_animation",detail);return end
  local allowed,targetReason=targetAllowed(model)
@@ -3245,14 +3248,14 @@ local function start()
  if not release("before_start",true)then status.Text="Release F manually before enabling.";return end
  if controller.IsSparklingRecording and controller.IsSparklingRecording()then status.Text="Stop + Save the manual combat recording before enabling Auto Parry.";return end
  local id=tostring(os.time()).."_"..http:GenerateGUID(false)
- session={Open=true,Id=id,Path=rootPath.."sparkling_auto_parry_"..id..".txt",Unix=os.time(),Started=os.clock(),
+ session={Open=true,TestHit=settings.TestHit,Id=id,Path=rootPath.."sparkling_auto_parry_"..id..".txt",Unix=os.time(),Started=os.clock(),
   Lines={},Bytes=0,Dropped=0,Counts={},Skips={},Actors=setmetatable({},{__mode="k"}),ActorSerial=0,CueSerial=0,Recent={},Pulses={},InputSerial=0,DefendSerial=0,DefendCalls={},DefendCallOrder={},LosObjects=setmetatable({},{__mode="k"}),LosObjectCount=0,
   Damage=0,OtherCounters=0,PossibleParried=0,State={},NextState=0,NextClock=0,NextSave=os.clock()+5,Gate=nil}
  attempts=0;observedCounters=0;lastLocalAttack=-math.huge;lastCounterNotice=nil;table.clear(opponentCandidates)
  enabled=true;ownCharacter=player.Character;nextScan=0;nextPulse=0
  seen=setmetatable({},{__mode="k"})
  button.Text="Auto Parry: ON"
- log("START","mode=active_test offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
+ log("START","mode=active_test testHit="..settings.TestHit.." offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
  local coverage="outgoing hooks unavailable"
  if controller.BeginSparklingParryObservation then
   local ok,disconnect,description=pcall(controller.BeginSparklingParryObservation,guarded("ActionProbe",function(remote,direction,args,started,id,result,path)
@@ -3331,16 +3334,28 @@ optionRow(card,104,"PvP","PVP (Players)",function()return settings.PvP end,setti
 targetsLabel=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,140),Size=UDim2.new(1,-28,0,32),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
  TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Enable Auto Parry to detect nearby players and NPCs."},card)
 
+-- Switching the isolated hit finalizes the current session before changing its configuration.
+local testHitButton
+testHitButton=ui.Button(card,"Test hit: "..settings.TestHit.." (click to switch)",0,0,240,function()
+ if enabled or held then stop("Test hit changed. Enable again to record the next hit.")end
+ if held then return end -- A failed release must complete before changing the test.
+ settings.TestHit=settings.TestHit==3 and 4 or 3
+ testHitButton.Text="Test hit: "..settings.TestHit.." (click to switch)"
+ status.Text="Off. Testing hit "..settings.TestHit.." only. Enable Auto Parry to start a separate recording."
+ saveSettings()
+end,ui.Colors.AccentSoft)
+testHitButton.Position=UDim2.fromOffset(14,176);testHitButton.Size=UDim2.new(1,-28,0,32)
+
 -- Timing values are trial controls, not calibrated server windows.
 local function timingBox(id,title,minimum,maximum,column)
- local label=ui.Create("TextLabel",{Position=UDim2.new(column*.5,14,0,180),Size=UDim2.new(.5,-28,0,20),BackgroundTransparency=1,
+ local label=ui.Create("TextLabel",{Position=UDim2.new(column*.5,14,0,216),Size=UDim2.new(.5,-28,0,20),BackgroundTransparency=1,
   Font=Enum.Font.Gotham,TextSize=10,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text=title},card)
  ui.FitColumn(ui.ValueBox(card,title,0,0,120,settings[id],function(box)
   settings[id]=finiteSetting(tonumber(box.Text),settings[id],minimum,maximum);box.Text=tostring(settings[id]);saveSettings()
   log("SETTING",id.."="..settings[id])
   for _,cue in ipairs(pending)do skip("timing_changed","cue="..cue.Serial)end
   table.clear(pending)
- end),column,202)
+ end),column,238)
 end
 timingBox("TimingOffsetMs","Timing offset (ms)",-80,150,0)
 timingBox("HoldMs","F hold (ms)",60,250,1)
@@ -3426,7 +3441,7 @@ local function update(dt)
    if not reason and now<nextPulse then reason="pulse_cooldown"end
    table.remove(pending,i)
    if reason then skip(reason,"stage=execute "..detail)else
-    log("CUE_ACCEPTED","offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
+    log("CUE_ACCEPTED","testHit="..settings.TestHit.." offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
     sendingAttempt=attempts+1;heldAttempt=sendingAttempt
     held=true;heldAt=now;releaseAt=now+settings.HoldMs/1000;nextPulse=now+.3;nextReleaseRetry=0
     table.insert(session.Pulses,{Id=heldAttempt,DownAt=now})
@@ -3441,7 +3456,7 @@ local function update(dt)
    end
   end
  end
- status.Text=string.format("ACTIVE TEST · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("HIT %d TEST · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",settings.TestHit,attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)

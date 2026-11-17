@@ -169,3 +169,8 @@ Only fields with a confirmed source are read (battle power, race). The rest show
 ### Sparkling later-hit trial (2026-11-17)
 
 At the user's request, Combat page v8 / diagnostics v5 disables first-hit parry and keeps hits 2-5 active with unchanged seeds. First-hit animation remains recorded with first_hit_disabled skips. Reload to use the HITS 2-5 TEST section. See [SP-T023](docs/games/sparkling.md) for validation, latest recording and next-test interpretation.
+
+
+### Sparkling isolated-hit selector (2026-11-17)
+
+Combat page v9 / diagnostics v5 selects hit 3 or hit 4 only. Switching stops/saves the prior session and releases F; it never starts the next run automatically. Selection persists, active state does not. Other hits remain recorded with explicit skip reasons, and all timing seeds remain unchanged. See [SP-T025](docs/games/sparkling.md) for validation and the separate-run workflow.

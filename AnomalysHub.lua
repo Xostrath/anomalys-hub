@@ -202,7 +202,34 @@ loadConfig()
 local gui = create("ScreenGui", {
 	Name = "AnomalyUniversal", ResetOnSpawn = false, IgnoreGuiInset = true,
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 50,
-}, playerGui)
+}, nil)
+-- Some games skin every descendant added to PlayerGui. Mount the hub outside
+-- that tree before creating any controls, so game skins cannot rewrite them.
+local mounted = false
+local function mountHub(parent)
+	if typeof(parent) ~= "Instance" then return false end
+	local ok = pcall(function()
+		local old = parent:FindFirstChild("AnomalyUniversal")
+		if old and old ~= gui then old:Destroy() end
+		gui.Parent = parent
+	end)
+	return ok and gui.Parent == parent
+end
+local hiddenRoot = env.gethui or gethui
+if type(hiddenRoot) == "function" then
+	local ok, root = pcall(hiddenRoot)
+	if ok and typeof(root) == "Instance" and root ~= playerGui and not root:IsDescendantOf(playerGui) then
+		mounted = mountHub(root)
+	end
+end
+if not mounted then
+	local ok, root = pcall(game.GetService, game, "CoreGui")
+	if ok then mounted = mountHub(root) end
+end
+if not mounted then
+	gui.Parent = playerGui
+	warn("[Anomaly] Isolated UI root unavailable; the game may override hub styling.")
+end
 
 local shadow = create("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 8, 0.5, 10),

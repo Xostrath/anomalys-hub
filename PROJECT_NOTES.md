@@ -123,4 +123,23 @@ Power Level labels use rounded whole numbers with comma thousands separators (fo
 
 Auto Parry now starts a bounded diagnostic session automatically; Recorders → Sparkling Parry Diagnostics provides Save Log and Copy Log. The report explains cue decisions, geometry, timing, F down/up, shared outgoing Action observations when hooks are available, cooldowns, health/state and ambiguous self-counter attribution. Latest and unique history files save every five seconds and on stop. At 12,000 event lines / 3 MB, event detail freezes while totals/final status continue. Manual combat recording and automatic observation use exclusive ownership of the existing hooks. Mapped attack timings are unchanged. Source/public/private compilation and 47 mocked Luau assertions passed; the new version remains untested live. See the [Sparkling note](docs/games/sparkling.md) for report fields and the next test.
 
-Every game note must retain discoveries, successes, failures, evidence limits and a next-chat handoff. Consult other games’ notes and referenced code before implementing a similar feature. Initial Beyond Nen/Hunter X Enter notes deliberately mark missing history instead of inventing it.
+Every game note must retain discoveries, successes, failures, evidence limits and a next-chat handoff. Consult other games’ notes and referenced code before implementing a similar feature. The Beyond Nen note is still an initial inventory that marks missing history instead of inventing it. The Hunter X Enter note is a full ledger as of 2026-11-17.
+
+## Sparkling Combat tab (2026-11-17)
+
+Sparkling now has a **Combat** tab and no Auto tab. Auto Parry moved there (the earlier "Auto → Auto Parry" text above is superseded) in Hunter X Enter section style:
+
+- an "Auto Parry" section with an Enable row, a 4–50 stud range slider (default 8) and a PVE row, each with a keybind;
+- a "Don't Parry If" section with Knocked / Off Screen / Typing.
+
+Attacks from other players are never auto-parried; that is the project's standing scope line (see the Hunter X Enter note). Options persist in `AnomalyHub/universal/sparkling_combat_settings.json`; the feature itself still starts off. Details and the live-test plan are in SP-T008 of the [Sparkling note](docs/games/sparkling.md).
+
+## Public/private split (2026-11-17)
+
+Hunter X Enter Auto Eat is now public. These remain private-only:
+
+- Beyond Nen parry recorder and auto parry
+- Hunter Hunger Run Test
+- Nen Code Capture
+
+The Hunter X Enter anti-macro answerer (`HunterXEnterAutoCheck.lua`) is in both builds but is stripped from every public commit; see the commit workflow in the Hunter X Enter note.

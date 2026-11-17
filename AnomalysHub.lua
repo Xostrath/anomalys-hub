@@ -363,7 +363,9 @@ local function makePage(name)
 end
 for _, name in ipairs({"Home", "General", "ESP", "Servers", "Settings"}) do makePage(name) end
 if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
-if env.__AnomalyDetectedProfile == "HunterXEnter" or env.__AnomalyDetectedProfile == "Sparkling" then makePage("Auto") end
+if env.__AnomalyDetectedProfile == "HunterXEnter" then makePage("Auto") end
+-- Sparkling has no autos yet; its Auto Parry lives on Combat.
+if env.__AnomalyDetectedProfile == "Sparkling" then makePage("Combat") end
 if env.__AnomalyDetectedProfile == "HunterXEnter" or env.__AnomalyDetectedProfile == "Sparkling" then makePage("Recorders") end
 
 local function selectTab(name)
@@ -2080,6 +2082,7 @@ button.Size=UDim2.new(1,-28,0,34)
 end)()
 ;(function()
 -- Experimental: two observed attack animations; F input, never remote replay.
+-- Combat page v3 (2026-11-17): NPC attackers only (players are always skipped); keybindable Enable/PvE rows, range slider (4-50 studs, default 8), Don't Parry If Knocked/Off Screen/Typing.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -2105,6 +2108,23 @@ local session,stopProbe,sendingAttempt
 local rootPath="AnomalyHub/universal/"
 local latestPath=rootPath.."sparkling_auto_parry_latest.txt"
 local diagnosticStatus,button
+local players=game:GetService("Players")
+-- Combat page options (user's reference layout, 2026-11-17). Auto Parry itself never turns on after a reload; only these options persist.
+local settingsPath=rootPath.."sparkling_combat_settings.json"
+local settings={Range=8,PvE=true,SkipKnocked=true,SkipOffScreen=false,SkipTyping=true,Binds={}}
+if type(readfile)=="function" then
+ local ok,saved=pcall(function()return http:JSONDecode(readfile(settingsPath))end)
+ if ok and type(saved)=="table" then
+  for key,value in pairs(saved)do if key~="Binds" and type(value)==type(settings[key])then settings[key]=value end end
+  if type(saved.Binds)=="table" then for key,value in pairs(saved.Binds)do if type(value)=="string" then settings.Binds[key]=value end end end
+ end
+end
+settings.Range=math.clamp(math.floor(tonumber(settings.Range)or 8),4,50)
+local function saveSettings()
+ if type(writefile)~="function" then return end
+ if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ pcall(writefile,settingsPath,http:JSONEncode(settings))
+end
 
 -- Same bounded, elapsed-time/history convention as Beyond Nen's recorder.
 local function sample(value)
@@ -2137,7 +2157,8 @@ local function report(reason)
   .."\nSELF_COUNTER lists all attempts in the preceding 1s; attacker is not established. Multiple candidates are ambiguous. Health changes are observations, not verdicts."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s; save=5s."
-  .."\nConfig: range=8 watchRange=30 attackerDot>=0.2 selfDot>=0 delay84394230178792=0.04 delay95937874840716=0 hold=0.12 pulseGap=0.3 cueExpiry=0.25"
+  .."\nConfig: range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." players=never pve="..tostring(settings.PvE)
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." skipTyping="..tostring(settings.SkipTyping).." attackerDot>=0.2 selfDot>=0 delay84394230178792=0.04 delay95937874840716=0 hold=0.12 pulseGap=0.3 cueExpiry=0.25"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d singleCandidateEvents=%d ambiguousEvents=%d noCandidateEvents=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,confirmed,session.Single,session.Ambiguous,session.Unmatched,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -2194,6 +2215,13 @@ local function roots(model)
  if not hum or hum.Health<=0 or not root or not root:IsA("BasePart")then return end
  return root,hum
 end
+local function onScreen(model)
+ local camera=workspace.CurrentCamera
+ local root=model and model:FindFirstChild("HumanoidRootPart")
+ if not camera or not root then return false end
+ local _,visible=camera:WorldToViewportPoint(root.Position)
+ return visible
+end
 local function threat(model)
  if not model or not model:IsDescendantOf(workspace)then return false,"actor_unloaded",""end
  local char=player.Character
@@ -2207,7 +2235,7 @@ local function threat(model)
  local attackerDot=other.CFrame.LookVector:Dot(direction)
  local selfDot=root.CFrame.LookVector:Dot(-direction)
  local detail=string.format("distance=%.3f vertical=%.3f attackerDot=%.3f selfDot=%.3f",distance,delta.Y,attackerDot,selfDot)
- if distance>8 then return false,"out_of_range",detail end
+ if distance>settings.Range then return false,"out_of_range",detail end
  if attackerDot<.2 then return false,"attacker_facing",detail end
  if selfDot<0 then return false,"self_facing",detail end
  local params=RaycastParams.new()
@@ -2218,13 +2246,14 @@ local function threat(model)
  return true,"clear",detail.." los=clear"
 end
 
-local card=ui.Card(ui.Pages.Auto,"AUTO PARRY // EXPERIMENTAL","Two recorded melee attacks only. Full diagnostics start automatically; save/copy in Recorders.",232)
-for _,child in ipairs(card:GetChildren())do
- if child:IsA("TextLabel") and child.Position.Y.Offset==31 then child.Size=UDim2.new(1,-28,0,54)end
-end
-local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,142),Size=UDim2.new(1,-28,0,76),BackgroundTransparency=1,
+-- Combat page in the Hunter X Enter section style: an "Auto Parry" section of keybindable rows, then "Don't Parry If".
+local page=ui.Pages.Combat or ui.Pages.Auto
+local parrySection=ui.Section(page,"Auto Parry",200,true)
+parrySection.Frame.LayoutOrder=1
+local card=parrySection.Body
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,142),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Does not cover heavy attacks, projectiles, or other fighting styles. Never enables itself after reload."},card)
+ Text="Off. Experimental: two recorded melee attacks only; no heavy attacks, projectiles or other styles. Never enables itself after reload. Diagnostics save/copy in Recorders."},card)
 local function release(reason)
  if not held then return true end
  local now=os.clock()
@@ -2284,6 +2313,10 @@ local function observe(model,track)
  local id=track.Animation and track.Animation.AnimationId:match("%d+")
  local delay=id and attacks[id]
  if delay==nil then skip("unmapped_animation",detail);return end
+ -- Workspace.Live holds players and NPCs (trainers) alike; a Player owning the model makes it a player.
+ -- Scope: automated defense is for NPCs only; attacks from other players are never auto-parried.
+ if players:GetPlayerFromCharacter(model)~=nil then skip("player_attacker",detail);return end
+ if not settings.PvE then skip("pve_off",detail);return end
  local valid,reason,geometry=threat(model)
  if not valid then skip(reason,"stage=observe "..detail.." "..geometry);return end
  seen[track]=now
@@ -2299,7 +2332,7 @@ local function sync()
   for _,model in ipairs(live:GetChildren())do
    local root,hum=roots(model)
    local localRoot=roots(player.Character)
-   if model~=player.Character and root and localRoot and (root.Position-localRoot.Position).Magnitude<=30 then
+   if model~=player.Character and root and localRoot and (root.Position-localRoot.Position).Magnitude<=math.max(30,settings.Range+10) then
     local animator=hum:FindFirstChildOfClass("Animator")
     if animator then
      wanted[model]=true
@@ -2345,8 +2378,7 @@ local function stateSample()
  for key in pairs(session.State)do if current[key]==nil then log("STATE_REMOVED","field="..sample(key))end end
  session.State=current
 end
-button=ui.Button(card,"Auto Parry: OFF",14,96,180,function()
- if enabled then stop("Disabled.");return end
+local function start()
  if not vim then status.Text="Virtual input unavailable.";return end
  if controller.IsSparklingRecording and controller.IsSparklingRecording()then status.Text="Stop + Save the manual combat recording before enabling Auto Parry.";return end
  if not release("before_start")then status.Text="Release F manually before enabling.";return end
@@ -2372,8 +2404,90 @@ button=ui.Button(card,"Auto Parry: OFF",14,96,180,function()
  local requests=rs:FindFirstChild("Requests")
  log("COVERAGE",coverage.." CooldownNT="..tostring(requests and requests:FindFirstChild("CooldownNT")~=nil).." Effects="..tostring(requests and requests:FindFirstChild("Effects")~=nil))
  actor(ownCharacter);clockSample();save("RUNNING")
-end,ui.Colors.AccentSoft)
-button.Size=UDim2.new(1,-28,0,34)
+end
+local function toggleParry()if enabled then stop("Disabled.")else start()end end
+
+-- Rows: checkbox on the left, keybind on the right ("None" until set; Esc or Backspace clears it).
+local rows,binding={},nil
+local function bindButton(parent,y,id)
+ local object=ui.Button(parent,settings.Binds[id] or "None",0,0,80,function(self)binding={Id=id,Button=self};self.Text="..."end)
+ object.Position=UDim2.new(1,-94,0,y+2);object.Size=UDim2.fromOffset(80,24)
+ return object
+end
+local function optionRow(parent,y,id,label,get,toggle)
+ local box=ui.Checkbox(parent,label,"",toggle)
+ box.Position=UDim2.fromOffset(14,y);box.Size=UDim2.new(1,-118,0,28)
+ local function refresh()box.Text=label..(get() and ": ON" or ": OFF")end
+ refresh()
+ rows[id]={Toggle=toggle,Refresh=refresh,Key=bindButton(parent,y,id)}
+ return box
+end
+local function setting(id)
+ return function()
+  settings[id]=not settings[id];saveSettings();rows[id].Refresh()
+  log("SETTING",id.."="..tostring(settings[id]))
+ end
+end
+-- start/stop keep writing "Auto Parry: ON/OFF", which the checkbox reads.
+button=optionRow(card,0,"Enabled","Enable Auto Parry",function()return enabled end,toggleParry)
+local rangeLabel=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,36),Size=UDim2.new(1,-28,0,14),BackgroundTransparency=1,Font=Enum.Font.Gotham,
+ TextSize=11,TextColor3=ui.Colors.Text,TextXAlignment=Enum.TextXAlignment.Left,Text=""},card)
+local track=ui.Create("TextButton",{Position=UDim2.fromOffset(14,56),Size=UDim2.new(1,-28,0,8),BackgroundColor3=ui.Colors.Surface,BorderSizePixel=0,
+ AutoButtonColor=false,Text=""},card)
+ui.Create("UICorner",{CornerRadius=UDim.new(0,4)},track)
+ui.Create("UIStroke",{Color=ui.Colors.Stroke,Thickness=1},track)
+local fill=ui.Create("Frame",{Size=UDim2.fromScale(0,1),BackgroundColor3=ui.Colors.Accent,BorderSizePixel=0},track)
+ui.Create("UICorner",{CornerRadius=UDim.new(0,4)},fill)
+local MIN_RANGE,MAX_RANGE=4,50
+local function showRange()
+ fill.Size=UDim2.fromScale((settings.Range-MIN_RANGE)/(MAX_RANGE-MIN_RANGE),1)
+ rangeLabel.Text="Max Auto Parry Range: "..settings.Range.." studs"
+end
+showRange()
+local dragging=false
+local function setRange(x)
+ local width=track.AbsoluteSize.X
+ if width<=0 then return end
+ local value=math.floor(MIN_RANGE+math.clamp((x-track.AbsolutePosition.X)/width,0,1)*(MAX_RANGE-MIN_RANGE)+.5)
+ if value~=settings.Range then settings.Range=value;showRange()end
+end
+controller.Connect(track.InputBegan,function(io)
+ if io.UserInputType==Enum.UserInputType.MouseButton1 or io.UserInputType==Enum.UserInputType.Touch then dragging=true;setRange(io.Position.X)end
+end)
+controller.Connect(input.InputChanged,function(io)
+ if dragging and (io.UserInputType==Enum.UserInputType.MouseMovement or io.UserInputType==Enum.UserInputType.Touch)then setRange(io.Position.X)end
+end)
+controller.Connect(input.InputEnded,function(io)
+ if dragging and (io.UserInputType==Enum.UserInputType.MouseButton1 or io.UserInputType==Enum.UserInputType.Touch)then
+  dragging=false;saveSettings();log("SETTING","Range="..settings.Range)
+ end
+end)
+optionRow(card,74,"PvE","PVE (NPCs)",function()return settings.PvE end,setting("PvE"))
+ui.Create("TextLabel",{Position=UDim2.fromOffset(14,106),Size=UDim2.new(1,-28,0,30),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="NPC attacks only. Attacks from other players are never auto-parried."},card)
+
+local skipSection=ui.Section(page,"Don't Parry If",96,true)
+skipSection.Frame.LayoutOrder=2
+optionRow(skipSection.Body,0,"SkipKnocked","Don't Parry If Knocked",function()return settings.SkipKnocked end,setting("SkipKnocked"))
+optionRow(skipSection.Body,30,"SkipOffScreen","Don't Parry If Off Screen",function()return settings.SkipOffScreen end,setting("SkipOffScreen"))
+optionRow(skipSection.Body,60,"SkipTyping","Don't Parry If Typing",function()return settings.SkipTyping end,setting("SkipTyping"))
+
+controller.Connect(input.InputBegan,function(object,processed)
+ if closed or object.UserInputType~=Enum.UserInputType.Keyboard then return end
+ if binding then
+  local target=binding;binding=nil
+  local key=object.KeyCode
+  settings.Binds[target.Id]=(key~=Enum.KeyCode.Escape and key~=Enum.KeyCode.Backspace) and key.Name or nil
+  target.Button.Text=settings.Binds[target.Id] or "None";saveSettings()
+  return
+ end
+ if processed or input:GetFocusedTextBox()then return end
+ -- Our own F pulse must never flip a row bound to F.
+ if object.KeyCode==Enum.KeyCode.F and (held or sendingAttempt)then return end
+ for id,row in pairs(rows)do
+  if settings.Binds[id]==object.KeyCode.Name then row.Toggle()end
+ end
+end)
 
 local logCard=ui.Card(ui.Pages.Recorders,"SPARKLING PARRY DIAGNOSTICS","Starts with Auto Parry. Stop Auto Parry to finalize the session; logs save automatically.",224)
 for _,child in ipairs(logCard:GetChildren())do
@@ -2399,7 +2513,8 @@ local function update(dt)
  if not enabled or closed then return end
  if dt>.1 then log("FRAME_GAP","dt="..dt)end
  if player.Character~=ownCharacter or not roots(ownCharacter)then stop("Character changed or died. Enable again when ready.");return end
- local gate=input:GetFocusedTextBox() and "text_entry" or (guiService.MenuIsOpen and "menu" or "ready")
+ -- With "Don't Parry If Typing" off, cues still fire while a text box has focus (the F then lands in that box).
+ local gate=(settings.SkipTyping and input:GetFocusedTextBox()) and "text_entry" or (guiService.MenuIsOpen and "menu" or "ready")
  if session.Gate~=gate then session.Gate=gate;log("GATE",gate)end
  if now>=session.NextState then session.NextState=now+.5;stateSample()end
  if now>=session.NextClock then session.NextClock=now+5;clockSample()end
@@ -2418,8 +2533,12 @@ local function update(dt)
    local manualF=input:IsKeyDown(Enum.KeyCode.F)
    local detail=string.format("cue=%d actor=%s age=%.4f scheduledLate=%.4f held=%s pulseRemaining=%.4f counterRemaining=%.4f inputF=%s %s %s",
     cue.Serial,actor(cue.Model),now-cue.SeenAt,now-cue.At,tostring(held),math.max(0,nextPulse-now),math.max(0,cooldownUntil-now),tostring(manualF),trackData(cue.Track),geometry)
+   -- "Knocked" is Character.Ragdolled (observed in captures as a boolean attribute); hypothesis until a knocked test confirms it.
+   local knocked=settings.SkipKnocked and ownCharacter:GetAttribute("Ragdolled")==true
+   local offScreen=settings.SkipOffScreen and not onScreen(cue.Model)
    local reason=now>cue.Expires and "expired" or held and "already_held" or now<nextPulse and "pulse_cooldown"
-    or now<cooldownUntil and "counter_cooldown" or manualF and "f_already_down" or not cue.Track.IsPlaying and "track_stopped" or not valid and geometryReason
+    or now<cooldownUntil and "counter_cooldown" or manualF and "f_already_down" or not cue.Track.IsPlaying and "track_stopped"
+    or knocked and "self_knocked" or offScreen and "off_screen" or not valid and geometryReason
    if reason then skip(reason,"stage=execute "..detail)else
     log("CUE_ACCEPTED",detail)
     sendingAttempt=attempts+1
@@ -3239,7 +3358,7 @@ local ui=controller.UI
 local modes={
 	{Id="meditation",Name="Meditation",Key="M",Stat="MeditationPoints",GainLabel="Meditation points",Help="Answers each current key prompt. Starts with M; stops at the meditation limit."},
 	{Id="strength",Name="Strength",Key="K",Stat="PushupPoints",GainLabel="Push-ups",Help="Keeps doing push-ups until the game ends them, then rests to 90% stamina and restarts."},
-	{Id="speed",Name="Speed",Stat="Physics_Running",GainLabel="Running training",Help="Runs into walls or in your camera direction. Retries unconfirmed sprints; watches stamina and works tabbed out."},
+	{Id="speed",Name="Speed",Stat="Physics_Running",GainLabel="Running training",Help="Runs into walls or in your camera direction. Retries unconfirmed sprints; runs stamina to 0, rests to 100%, and works tabbed out."},
 	{Id="climb",Name="Climb",Stat="Physics_Climbing",GainLabel="Climbing training",Help="Face a nearby wall. Climbs, waits to land, then repeats. Rests for stamina; stops if the wall is lost."},
 }
 local active,closed,focused=nil,false,true
@@ -3429,6 +3548,12 @@ local function movement(c,humanoid,root,now)
 		end
 		local function retrySprint(reason)
 			if not release("W") then stop("Sprint key release failed");return end
+			-- The game may end a sprint just above 0%; a sprint lost on a low bar counts as empty, so rest to 100% instead of retrying.
+			local fraction=stamina(c)
+			if fraction and fraction<=.15 then
+				note(c,"STAMINA_REST "..fraction.." sprint ended "..reason)
+				c.Rest=true;c.Pending=nil;c.SecondAt=nil;c.Phase="start";releaseAll();return
+			end
 			c.SprintRetries=(c.SprintRetries or 0)+1
 			c.Phase="retry";c.Next=now+.35
 			note(c,"SPRINT_RETRY "..c.SprintRetries.." "..reason)
@@ -3544,6 +3669,12 @@ local function start(mode)
 	mode.Button.Text="Auto "..mode.Name..": ON";mode.Button.BackgroundColor3=ui.Colors.AccentSoft
 	note(c,"START mode="..mode.Id);save(c,"RUNNING")
 end
+-- Auto Eat pauses whichever registered autos are running, eats, then resumes the same ones.
+controller.HunterAutos=controller.HunterAutos or {}
+table.insert(controller.HunterAutos,{Name="Auto Training",
+	Active=function()return active~=nil end,
+	Pause=function()local mode=active and active.Mode;if mode then stop("Paused to eat")end;return mode end,
+	Resume=function(mode)if mode and not active and not closed then start(mode)end end})
 local trainingSection
 if ui.Section and ui.Checkbox then
 	trainingSection=ui.Section(ui.Pages.Auto,"Auto Training",284,true)
@@ -3565,6 +3696,7 @@ for index,mode in ipairs(modes)do
 		TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
 		Text=mode.Id=="meditation" and "Off. One training macro at a time."
 			or mode.Id=="strength" and "Off. Rest only after the game ends push-ups; restart at 90% stamina."
+			or mode.Id=="speed" and "Off. Run until stamina is empty; resume at 100%. One macro at a time."
 			or "Off. Rest at 15% stamina; resume at 90%. One macro at a time."},card)
 	end
 end
@@ -3590,11 +3722,15 @@ local function update()
 		if fraction==nil then
 			releaseAll();c.SecondAt=nil;c.Rest=true;c.Pending=nil;c.Phase="start";c.Mode.Status.Text=reason.."; no training inputs sent";return
 		end
-		if c.Mode.Id~="strength" and fraction<=.15 then
+		-- Speed runs the bar dry and refills it completely (user, 2026-11-17); climbing keeps a 15% margin so it never drops off a wall.
+		-- 0.5% either side absorbs the bar's rounding.
+		local low,full=.15,.9
+		if c.Mode.Id=="speed"then low,full=.005,.995 end
+		if c.Mode.Id~="strength" and fraction<=low then
 			if not c.Rest then note(c,"STAMINA_REST "..fraction)end
 			c.Rest=true;c.Pending=nil;c.SecondAt=nil;c.Phase="start";releaseAll()
 		end
-		if c.Rest and fraction<.9 then c.Pending=nil;c.Mode.Status.Text=string.format("Resting: stamina %.0f%% / 90%%",fraction*100);return end
+		if c.Rest and fraction<full then c.Pending=nil;c.Mode.Status.Text=string.format("Resting: stamina %.0f%% / %d%%",fraction*100,full>.99 and 100 or 90);return end
 		if c.Rest then
 			c.Rest=false;c.Phase="start";c.Attached=false;c.Awaiting=nil
 			if not c.Training then c.StartAttempt=nil end
@@ -3632,7 +3768,8 @@ controller.RegisterCleanup(function()stop("Unload");closed=true end)
 
 end)()
 ;(function()
--- Independent Nen upkeep. Uses the recorded L key; never sends skill/XP requests.
+-- Independent Nen upkeep. Presses the skill's own key; never sends skill/XP requests.
+-- Every skill toggles like basic Nen (NenClient: Matches(action) -> toggleSkill), so one flow covers all ten.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="HunterXEnter" then return end
@@ -3644,16 +3781,32 @@ local run=game:GetService("RunService")
 local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
 local ui=controller.UI
 local choices={"Nen","Ten","Ren","Zetsu","In","Gyo","Shu","Ken","Ko","En"}
+-- The user's binds from their settings screen (2026-11-17); the game's defaults differ, so these are what get pressed.
+local KEYS={Nen=Enum.KeyCode.L,Ten=Enum.KeyCode.Y,Ren=Enum.KeyCode.U,Zetsu=Enum.KeyCode.H,In=Enum.KeyCode.Z,
+	Gyo=Enum.KeyCode.T,Shu=Enum.KeyCode.N,Ken=Enum.KeyCode.G,Ko=Enum.KeyCode.R,En=Enum.KeyCode.C}
+-- The game's own display of the binding, read only to warn when it no longer matches (the user rebound a key).
+local binds
+pcall(function()binds=require(rs:WaitForChild("Modules",5):WaitForChild("KeybindController",5))end)
+local function liveKey(name)
+	local found
+	if type(binds)=="table" and type(binds.GetDisplay)=="function"then
+		pcall(function()
+			local text=binds.GetDisplay(name=="Nen" and "BasicNen" or name)
+			if type(text)=="string" and text:match("^%w+$")then found=Enum.KeyCode[text]end
+		end)
+	end
+	return found
+end
 local preference="AnomalyHub/universal/hunter_nen_selection.txt"
 local selected="Nen"
 if type(readfile)=="function"then local ok,value=pcall(readfile,preference);if ok and table.find(choices,value)then selected=value end end
 local state={Enabled=false,Closed=false,Character=player.Character,Pushups=false,NextAttempt=0,Attempts=0,KeyDown=false,ReleaseAt=0}
 local group=ui.TrainingSection
-local card=group and group.Body or ui.Card(ui.Pages.Auto,"AUTO NEN // v1","Keeps the selected aura training. Refills fully between cycles; waits for push-ups to end.",226)
+local card=group and group.Body or ui.Card(ui.Pages.Auto,"AUTO NEN // v2","Keeps the selected aura training. Refills fully between cycles; waits for push-ups to end.",226)
 if not group then card.LayoutOrder=-40 end
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,group and 232 or 162),Size=UDim2.new(1,-28,0,44),BackgroundTransparency=1,
 	Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
-	Text="Off. Nen is confirmed; other skills need a recording."},card)
+	Text="Off. Pick a skill; locked skills will not activate."},card)
 local button,picker
 local logLines,nextLog={},0
 local function saveReport(reason)
@@ -3661,7 +3814,7 @@ local function saveReport(reason)
 	table.insert(logLines,string.format("%.3f selected=%s active=%s attempts=%d %s",os.clock(),selected,tostring(player:GetAttribute("ActiveNenSkill")),state.Attempts,reason))
 	if type(writefile)=="function"then
 		if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
-		pcall(writefile,"AnomalyHub/universal/hunter_auto_nen_test.txt","HUNTER AUTO NEN v1 // recorded L key only\n"..table.concat(logLines,"\n"))
+		pcall(writefile,"AnomalyHub/universal/hunter_auto_nen_test.txt","HUNTER AUTO NEN v2 // each skill's own key (Nen L, Ten Y, Ren U, Zetsu H, In Z, Gyo T, Shu N, Ken G, Ko R, En C)\n"..table.concat(logLines,"\n"))
 	end
 end
 local list=ui.Create("Frame",{Position=UDim2.fromOffset(0,group and 180 or 112),Size=UDim2.new(1,0,0,206),BackgroundTransparency=1,Visible=false},card)
@@ -3713,7 +3866,7 @@ local function busyPushups()
 end
 local function release()
 	if not state.KeyDown then return true end
-	local ok=pcall(function()vim:SendKeyEvent(false,Enum.KeyCode.L,false,game)end)
+	local ok=pcall(function()vim:SendKeyEvent(false,state.Key or KEYS.Nen,false,game)end)
 	if ok then state.KeyDown=false;controller.HunterNenInputUntil=nil end
 	return ok
 end
@@ -3724,8 +3877,10 @@ local function stop(reason)
 	saveReport(status.Text)
 end
 controller.StopHunterAutoNen=stop
+-- Infinite Nen holds a technique's aura only while Auto Nen is training it.
+controller.HunterAutoNenTraining=function()return state.Enabled and not state.Closed and selected or nil end
 controller.HunterNenNeedsActivationWindow=function()
-	if not state.Enabled or selected~="Nen" or state.Attempts>=3 or activeSkill() then return false end
+	if not state.Enabled or state.Attempts>=3 or activeSkill() then return false end
 	if input:GetFocusedTextBox() or menu.MenuIsOpen then return false end
 	if player:GetAttribute("Unlocked_Nen")~=true and player:GetAttribute("NenUnlocked")~=true then return false end
 	local value=fraction()
@@ -3733,21 +3888,25 @@ controller.HunterNenNeedsActivationWindow=function()
 end
 local function toggle()
 	if state.Enabled then stop();return end
-	if selected~="Nen"then status.Text=selected.." needs a recording before automatic activation is available.";return end
 	if not vim then status.Text="Roblox input is unavailable.";return end
 	if controller.StopHunterRecording then controller.StopHunterRecording("Auto Nen started")end
 	state.Enabled=true;state.Attempts=0;state.Pending=nil;state.NextAttempt=0;state.Bootstrapped=false
 	button.Text="Auto Nen: ON";button.BackgroundColor3=ui.Colors.AccentSoft;show(false)
 end
+controller.HunterAutos=controller.HunterAutos or {}
+table.insert(controller.HunterAutos,{Name="Auto Nen",
+	Active=function()return state.Enabled end,
+	Pause=function()stop("Paused to eat.");return true end,
+	Resume=function()if not state.Enabled and not state.Closed then toggle()end end})
 button=group and ui.Checkbox(card,"Nen","Auto Nen: OFF",toggle) or ui.Button(card,"Auto Nen: OFF",14,116,180,toggle)
 button.Position=UDim2.fromOffset(14,group and 112 or 116)
 button.Size=UDim2.new(1,-28,0,group and 28 or 34)
 picker=ui.Button(card,"Training: "..selected.." v",14,group and 144 or 72,180,function()show(not expanded)end)
 picker.Size=UDim2.new(1,-28,0,group and 28 or 34)
 for index,name in ipairs(choices)do
-	ui.FitColumn(ui.Button(list,name=="Nen" and "Nen" or name.." (unmapped)",0,0,180,function()
+	ui.FitColumn(ui.Button(list,name.." ("..KEYS[name].Name..")",0,0,180,function()
 		selected=name;state.Attempts=0;state.Pending=nil;show(false)
-		status.Text=name=="Nen" and "Nen selected. Ready for shared-bar training." or name.." needs a recording; no activation will be sent."
+		status.Text=name.." selected ("..KEYS[name].Name.." key). Ready for shared-bar training."
 		if type(writefile)=="function"then
 			if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
 			pcall(writefile,preference,name)
@@ -3769,20 +3928,20 @@ local function update()
 	end
 	local char=player.Character;local hum=char and char:FindFirstChildOfClass("Humanoid")
 	if not hum or hum.Health<=0 then status.Text="Waiting for your character.";return end
-	if selected~="Nen"then status.Text=selected.." needs a recording. Other autos keep running.";return end
 	local skill=activeSkill()
 	local value=fraction()
 	if skill then
 		state.Pending=nil;state.Attempts=0
-		status.Text=skill==selected and ("Training Nen"..(value and string.format(" · aura %.0f%%",value*100)or "").."\nOther training can run alongside.") or ("Waiting: "..skill.." is active.")
+		status.Text=skill==selected and ("Training "..selected..(value and string.format(" · aura %.0f%%",value*100)or "").."\nOther training can run alongside.") or ("Waiting: "..skill.." is active.")
 		return
 	end
 	if player:GetAttribute("Unlocked_Nen")~=true and player:GetAttribute("NenUnlocked")~=true then status.Text="Nen unlock not confirmed.";return end
 	if state.Pending then
-		if now-state.Pending<4 then status.Text="Waiting for aura activation.";return end
+		if now-state.Pending<4 then status.Text="Waiting for "..selected.." to activate.";return end
 		state.Pending=nil;state.NextAttempt=now+2
 	end
-	if state.Attempts>=3 then status.Text="Activation not confirmed. Toggle Auto Nen to retry.";return end
+	-- The game ignores the key for a skill that is not unlocked yet; that shows up here as three unconfirmed tries.
+	if state.Attempts>=3 then status.Text=selected.." did not activate. Is it unlocked? Toggle Auto Nen to retry.";return end
 	if value and value<.995 then status.Text=string.format("Refilling aura: %.0f%% / 100%%",value*100);return end
 	if not value and state.Bootstrapped then status.Text="Waiting for the shared Nen bar.";return end
 	if busyPushups()then status.Text="Waiting for push-ups to finish before activating aura.";return end
@@ -3791,10 +3950,12 @@ local function update()
 	if now<state.NextAttempt or state.KeyDown then return end
 	state.Attempts+=1;state.Bootstrapped=true;state.KeyDown=true;state.ReleaseAt=now+.08
 	controller.HunterNenInputUntil=state.ReleaseAt
-	local ok=pcall(function()vim:SendKeyEvent(true,Enum.KeyCode.L,false,game)end)
+	state.Key=KEYS[selected]
+	local ok=pcall(function()vim:SendKeyEvent(true,state.Key,false,game)end)
 	if not ok then stop("Nen input failed; stopped.");return end
-	state.Pending=now;state.NextAttempt=now+2;status.Text="Activating Nen..."
-	saveReport("KEY_L activation requested")
+	state.Pending=now;state.NextAttempt=now+2;status.Text="Activating "..selected.."..."
+	local live=liveKey(selected)
+	saveReport("KEY_"..state.Key.Name.." "..selected.." activation requested"..(live and live~=state.Key and " (game shows "..live.Name..": rebound?)" or ""))
 end
 controller.Connect(run.Heartbeat,function()
 	local ok=pcall(update);if not ok then stop("Nen update failed; stopped.")end
@@ -3978,8 +4139,11 @@ end)
 
 end)()
 ;(function()
--- Confirmed in-game 2026-11-16 (v3). Plays fishing the normal way with the E key: cast, hook the bite, steer the reel zone.
--- Sends key input only; every FishingRemote request is made by the game client itself.
+-- v4 confirmed in-game 2026-11-16; v5 timing confirmed 2026-11-17; v6 legendary fight landed MasterOfTheSwamp 2026-11-17.
+-- v7 re-aims the camera when a cast finds no water (the legend cinematic hands the camera back at a random angle) and holds casts during anti-macro checks. Casts and hooks with the E key, steers the reel zone to keep the fish on the line,
+-- then claims the catch the instant the server's minReel window opens -- the server only gates catches on elapsed time
+-- (minReel) plus the fish not having escaped, never on real reel progress, so this lands fish as fast as the server allows.
+-- Steering is still run so the fish can't drift off the line before minReel passes (some fish escape before their own minReel).
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="HunterXEnter"then return end
@@ -3991,7 +4155,7 @@ local guiService=game:GetService("GuiService")
 local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
 local ui=controller.UI
 local group=ui.GeneralSection
-local card=group and group.Body or ui.Card(ui.Pages.General,"AUTO FISH // v3","Casts, hooks bites and plays the reel minigame with the E key. Equip your rod and face the water.",172)
+local card=group and group.Body or ui.Card(ui.Pages.General,"AUTO FISH // v7","Casts, hooks bites and claims each catch the instant the server allows. Equip your rod and face the water.",172)
 local top=group and group.Height or 72
 if group then group.SetHeight(top+28) end
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,44),BackgroundTransparency=1,Visible=group==nil,
@@ -4002,15 +4166,30 @@ local button
 local path="AnomalyHub/universal/hunter_auto_fish_latest.txt"
 -- Reel physics measured from a manual catch, in track heights per second squared. Slightly low on purpose so braking starts early.
 local FALL,LIFT=2.6,3.8
-local function save()
+local HEADER="HUNTER AUTO FISH v7 // E-key cast and hook; claims normal catches once minReel passes; plays legendary fights\n"
+ .."AIM lines re-point the camera after a cast found no water; ANTI_MACRO lines mark a check on screen (new casts wait for it).\nKey input only. IN lines are server fishing events; ANIM lines are the character's fishing state.\n"
+ .."REEL lines (10Hz): zone/fish are centres as a fraction of the track (0 top, 1 bottom), v is zone speed, held is our key, down is the game's view of E.\n"
+ .."LEGEND lines (10Hz): tension 0-1 (snaps after 0.7s at 1), source hud/sim, progress is the fight's % label, callout is the game's prompt.\n"
+local function write(file,lines)
  if type(writefile)~="function"then return false end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- return pcall(writefile,path,"HUNTER AUTO FISH v3 // plays the reel minigame with the E key\nKey input only. IN lines are server fishing events; ANIM lines are the character's fishing state.\n"
-  .."REEL lines (10Hz): zone/fish are centres as a fraction of the track (0 top, 1 bottom), v is zone speed, held is our key, down is the game's view of E.\n"..table.concat(state.Lines,"\n"))
+ return pcall(writefile,file,HEADER..table.concat(lines,"\n"))
+end
+-- Each session is archived as hunter_auto_fish_<start>_<part>.txt; a full part rolls over instead of dropping old lines,
+-- so restarting Auto Fish or fishing for hours never loses a rare catch.
+local function save()
+ if state.Archive then write(state.Archive.."_"..(state.Part or 1)..".txt",state.Lines)end
+ if state.LegendLines and state.LegendFile then write(state.LegendFile,state.LegendLines)end
+ return write(path,state.Lines)
 end
 local function log(message)
- if #state.Lines>=3000 then table.remove(state.Lines,1)end
- table.insert(state.Lines,string.format("%.3f %s",os.clock(),tostring(message):sub(1,300)))
+ local line=string.format("%.3f %s",os.clock(),tostring(message):sub(1,300))
+ if #state.Lines>=3000 then
+  save();state.Part=(state.Part or 1)+1;state.Lines={"(continued from part "..(state.Part-1)..")"}
+ end
+ table.insert(state.Lines,line)
+ -- Every line of a legendary fight also goes to its own file, written when the fight ends.
+ if state.LegendLines then table.insert(state.LegendLines,line)end
 end
 local function describe(value)
  if type(value)~="table"then return tostring(value)end
@@ -4024,6 +4203,28 @@ local function key(down,force)
  local ok=pcall(function()vim:SendKeyEvent(down,Enum.KeyCode.E,false,game)end)
  if ok then state.Held=down;state.KeyAt=os.clock()end
  return ok
+end
+local function flat(v)
+ local f=Vector3.new(v.X,0,v.Z)
+ return f.Magnitude>.1 and f.Unit or nil
+end
+-- Casts aim along the camera, and the legendary cinematic hands the camera back at whatever angle its last shot used.
+-- The default camera keeps a look vector set here, so this turns it back toward water.
+local function aim(look,why)
+ local cam=workspace.CurrentCamera
+ if not cam or cam.CameraType~=Enum.CameraType.Custom or not look then return false end
+ local pos=cam.CFrame.Position
+ local ok=pcall(function()cam.CFrame=CFrame.lookAt(pos,pos+look)end)
+ log(string.format("AIM %s look=%.2f,%.2f,%.2f ok=%s",why,look.X,look.Y,look.Z,tostring(ok)))
+ return ok
+end
+-- The last direction a cast reached water from, valid while the character stays within 8 studs of that spot.
+local function castLook()
+ local root=state.Character and state.Character:FindFirstChild("HumanoidRootPart")
+ if state.CastLook and root and state.CastFrom and (root.Position-state.CastFrom).Magnitude<=8 then return state.CastLook,true end
+ -- A successful cast also turns the character toward the water, so its facing is the next best guess.
+ local facing=root and flat(root.CFrame.LookVector)
+ return facing and (facing-Vector3.new(0,.35,0)).Unit,false
 end
 local function living()
  local char=player.Character
@@ -4053,19 +4254,70 @@ local function toggle()
  local events=rs:FindFirstChild("RemoteEvents")
  local remote=events and events:FindFirstChild("FishingRemote")
  if remote and remote:IsA("RemoteEvent")then
-  state.Connection=remote.OnClientEvent:Connect(function(kind,a,b)
+  state.Remote=remote
+  state.Connection=remote.OnClientEvent:Connect(function(kind,a,b,c)
    if not state.Enabled then return end
-   log("IN "..describe(kind).." "..describe(a).." "..describe(b))
-   if kind=="Caught"then state.Caught+=1;state.Fails=0;status.Text="Caught "..describe(a)..". Total: "..state.Caught.."."
-   elseif kind=="Reset"then state.Fails+=1 end
+   log("IN "..describe(kind).." "..describe(a).." "..describe(b)..(c~=nil and " "..describe(c) or ""))
+   if kind=="Casting"then
+    -- The server accepted the cast, so the camera's current direction reaches water.
+    local cam=workspace.CurrentCamera
+    local root=state.Character and state.Character:FindFirstChild("HumanoidRootPart")
+    if cam and root and cam.CameraType==Enum.CameraType.Custom then state.CastLook=cam.CFrame.LookVector;state.CastFrom=root.Position end
+    state.WaterFails=0
+   elseif kind=="Hooked"then
+    -- The "Hooked" params carry minReel: the earliest second the server will honour a Catch.
+    -- Record it so the reel loop can fire Catch the moment the window opens.
+    local params=type(a)=="table" and a or {}
+    state.HookAt=os.clock();state.MinReel=tonumber(params.minReel) or 2;state.CatchTries=0;state.NextCatch=nil
+    log(string.format("HOOK minReel=%.2f diff=%s rarity=%s",state.MinReel,tostring(params.difficulty),tostring(params.rarity)))
+   elseif kind=="LegendHooked"then
+    -- Legendary (0.2%): the game runs its own tension fight and claims the catch itself once progress is full.
+    -- Never send Catch here; a snapped line breaks the rod.
+    state.HookAt=nil;state.Legend=os.clock();state.LegendSim=.25;state.LegendT=nil
+    -- Its own file, seeded with the last 40 lines (the cast, bite and hook) for context.
+    state.LegendFile="AnomalyHub/universal/hunter_auto_fish_legend_"..os.time()..".txt"
+    state.LegendLines={}
+    for index=math.max(1,#state.Lines-39),#state.Lines do table.insert(state.LegendLines,state.Lines[index])end
+    log("LEGEND_HOOKED "..describe(a));save()
+   elseif kind=="Caught"then
+    state.Caught+=1;state.Fails=0;state.HookAt=nil;state.Legend=nil;status.Text="Caught "..describe(a)..". Total: "..state.Caught.."."
+    -- The third value is whether the fish went into the inventory; false means the bag was full and the game released it.
+    -- Every later catch, legendaries included, would be released too, so stop until there is room.
+    if c==false then
+     log("INVENTORY_FULL released "..describe(a))
+     stop("Inventory full: "..tostring(a).." was released. Sell or eat fish, then turn Auto Fish back on.")
+    end
+   elseif kind=="Reset" or kind=="Escaped"then if kind=="Reset"then state.Fails+=1 end;state.HookAt=nil;state.Legend=nil end
   end)
  end
- state.Lines={}
- state.Enabled=true;state.Fails=0;state.CastFails=0;state.Anim=nil;state.AnimSince=os.clock();state.CastUntil=nil;state.CastCheck=nil;state.TapAt=nil;state.TapUntil=nil;state.BiteStamp=nil
+ state.Lines={};state.Legend=nil;state.LegendLines=nil;state.Part=1
+ state.Archive="AnomalyHub/universal/hunter_auto_fish_"..os.time()
+ state.Enabled=true;state.Fails=0;state.CastFails=0;state.Anim=nil;state.AnimSince=os.clock();state.CastUntil=nil;state.CastCheck=nil;state.TapAt=nil;state.TapUntil=nil;state.BiteStamp=nil;state.HookAt=nil;state.CatchTries=0;state.NextCatch=nil;state.MinReel=2;state.WaterFails=0;state.Checking=false
  key(false,true)
  button.Text="Auto Fish: ON";status.Text="On."
  log("START")
 end
+controller.HunterAutos=controller.HunterAutos or {}
+table.insert(controller.HunterAutos,{Name="Auto Fish",
+ Active=function()return state.Enabled end,
+ -- Let a bite or reel already in progress finish before Auto Eat pauses fishing.
+ Busy=function()
+  if player:GetAttribute("LegendCinematic")==true then return true end
+  local anim=state.Enabled and state.Character and state.Character:GetAttribute("FishAnim");return anim=="bite" or anim=="reel" or anim=="charge" end,
+ Pause=function()stop("Paused to eat.");return true end,
+ Resume=function()
+  if state.Enabled or state.Closed then return end
+  -- Eating may briefly unequip the rod; give it 3 seconds to come back before resuming.
+  task.spawn(function()
+   for _=1,30 do
+    local char=player.Character
+    if state.Enabled or state.Closed then return end
+    if char and char:GetAttribute("FishingRodEquipped")==true then toggle();return end
+    task.wait(.1)
+   end
+   warn("[Anomaly auto fish] Not resumed after eating: the fishing rod is no longer equipped.")
+  end)
+ end})
 button=group and ui.Checkbox(card,"Auto Fish","Auto Fish: OFF",toggle) or ui.Button(card,"Auto Fish: OFF",14,72,180,toggle)
 if group then button.Position=UDim2.fromOffset(14,top)end
 local function reelParts()
@@ -4074,7 +4326,9 @@ local function reelParts()
  local reel=gui and gui:FindFirstChild("Reel")
  local track=reel and reel:FindFirstChild("Track")
  local zone,fish=track and track:FindFirstChild("Zone"),track and track:FindFirstChild("Fish")
- if zone and fish and zone:IsA("GuiObject") and fish:IsA("GuiObject") and track:IsA("GuiObject") and track.AbsoluteSize.Y>0 then
+ -- Legendary fights hide the reel but leave its parts in place; stale positions must never drive the key.
+ if zone and fish and zone:IsA("GuiObject") and fish:IsA("GuiObject") and track:IsA("GuiObject") and track.AbsoluteSize.Y>0
+  and reel.Visible and (not gui:IsA("ScreenGui") or gui.Enabled) then
   local progress=reel:FindFirstChild("Progress")
   return track,zone,fish,progress and progress:FindFirstChild("Fill")
  end
@@ -4107,6 +4361,80 @@ local function steer(now)
    fill and fill:IsA("GuiObject") and string.format("%.3f",fill.Size.Y.Scale) or "?"))
  end
 end
+-- Legendary fight HUD (PlayerGui.LegendCinematic): 28 tension segments, lit ones opaque; Callout shows RELEASE / MASH / PULL.
+local function legendHud()
+ local pg=player:FindFirstChildOfClass("PlayerGui")
+ local gui=pg and pg:FindFirstChild("LegendCinematic")
+ local hud=gui and gui:FindFirstChild("HUD")
+ if not hud or not hud:IsA("GuiObject") or not hud.Visible then return false end
+ local segs=state.Segs
+ if not segs or not segs:IsDescendantOf(hud)then
+  segs=nil
+  for _,object in ipairs(hud:GetDescendants())do
+   local frames=0
+   for _,child in ipairs(object:GetChildren())do if child:IsA("Frame")then frames+=1 end end
+   if frames>=24 and frames<=32 then segs=object;break end
+  end
+  state.Segs=segs
+ end
+ local tension
+ if segs then
+  local total,lit=0,0
+  for _,child in ipairs(segs:GetChildren())do
+   if child:IsA("Frame")then total+=1;if child.BackgroundTransparency<.6 then lit+=1 end end
+  end
+  if total>0 then tension=lit/total end
+ end
+ local pct=state.PctLabel
+ if not pct or not pct:IsDescendantOf(hud)then
+  pct=nil
+  for _,object in ipairs(hud:GetDescendants())do
+   if object:IsA("TextLabel") and object.Text:match("^%d+%%$")then pct=object;break end
+  end
+  state.PctLabel=pct
+ end
+ state.LegendProgress=pct and pct.Text or "?"
+ local words=""
+ local callout=gui:FindFirstChild("Callout")
+ if callout and callout:IsA("GuiObject") and callout.Visible then
+  for _,object in ipairs(callout:GetDescendants())do
+   if object:IsA("TextLabel") and object.Visible then words=words.." "..object.Text:upper()end
+  end
+ end
+ return true,tension,words
+end
+local function legendStep(now)
+ local live,tension,words=legendHud()
+ local dt=state.LegendT and math.min(now-state.LegendT,.1) or 0
+ state.LegendT=now
+ if not live then
+  -- Intro, the final pull, or the end card: input does nothing useful, so keep the line slack-safe.
+  key(false);state.LegendSim=.25
+  if state.Legend and player:GetAttribute("LegendCinematic")~=true and now-state.Legend>15 then state.Legend=nil;log("LEGEND_CLEARED no fight seen")end
+  return
+ end
+ local rush=words:find("RELEASE",1,true)~=nil
+ local mash=words:find("MASH",1,true)~=nil
+ -- Without a readable bar, simulate it with the game's own rates (+0.3 noise worst case) so holding stays conservative.
+ local sim=state.LegendSim or .25
+ if state.Held then sim+=(.42+.3+(rush and .85 or 0))*dt else sim-=(.6-(rush and .45 or 0))*dt end
+ sim=math.clamp(sim,0,1.15)
+ if tension then sim=tension end
+ state.LegendSim=sim
+ local t=tension or sim
+ -- The developer's own autoplay: hold until tension 0.85, let go until it falls under 0.5, never hold through a rush.
+ local want
+ if rush or t>=.92 then want=false
+ elseif mash and t<.75 then want=not state.Held
+ elseif state.Held then want=t<.85
+ else want=t<.5 end
+ if want~=state.Held and (not want or now-(state.KeyAt or 0)>=.05)then key(want)end
+ if now>=(state.NextReelLog or 0)then
+  state.NextReelLog=now+.1
+  log(string.format("LEGEND tension=%.2f src=%s held=%d progress=%s callout=%s",t,tension and "hud" or "sim",state.Held and 1 or 0,
+   tostring(state.LegendProgress),words~="" and words or "-"))
+ end
+end
 controller.Connect(run.Heartbeat,function()
  if state.Closed or not state.Enabled then return end
  local now=os.clock()
@@ -4116,9 +4444,45 @@ controller.Connect(run.Heartbeat,function()
  if state.CastFails>=4 then stop("Four casts in a row did not start; stopped.");return end
  -- Chat or the Roblox menu would receive the key instead: release and wait.
  if input:GetFocusedTextBox() or guiService.MenuIsOpen then key(false);state.CastUntil=nil;state.TapUntil=nil;return end
+ -- Logged here, before the legend branch, so a check during a legendary fight lands in its file too.
+ local checking=false
+ if type(controller.HunterCheckActive)=="function"then local ok,seen=pcall(controller.HunterCheckActive);checking=ok and seen==true end
+ if checking~=state.Checking then
+  state.Checking=checking
+  log(checking and "ANTI_MACRO check shown; new casts wait until it is answered" or "ANTI_MACRO check cleared");save()
+ end
+ if state.Legend or player:GetAttribute("LegendCinematic")==true then
+  if not state.LegendLogged then
+   state.LegendLogged=true
+   -- Started mid-fight without seeing LegendHooked: still give the fight its own file.
+   if not state.LegendLines then
+    state.LegendFile="AnomalyHub/universal/hunter_auto_fish_legend_"..os.time()..".txt";state.LegendLines={}
+   end
+   log("LEGEND_FIGHT start");save()
+  end
+  legendStep(now)
+  if now>=(state.NextLegendSave or 0)then state.NextLegendSave=now+2;save()end
+  return
+ end
+ if state.LegendLogged then
+  state.LegendLogged=nil;key(false,true);state.AnimSince=now;log("LEGEND_FIGHT end");save()
+  -- Keep the legend file open 10 more seconds so a late Caught or Reset lands in it too.
+  local lines=state.LegendLines
+  task.delay(10,function()if state.LegendLines==lines then save();state.LegendLines=nil end end)
+ end
  local anim=state.Character:GetAttribute("FishAnim")
  if anim~=state.Anim then
+  local previous=state.Anim
   state.Anim=anim;state.AnimSince=now;log("ANIM "..tostring(anim))
+  -- Charge falling back to hold with no Casting is the game's "Face the water to cast": re-aim and try again.
+  -- Tries the last good direction, then 90, 180 and 270 degrees from it, then stops instead of retrying forever.
+  if anim=="hold" and previous=="charge"then
+   state.WaterFails=(state.WaterFails or 0)+1;state.CastCheck=nil;state.CastUntil=nil
+   log("CAST_NO_WATER fails="..state.WaterFails)
+   if state.WaterFails>=5 then stop("Five casts found no water. Face the water and turn Auto Fish back on.");return end
+   local look=castLook()
+   if look then aim(CFrame.Angles(0,math.rad(90*(state.WaterFails-1)),0):VectorToWorldSpace(look),"no_water_"..state.WaterFails)end
+  end
   -- Every state change starts from a released key; the reel needs a fresh press, not the hook tap still held.
   if anim~="charge"then key(false,true);state.CastUntil=nil end
   state.TapAt=nil;state.TapUntil=nil
@@ -4128,11 +4492,21 @@ controller.Connect(run.Heartbeat,function()
  end
  if anim=="reel"then
   if now>=(state.SteerAt or 0)then steer(now)end
+  -- Claim the catch the instant the server's minReel window opens. Steering above keeps the fish
+  -- on the line until then; the server honours the Catch regardless of actual reel progress.
+  -- HookAt is when Hooked reached us, already ~half a ping after the server started its timer, so a 0.05s margin is enough.
+  -- A Catch that lands early is ignored rather than failing the fish: retry up to 3 times, 0.35s apart, until Caught arrives.
+  if state.Remote and state.HookAt and (state.CatchTries or 0)<3 and now>=state.HookAt+state.MinReel+.05 and now>=(state.NextCatch or 0)then
+   state.CatchTries=(state.CatchTries or 0)+1;state.NextCatch=now+.35
+   local ok=pcall(function()state.Remote:FireServer("Catch")end)
+   log(string.format("CATCH try=%d after %.2fs (minReel %.2f) ok=%s",state.CatchTries,now-state.HookAt,state.MinReel,tostring(ok)))
+  end
   return
  end
  if anim=="bite"then
   local stamp=state.Character:GetAttribute("FishAnimT")
-  if stamp~=state.BiteStamp then state.BiteStamp=stamp;key(false,true);state.TapAt=now+.3+math.random()*.25;state.TapUntil=nil end
+  -- The bite window is 1.1s; 0.15-0.25s is well inside it.
+  if stamp~=state.BiteStamp then state.BiteStamp=stamp;key(false,true);state.TapAt=now+.15+math.random()*.1;state.TapUntil=nil end
  end
  if state.TapAt and now>=state.TapAt then state.TapAt=nil;state.TapUntil=now+.12;if not key(true,true)then stop("Key input failed.")end;return end
  if state.TapUntil then if now>=state.TapUntil then state.TapUntil=nil;key(false,true)end;return end
@@ -4149,12 +4523,23 @@ controller.Connect(run.Heartbeat,function()
   if now<state.CastCheck then return end
   state.CastCheck=nil;state.CastFails+=1;log("CAST_UNCONFIRMED fails="..state.CastFails)
  end
- -- Idle (nothing out, or the last fish was landed or lost): cast again after a pause. 1.5s was too soon after a loss.
- if now-state.AnimSince>=2.5 and now>=(state.NextCast or 0) then
+ -- Idle (nothing out, or the last fish was landed or lost): cast again after a pause.
+ -- A manual recast 2.0s after a catch worked; 1.5s after a loss was ignored, so losses keep 2.5s.
+ -- The anti-macro answer is a mouse click; no new cast starts until the check is gone.
+ if state.Checking then return end
+ if now-state.AnimSince>=(anim=="catch" and 2 or 2.5) and now>=(state.NextCast or 0) then
   state.NextCast=now+4
+  -- The camera was turned since the last good cast (a cinematic, or a click while the mouse is locked): point it back first.
+  local look,saved=castLook()
+  if (state.WaterFails or 0)==0 and saved then
+   local cam=workspace.CurrentCamera
+   local current,want=cam and flat(cam.CFrame.LookVector),flat(look)
+   if current and want and current:Dot(want)<.94 then aim(look,"restore")end
+  end
   key(false,true)
   if not key(true,true)then stop("Key input failed.");return end
-  state.CastStart=now;state.CastUntil=now+.9+math.random()*.2
+  -- Hold length only sets cast power (distance); manual casts at power 0.1-0.92 all landed.
+  state.CastStart=now;state.CastUntil=now+.6+math.random()*.15
   log("CAST hold="..string.format("%.2f",state.CastUntil-now))
  end
 end)
@@ -4237,9 +4622,10 @@ controller.RegisterCleanup(function()closed=true;release()end)
 
 end)()
 ;(function()
--- Confirmed in-game 2026-11-16 (167s hold, Player.Nen kept rising). Keeps the client aura pool full while the basic "Nen" training skill is active.
+-- Confirmed in-game 2026-11-16 (167s hold, Player.Nen kept rising). Keeps the client aura pool full while any Nen skill is active.
 -- Same method as Infinite Stamina: NenClient's getCurrentNen has one upvalue, the live pool. No remote hooks or calls.
--- Training only: other techniques (Ren, En, Gyo, Ko...) drain normally.
+-- v2: every skill drains the same pool as basic Nen. Basic Nen is always held; another technique (Ten, Ren, Gyo, Ken, Ko, In, En, Zetsu, Shu)
+-- only while Auto Nen is training that exact skill, so techniques used manually in a fight drain normally (training-only scope, 2026-11-16).
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="HunterXEnter"then return end
@@ -4247,7 +4633,7 @@ local player=game:GetService("Players").LocalPlayer
 local run=game:GetService("RunService")
 local ui=controller.UI
 local group=ui.GeneralSection
-local card=group and group.Body or ui.Card(ui.Pages.General,"INFINITE NEN // v1","Keeps aura full while training the basic Nen skill.",120)
+local card=group and group.Body or ui.Card(ui.Pages.General,"INFINITE NEN // v2","Keeps aura full while training: basic Nen, or the skill Auto Nen is training.",120)
 local top=group and group.Height or 72
 if group then group.SetHeight(top+28) end
 local preference="AnomalyHub/universal/hunter_infinite_nen_enabled.txt"
@@ -4267,8 +4653,8 @@ end
 local function save()
  if type(writefile)~="function"then return false end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- return pcall(writefile,path,"HUNTER INFINITE NEN v1 // holds the client aura pool while ActiveNenSkill=Nen\n"
-  .."Proof is Player.Nen still rising after the bar would normally empty (~50s), not a full bar.\n"..table.concat(state.Lines,"\n"))
+ return pcall(writefile,path,"HUNTER INFINITE NEN v2 // holds the client aura pool for basic Nen, or the skill Auto Nen is training\n"
+  .."Proof is the skill staying on past the point the bar would normally empty, not a full bar.\n"..table.concat(state.Lines,"\n"))
 end
 local function system()
  local globals=type(_G)=="table" and _G or {}
@@ -4319,8 +4705,10 @@ refresh()
 controller.Connect(run.Heartbeat,function()
  if closed or not selected then return end
  local now=os.clock()
- local training=player:GetAttribute("ActiveNenSkill")=="Nen"
- if training~=state.Holding then state.Holding=training;log((training and "HOLD" or "RELEASE").." nen="..tostring(player:GetAttribute("Nen")))end
+ local skill=player:GetAttribute("ActiveNenSkill")
+ local trainer=type(controller.HunterAutoNenTraining)=="function" and controller.HunterAutoNenTraining() or nil
+ local training=type(skill)=="string" and (skill=="Nen" or skill==trainer)
+ if training~=state.Holding then state.Holding=training;log((training and "HOLD "..skill or "RELEASE").." nen="..tostring(player:GetAttribute("Nen")))end
  if now>=state.NextLog then
   state.NextLog=now+5
   log("SAMPLE skill="..tostring(player:GetAttribute("ActiveNenSkill")).." nen="..tostring(player:GetAttribute("Nen")).." writes="..state.Writes)
@@ -4343,6 +4731,229 @@ controller.Connect(run.Heartbeat,function()
 end)
 controller.Connect(player.OnTeleport,function()if selected then log("TELEPORT");save()end end)
 controller.RegisterCleanup(function()closed=true;if selected then log("UNLOAD writes="..state.Writes);save()end end)
+
+end)()
+;(function()
+-- PRIVATE until confirmed in-game. Eats Bread, then Onigiri, then Sardines as a last resort when Hunger drops below the slider value, until 98%.
+-- Takes priority: pauses every running auto in controller.HunterAutos, eats, then resumes the same ones.
+-- Eating uses the inventory's own Use request: InventoryAction:FireServer("Use", item). Other fish are never eaten.
+-- Sardines are a last resort, but worth more eaten than sold (user, 2026-11-17).
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter"then return end
+local player=game:GetService("Players").LocalPlayer
+local rs=game:GetService("ReplicatedStorage")
+local run=game:GetService("RunService")
+local input=game:GetService("UserInputService")
+local ui=controller.UI
+local group=ui.GeneralSection
+local card=group and group.Body or ui.Card(ui.Pages.General,"AUTO EAT // v1","Eats when hunger is low, pausing other autos while it eats.",120)
+local top=group and group.Height or 72
+if group then group.SetHeight(top+60) end
+local FOODS={"Bread","Onigiri","Sardine"}
+local FULL=98
+local preference="AnomalyHub/universal/hunter_auto_eat.txt"
+local path="AnomalyHub/universal/hunter_auto_eat_latest.txt"
+local state={Enabled=false,Closed=false,Threshold=40,Lines={},Stock=nil,NextTry=0,Inedible={}}
+if type(readfile)=="function"then
+ local ok,value=pcall(readfile,preference)
+ if ok and type(value)=="string"then
+  local on,threshold=value:match("^(%a+) (%d+)$")
+  state.Enabled=on=="true";state.Threshold=math.clamp(tonumber(threshold) or 40,5,95)
+ end
+end
+local function finite(n)return type(n)=="number" and n==n and math.abs(n)<math.huge end
+local function remember()
+ if type(writefile)~="function"then return end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ pcall(writefile,preference,tostring(state.Enabled).." "..state.Threshold)
+end
+local function log(message)
+ if #state.Lines>=400 then table.remove(state.Lines,1)end
+ table.insert(state.Lines,string.format("%.3f %s",os.clock(),tostring(message):sub(1,300)))
+ if type(writefile)=="function"then
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  pcall(writefile,path,"HUNTER AUTO EAT v1 // eats below the threshold until "..FULL.."%; pauses and resumes other autos\n"..table.concat(state.Lines,"\n"))
+ end
+end
+local function hunger()
+ local value=player:GetAttribute("Hunger")
+ return finite(value) and value or nil
+end
+local function living()
+ local char=player.Character
+ local h=char and char:FindFirstChildOfClass("Humanoid")
+ return h~=nil and h.Health>0
+end
+-- Inventory counts come from the game's full item-name -> count updates; nil means not known yet.
+local function readItems(items)
+ if type(items)~="table"then return end
+ local size=0
+ for name,count in pairs(items)do
+  size+=1
+  if size>1000 or type(name)~="string" or type(count)~="number" or count~=count or count<0 or count%1~=0 then return end
+ end
+ local stock={}
+ for _,name in ipairs(FOODS)do stock[name]=items[name] or 0 end
+ state.Stock=stock
+end
+local inventory=rs:FindFirstChild("InventoryRemotes")
+local updated=inventory and inventory:FindFirstChild("InventoryUpdated")
+if updated and updated:IsA("RemoteEvent")then controller.Connect(updated.OnClientEvent,function(items)if not state.Closed then readItems(items)end end)end
+local function refreshStock()
+ local getter=inventory and inventory:FindFirstChild("GetInventory")
+ if not getter or not getter:IsA("RemoteFunction")then return end
+ task.spawn(function()
+  local ok,items=pcall(function()return getter:InvokeServer()end)
+  if ok and not state.Closed then readItems(items)end
+ end)
+end
+-- Foods the game ignored twice this session are skipped, so an unusable item falls through to the next one.
+local function pickFood()
+ for _,name in ipairs(FOODS)do
+  if not state.Inedible[name] and (not state.Stock or (state.Stock[name] or 0)>0)then return name end
+ end
+ return nil
+end
+local function stockText()
+ if not state.Stock then return "unknown" end
+ local parts={}
+ for _,name in ipairs(FOODS)do table.insert(parts,name.." "..(state.Stock[name] or 0))end
+ return table.concat(parts,", ")
+end
+local function finish(reason,retry)
+ local paused=state.Paused or {}
+ state.Paused=nil;state.Phase=nil;state.Awaiting=nil
+ -- Resume in reverse order, so a later auto's start-up cannot cancel an earlier one.
+ for index=#paused,1,-1 do
+  local entry=paused[index]
+  local ok,err=pcall(entry.Auto.Resume,entry.Token)
+  log("RESUME "..entry.Auto.Name..(ok and "" or " FAILED "..tostring(err)))
+ end
+ state.NextTry=os.clock()+(retry or 2)
+ log("DONE "..reason.." hunger="..tostring(hunger()))
+end
+local function pauseAll()
+ state.Paused={}
+ for _,auto in ipairs(controller.HunterAutos or {})do
+  local ok,running=pcall(auto.Active)
+  if ok and running then
+   local paused,token=pcall(auto.Pause)
+   if paused then table.insert(state.Paused,{Auto=auto,Token=token});log("PAUSE "..auto.Name)
+   else log("PAUSE_FAILED "..auto.Name.." "..tostring(token))end
+  end
+ end
+end
+local function anyBusy()
+ for _,auto in ipairs(controller.HunterAutos or {})do
+  if auto.Busy then local ok,busy=pcall(auto.Busy);if ok and busy then return auto.Name end end
+ end
+end
+-- UI: checkbox, then a slider for the hunger level that starts eating.
+local button
+local function refresh()button.Text=state.Enabled and "Auto Eat: ON" or "Auto Eat: OFF"end
+local function toggle()
+ if state.Closed then return end
+ state.Enabled=not state.Enabled
+ if not state.Enabled and state.Phase then finish("Turned off.",0)end
+ if state.Enabled then refreshStock();state.NextTry=0;log("ENABLED threshold="..state.Threshold)end
+ remember();refresh()
+end
+button=group and ui.Checkbox(card,"Auto Eat","Auto Eat: OFF",toggle) or ui.Button(card,"Auto Eat: OFF",14,72,180,toggle)
+if group then button.Position=UDim2.fromOffset(14,top)end
+refresh()
+local sliderY=group and top+28 or 108
+local label=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,sliderY),Size=UDim2.new(1,-28,0,14),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=11,
+ TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text=""},card)
+local track=ui.Create("TextButton",{Position=UDim2.fromOffset(14,sliderY+18),Size=UDim2.new(1,-28,0,10),BackgroundColor3=ui.Colors.Surface,BorderSizePixel=0,
+ AutoButtonColor=false,Text=""},card)
+ui.Create("UICorner",{CornerRadius=UDim.new(0,5)},track)
+ui.Create("UIStroke",{Color=ui.Colors.Stroke,Thickness=1},track)
+local fill=ui.Create("Frame",{Size=UDim2.fromScale(0,1),BackgroundColor3=ui.Colors.Accent,BorderSizePixel=0},track)
+ui.Create("UICorner",{CornerRadius=UDim.new(0,5)},fill)
+local MIN,MAX=5,95
+local function showThreshold()
+ fill.Size=UDim2.fromScale((state.Threshold-MIN)/(MAX-MIN),1)
+ label.Text="Eat below "..state.Threshold.."% hunger, until "..FULL.."%"
+end
+showThreshold()
+local dragging=false
+local function setFrom(x)
+ local width=track.AbsoluteSize.X
+ if width<=0 then return end
+ local t=math.clamp((x-track.AbsolutePosition.X)/width,0,1)
+ local value=math.floor(MIN+t*(MAX-MIN)+.5)
+ if value~=state.Threshold then state.Threshold=value;showThreshold()end
+end
+controller.Connect(track.InputBegan,function(io)
+ if io.UserInputType==Enum.UserInputType.MouseButton1 or io.UserInputType==Enum.UserInputType.Touch then dragging=true;setFrom(io.Position.X)end
+end)
+controller.Connect(input.InputChanged,function(io)
+ if dragging and (io.UserInputType==Enum.UserInputType.MouseMovement or io.UserInputType==Enum.UserInputType.Touch)then setFrom(io.Position.X)end
+end)
+controller.Connect(input.InputEnded,function(io)
+ if dragging and (io.UserInputType==Enum.UserInputType.MouseButton1 or io.UserInputType==Enum.UserInputType.Touch)then dragging=false;remember()end
+end)
+if state.Enabled then refreshStock()end
+controller.Connect(run.Heartbeat,function()
+ if state.Closed or not state.Enabled then return end
+ local now=os.clock()
+ local value=hunger()
+ if not state.Phase then
+  if not value or now<state.NextTry or value>=state.Threshold or not living()then return end
+  if not pickFood()then
+   if not state.OutLogged then state.OutLogged=true;log("OUT_OF_FOOD hunger="..value)end
+   warn("[Anomaly auto eat] Hunger is low but you have no Bread, Onigiri or Sardines.")
+   state.NextTry=now+30;return
+  end
+  state.OutLogged=false
+  state.Phase="waiting";state.Since=now;state.Fails=0
+  log(string.format("START hunger=%.2f threshold=%d stock=%s",value,state.Threshold,stockText()))
+  return
+ end
+ if not living()then finish("Character unavailable.",5);return end
+ if now-state.Since>40 then finish("Took longer than 40 seconds.",30);return end
+ if state.Phase=="waiting"then
+  -- A legendary fight lasts ~30s and a snapped line breaks the rod: wait it out however long it takes.
+  if player:GetAttribute("LegendCinematic")==true then state.Since=now;return end
+  local busy=anyBusy()
+  if busy and now-state.Since<8 then return end
+  if busy then log("BUSY_TIMEOUT "..busy)end
+  pauseAll()
+  -- A moment for paused autos to release their keys before the first Use.
+  state.Phase="eating";state.NextUse=now+.4
+  return
+ end
+ if not value then return end
+ if value>=FULL then finish("Full.");return end
+ local awaiting=state.Awaiting
+ if awaiting then
+  if value>awaiting.Before+.5 then
+   log(string.format("ATE %s hunger %.2f -> %.2f",awaiting.Food,awaiting.Before,value))
+   if state.Stock then state.Stock[awaiting.Food]=math.max(0,(state.Stock[awaiting.Food] or 1)-1)end
+   state.Awaiting=nil;state.Fails=0;state.FoodFails=nil;state.NextUse=now+.5
+  elseif now>=awaiting.Until then
+   state.Awaiting=nil;state.Fails+=1;state.NextUse=now+1
+   state.FoodFails=state.FoodFails or {}
+   state.FoodFails[awaiting.Food]=(state.FoodFails[awaiting.Food] or 0)+1
+   log("NOT_CONFIRMED "..awaiting.Food.." fails="..state.Fails)
+   if state.FoodFails[awaiting.Food]>=2 then state.Inedible[awaiting.Food]=true;log("SKIPPING "..awaiting.Food.." for this session")end
+   if state.Fails>=4 then finish("Eating was not confirmed four times.",30)end
+  end
+  return
+ end
+ if now<state.NextUse then return end
+ local food=pickFood()
+ if not food then finish("Out of food.",30);return end
+ local action=inventory and inventory:FindFirstChild("InventoryAction")
+ if not action or not action:IsA("RemoteEvent")then finish("Inventory action unavailable.",30);return end
+ local ok=pcall(function()action:FireServer("Use",food)end)
+ if not ok then finish("Use request failed.",30);return end
+ state.Awaiting={Food=food,Before=value,Until=now+2}
+ log(string.format("USE %s hunger=%.2f",food,value))
+end)
+controller.Connect(player.OnTeleport,function()if state.Phase then finish("Teleporting.",5)end end)
+controller.RegisterCleanup(function()if state.Phase then finish("Unloaded.",0)end;state.Closed=true end)
 
 end)()
 ;(function()

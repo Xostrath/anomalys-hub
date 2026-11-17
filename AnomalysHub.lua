@@ -267,7 +267,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v9\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v10\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
 	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1397,7 +1397,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v9",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v10",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1407,7 +1407,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v9 loaded; stamina investigation available in Settings.")
+print("[Anomaly] Hunter X Enter adapter v10 loaded; stamina investigation available in Settings.")
 
 end)()
 ;(function()
@@ -2490,6 +2490,65 @@ controller.Connect(run.Heartbeat,function()
 end)
 controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
 controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)
+
+end)()
+;(function()
+-- Notification only: no answers, input, remote requests or training state changes.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter" then return end
+local player=game:GetService("Players").LocalPlayer
+local ui=controller.UI
+local overlay=ui.Create("ScreenGui",{
+	Name="AnomalyHunterCheckAlert",ResetOnSpawn=false,IgnoreGuiInset=false,
+	DisplayOrder=10000,ZIndexBehavior=Enum.ZIndexBehavior.Sibling,
+},ui.Gui.Parent)
+local banner=ui.Create("TextLabel",{
+	Name="CheckNotice",AnchorPoint=Vector2.new(.5,0),Position=UDim2.new(.5,0,0,8),
+	Size=UDim2.new(.8,0,0,60),BackgroundColor3=ui.Colors.Surface,
+	BackgroundTransparency=.08,TextColor3=ui.Colors.Text,Font=Enum.Font.GothamBold,
+	TextSize=16,TextWrapped=true,Visible=false,Active=false,
+	Text="Anti-macro check detected — answer it in the game.\nTraining has not been paused.",
+},overlay)
+ui.Create("UICorner",{CornerRadius=UDim.new(0,8)},banner)
+local closed,shown,nextScan=false,false,0
+local function visible(object,pg)
+	if not object:IsDescendantOf(pg) then return false end
+	while object and object~=pg do
+		if object:IsA("GuiObject") and not object.Visible then return false end
+		if object:IsA("LayerCollector") and not object.Enabled then return false end
+		object=object.Parent
+	end
+	return object==pg
+end
+local function detect()
+	local pg=player:FindFirstChildOfClass("PlayerGui")
+	if not pg then return false end
+	for _,object in ipairs(pg:GetDescendants())do
+		if object:IsA("TextLabel") or object:IsA("TextButton") then
+			-- Match only the title supplied in the screenshot, never the question or choices.
+			local title=object.Text:gsub("<[^>]*>",""):lower():gsub("[^%a]","")
+			if title=="antimacrocheck" and visible(object,pg)then return true end
+		end
+	end
+	return false
+end
+controller.Connect(game:GetService("RunService").Heartbeat,function()
+	if closed or os.clock()<nextScan then return end
+	nextScan=os.clock()+.5
+	local ok,found=pcall(detect)
+	if not ok then return end
+	banner.Visible=found
+	if found and not shown then
+		pcall(function()
+			game:GetService("StarterGui"):SetCore("SendNotification",{
+				Title="Anomaly: anti-macro check",Text="Answer the check in Roblox. Training remains running.",Duration=15,
+			})
+		end)
+	end
+	shown=found
+end)
+controller.RegisterCleanup(function()closed=true;overlay:Destroy()end)
 
 end)()
 end

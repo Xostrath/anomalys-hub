@@ -529,6 +529,51 @@ local function checkbox(parent,label,text,callback)
 	connect(object:GetPropertyChangedSignal("Text"),refresh);refresh()
 	return object
 end
+-- Checkbox version of optionGrid: two columns of 28px rows. Returns the y below the last row.
+local function checkGrid(parent,definitions,settings,firstY)
+	for index,definition in ipairs(definitions)do
+		local key,label=definition[1],definition[2]
+		local object=checkbox(parent,label,label..(settings[key]==true and ": ON" or ": OFF"),function(self)
+			settings[key]=settings[key]~=true
+			self.Text=label..(settings[key] and ": ON" or ": OFF")
+			saveConfig()
+		end)
+		object.Position=UDim2.new(((index-1)%2)*.5,14,0,firstY+math.floor((index-1)/2)*28)
+		object.Size=UDim2.new(.5,-18,0,28)
+	end
+	return firstY+math.ceil(#definitions/2)*28
+end
+-- Drag slider with its value label above. get/set work in the setting's own units; saves on release. Returns the y below it.
+local function slider(parent,y,minimum,maximum,step,get,set,format)
+	local label=create("TextLabel",{Position=UDim2.fromOffset(14,y),Size=UDim2.new(1,-28,0,14),BackgroundTransparency=1,
+		Font=Enum.Font.Gotham,TextSize=11,TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Left,Text=""},parent)
+	local track=create("TextButton",{Position=UDim2.fromOffset(14,y+20),Size=UDim2.new(1,-28,0,8),BackgroundColor3=colors.Surface,
+		BorderSizePixel=0,AutoButtonColor=false,Text=""},parent)
+	create("UICorner",{CornerRadius=UDim.new(0,4)},track)
+	create("UIStroke",{Color=colors.Stroke,Thickness=1},track)
+	local fill=create("Frame",{Size=UDim2.fromScale(0,1),BackgroundColor3=colors.Accent,BorderSizePixel=0},track)
+	create("UICorner",{CornerRadius=UDim.new(0,4)},fill)
+	local function show()
+		local value=get()
+		fill.Size=UDim2.fromScale(math.clamp((value-minimum)/(maximum-minimum),0,1),1)
+		label.Text=format(value)
+	end
+	local dragging=false
+	local function setFrom(x)
+		local width=track.AbsoluteSize.X
+		if width<=0 then return end
+		local raw=minimum+math.clamp((x-track.AbsolutePosition.X)/width,0,1)*(maximum-minimum)
+		set(math.clamp(math.floor(raw/step+.5)*step,minimum,maximum));show()
+	end
+	local function pointer(io)return io.UserInputType==Enum.UserInputType.MouseButton1 or io.UserInputType==Enum.UserInputType.Touch end
+	connect(track.InputBegan,function(io)if pointer(io)then dragging=true;setFrom(io.Position.X)end end)
+	connect(UserInputService.InputChanged,function(io)
+		if dragging and (io.UserInputType==Enum.UserInputType.MouseMovement or io.UserInputType==Enum.UserInputType.Touch)then setFrom(io.Position.X)end
+	end)
+	connect(UserInputService.InputEnded,function(io)if dragging and pointer(io)then dragging=false;saveConfig()end end)
+	show()
+	return y+36
+end
 
 -- ESP controls share one scrolling page, with a separate card per actor type.
 
@@ -902,7 +947,7 @@ controller.UI = {
 	Colors = colors, Create = create, Card = card, Button = button, ValueBox = valueBox,
 	PlayerEspCard = espCard, FitColumn = fitColumn, OptionGrid = optionGrid,
 	SpectateRecordButton = spectateRecordButton, SpectateRecordStatus = spectateRecordStatus,
-	Section=section,Checkbox=checkbox,
+	Section=section,Checkbox=checkbox,CheckGrid=checkGrid,Slider=slider,
 }
 controller.State = state
 controller.Connect = connect
@@ -2019,8 +2064,20 @@ function controller.ResolvePlayerEspData(target,character)
  return {Race=explicitRace(target,character),BattlePower=finite(value) and value or nil,Ki=finite(kiValue) and kiValue or nil,MaxKi=maxKi}
 
 end
-ui.PlayerEspCard.Size=UDim2.new(1,0,0,324)
-ui.OptionGrid(ui.PlayerEspCard,{{"Name","Player name"},{"Race","Race"},{"BattlePower","Power level"},{"Ki","Ki bar"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"},{"SelfOutline","Self ESP"}},state.EspSettings,136)
+-- Section style with checkmarks and the distance slider at the bottom (user, 2026-11-17); replaces the shared button card here.
+ui.PlayerEspCard.Visible=false
+local espSection=ui.Section(ui.Pages.ESP,"Player ESP",0,true)
+espSection.Frame.LayoutOrder=10
+local master=ui.Checkbox(espSection.Body,"Player ESP",state.EspEnabled and "Player ESP: ON" or "Player ESP: OFF",function(object)
+ state.EspEnabled=not state.EspEnabled
+ object.Text=state.EspEnabled and "Player ESP: ON" or "Player ESP: OFF"
+ controller.SaveConfig()
+end)
+master.Position=UDim2.fromOffset(14,0)
+local espY=ui.CheckGrid(espSection.Body,{{"Name","Player name"},{"Race","Race"},{"BattlePower","Power level"},{"Ki","Ki bar"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"},{"SelfOutline","Self ESP"}},state.EspSettings,32)
+espY=ui.Slider(espSection.Body,espY+8,100,10000,50,function()return math.floor(state.EspDistance)end,function(value)state.EspDistance=value end,
+ function(value)return "Max distance: "..value.." studs"end)
+espSection.SetHeight(espY+4)
 local card=ui.Card(ui.Pages.Recorders,"SPARKLING ESP DATA","Capture visible race and power fields to verify player labels. No requests are sent.",200)
 card.LayoutOrder=30
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,70),BackgroundTransparency=1,
@@ -2085,8 +2142,8 @@ end)()
 ;(function()
 -- Sparkling NPC ESP. Reads loaded NPC models; sends no game requests.
 -- Structure reused from BeyondNenNpcESP.lua (watch Workspace once, then update tracked rigs only).
--- Sparkling has no NPC catalog. Regular (non-combat) NPCs have MaxHealth 100 or 999; anything else is an enemy (user, 2026-11-17).
--- MaxHealth, not Health, so a damaged regular NPC keeps its type.
+-- Sparkling has no NPC catalog. Enemy NPCs carry a power level; regular NPCs don't (user, 2026-11-17).
+-- This replaces the earlier max-health rule (regular = 100 or 999), which stays true of regular NPCs but isn't used.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "Sparkling" then return end
@@ -2107,9 +2164,16 @@ local roles = {
 local function finite(value)
 	return type(value) == "number" and value == value and value >= 0 and value < math.huge
 end
-local function classify(humanoid)
-	local maximum = humanoid.MaxHealth
-	return (maximum == 100 or maximum == 999) and "Npc" or "Enemy"
+-- Same source as player ESP: a direct numeric PowerLevel value on the model. An attribute of that name also counts.
+local function power(model)
+	local value = model:FindFirstChild("PowerLevel")
+	if value and (value:IsA("NumberValue") or value:IsA("IntValue")) and finite(value.Value) then return value.Value end
+	local attribute = model:GetAttribute("PowerLevel")
+	if finite(attribute) then return attribute end
+	return nil
+end
+local function classify(model)
+	return power(model) and "Enemy" or "Npc"
 end
 local function displayName(model, humanoid)
 	for _, key in ipairs({"DisplayName", "NPCName"}) do
@@ -2120,12 +2184,6 @@ local function displayName(model, humanoid)
 	if type(value) == "string" and value:match("%S") then return value end
 	-- "WolfFangTrainer" reads as "Wolf Fang Trainer".
 	return (model.Name:gsub("(%l)(%u)", "%1 %2"))
-end
--- Same rule as player ESP: a direct numeric PowerLevel value on the model, nothing inferred.
-local function power(model)
-	local value = model:FindFirstChild("PowerLevel")
-	if value and (value:IsA("NumberValue") or value:IsA("IntValue")) and finite(value.Value) then return value.Value end
-	return nil
 end
 local function commas(n)
 	local text = tostring(math.floor(n + 0.5))
@@ -2221,7 +2279,7 @@ local function updateNpc(model, localRoot, characters)
 		return
 	end
 	local humanoid = model:FindFirstChildOfClass("Humanoid")
-	local kind = humanoid and classify(humanoid)
+	local kind = classify(model)
 	local settings = state.NpcEspSettings
 	if not localRoot or not humanoid or humanoid.Health <= 0 or isPlayerCharacter(model, characters) or settings[kind] == false then
 		removeEntry(model)
@@ -2255,27 +2313,24 @@ local function updateNpc(model, localRoot, characters)
 	entry.Stroke.Enabled = settings.Box == true
 end
 
-local npcCard = ui.Card(ui.Pages.ESP, "NPC ESP", "Names, health, power level, distance and outlines for NPCs. Regular NPCs (100 or 999 max health) and enemies are toggled separately.", 340)
-npcCard.LayoutOrder = 20
-ui.Create("TextLabel", {Position = UDim2.new(0.5, 4, 0, 62), Size = UDim2.new(0.5, -18, 0, 16), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = "MAX DISTANCE (STUDS)", TextColor3 = colors.Muted, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left}, npcCard)
-ui.FitColumn(ui.Button(npcCard, state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF", 0, 0, 180, function(object)
+-- Section style matching Player ESP: checkmarks, then the distance slider at the bottom.
+local npcSection = ui.Section(ui.Pages.ESP, "NPC ESP", 0, true)
+npcSection.Frame.LayoutOrder = 20
+local body = npcSection.Body
+local master = ui.Checkbox(body, "NPC ESP", state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF", function(object)
 	state.NpcEspEnabled = not state.NpcEspEnabled
 	object.Text = state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF"
-	object.BackgroundColor3 = state.NpcEspEnabled and colors.AccentSoft or colors.Surface
 	if state.NpcEspEnabled then startWatching() else stopWatching() end
 	controller.SaveConfig()
-end, state.NpcEspEnabled and colors.AccentSoft or colors.Surface), 0, 86)
-ui.FitColumn(ui.ValueBox(npcCard, "NPC range (studs)", 0, 0, 180, state.NpcEspDistance, function(box)
-	local value = tonumber(box.Text)
-	if value and value == value then state.NpcEspDistance = math.clamp(value, 100, 10000) end
-	box.Text = tostring(math.floor(state.NpcEspDistance))
-	controller.SaveConfig()
-end), 1, 86)
-ui.OptionGrid(npcCard, {{"Name", "Name / type"}, {"Health", "Health"}, {"Power", "Power level"}, {"Distance", "Distance"}, {"Box", "Body box"}}, state.NpcEspSettings, 136)
-ui.Create("TextLabel", {Position = UDim2.fromOffset(14, 268), Size = UDim2.new(1, -28, 0, 16), BackgroundTransparency = 1,
-	Font = Enum.Font.GothamSemibold, Text = "NPC TYPES", TextColor3 = colors.Accent, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left}, npcCard)
-ui.OptionGrid(npcCard, {{"Npc", "Regular NPCs"}, {"Enemy", "Enemy NPCs"}}, state.NpcEspSettings, 292)
+end)
+master.Position = UDim2.fromOffset(14, 0)
+local y = ui.CheckGrid(body, {{"Name", "Name / type"}, {"Health", "Health"}, {"Power", "Power level"}, {"Distance", "Distance"}, {"Box", "Body box"}}, state.NpcEspSettings, 32)
+ui.Create("TextLabel", {Position = UDim2.fromOffset(14, y + 6), Size = UDim2.new(1, -28, 0, 16), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamSemibold, Text = "NPC TYPES", TextColor3 = colors.Accent, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left}, body)
+y = ui.CheckGrid(body, {{"Npc", "Regular NPCs"}, {"Enemy", "Enemy NPCs"}}, state.NpcEspSettings, y + 26)
+y = ui.Slider(body, y + 8, 100, 10000, 50, function() return math.floor(state.NpcEspDistance) end, function(value) state.NpcEspDistance = value end,
+	function(value) return "Max distance: " .. value .. " studs" end)
+npcSection.SetHeight(y + 4)
 
 local elapsed = 0
 controller.Connect(RunService.Heartbeat, function(delta)

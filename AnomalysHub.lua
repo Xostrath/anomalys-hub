@@ -267,7 +267,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v8\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v9\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
 	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1397,7 +1397,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v8",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v9",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1407,7 +1407,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v8 loaded; stamina investigation available in Settings.")
+print("[Anomaly] Hunter X Enter adapter v9 loaded; stamina investigation available in Settings.")
 
 end)()
 ;(function()
@@ -2325,11 +2325,11 @@ local http=game:GetService("HttpService")
 local ui=controller.UI
 local active,closed=nil,false
 local rootPath="AnomalyHub/universal/hunter_stamina_trace"
-local card=ui.Card(ui.Pages.Settings,"STAMINA INVESTIGATION // v1","Compare the live stamina bar with local values and the current movement controller. Read-only; no infinite-stamina change.",218)
+local card=ui.Card(ui.Pages.Settings,"STAMINA INVESTIGATION // v2","Compare the live stamina bar with local values and the shared stamina module. Read-only; no infinite-stamina change.",218)
 card.LayoutOrder=35
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,118),Size=UDim2.new(1,-28,0,84),BackgroundTransparency=1,Font=Enum.Font.Gotham,
 	TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
-	Text="Record running, resting and a few jumps. Captures up to 90 seconds and one scoped client script if readable."},card)
+	Text="Record running, resting and a few jumps. Captures up to 90 seconds and the stamina module source if readable."},card)
 local button,lastReport
 local function log(c,message)
 	if active~=c then return end
@@ -2343,9 +2343,9 @@ local function write(path,text)
 	return pcall(writefile,path,text)
 end
 local function save(c,reason)
-	c.Report="HUNTER X ENTER STAMINA INVESTIGATION v1 // READ ONLY\nplace="..game.PlaceId.." universe="..game.GameId
+	c.Report="HUNTER X ENTER STAMINA INVESTIGATION v2 // READ ONLY\nplace="..game.PlaceId.." universe="..game.GameId
 		.."\nNo automatic inputs, property changes, remote calls, require or execution of captured source."
-		.."\nOnly the current character's Movement.MovementController is eligible for source reading/decompilation."
+		.."\nOnly ReplicatedStorage.Modules.Core.Stamina is eligible for source reading/decompilation."
 		.."\nSource may be unavailable or inaccurately decompiled; client code does not establish server validation."
 		.."\n90s / 12000 lines / 2MB trace; at most one 2MB source; 5s source observation deadline. Late results discarded."
 		.."\nStats inspect up to 600 local-player/character objects per scan; incoming movement events only."
@@ -2412,20 +2412,20 @@ local function stats(c)
 end
 local function source(c,scriptObject)
 	if not scriptObject or not (scriptObject:IsA("LocalScript")or scriptObject:IsA("ModuleScript"))then
-		c.SourceStatus="Movement controller source not found.";log(c,c.SourceStatus);return
+		c.SourceStatus="Stamina module source not found.";log(c,c.SourceStatus);return
 	end
 	log(c,"SOURCE_TARGET "..scriptObject:GetFullName())
-	c.SourceStatus="Movement source pending."
+	c.SourceStatus="Stamina source pending."
 	local resolved=false
 	local function finish(value,reason)
 		if resolved or active~=c then return end;resolved=true
 		if type(value)=="string" and #value>0 and #value<=2000000 and value:match("%S")
 			and not value:lower():find("failed to decompile",1,true) and not value:lower():find("decompilation failed",1,true)then
-			local path=c.Path.."_MovementController.lua"
-			if write(path,value)then c.SourceStatus="Movement source saved.";log(c,"SOURCE_SAVED bytes="..#value.." file="..path)
-			else c.SourceStatus="Movement source save failed.";log(c,c.SourceStatus)end
+			local path=c.Path.."_Stamina.lua"
+			if write(path,value)then c.SourceStatus="Stamina source saved.";log(c,"SOURCE_SAVED bytes="..#value.." file="..path)
+			else c.SourceStatus="Stamina source save failed.";log(c,c.SourceStatus)end
 		else
-			c.SourceStatus="Movement source unavailable: "..reason;log(c,c.SourceStatus)
+			c.SourceStatus="Stamina source unavailable: "..reason;log(c,c.SourceStatus)
 		end
 		save(c,"RECORDING")
 	end
@@ -2449,7 +2449,7 @@ local function start()
 	if controller.StopHunterRecording then controller.StopHunterRecording("STAMINA_TRACE_STARTED")end
 	local ok,guid=pcall(http.GenerateGUID,http,false);if not ok then guid=tostring(os.clock())end
 	local c={Character=player.Character,Started=os.clock(),Lines={},Bytes=0,Previous={},StatKeys={},NextSample=0,NextStats=0,NextSave=os.clock()+5,
-		Path=rootPath.."_"..os.time().."_"..tostring(guid):gsub("[^%w%-]",""),SourceStatus="Movement source pending."}
+		Path=rootPath.."_"..os.time().."_"..tostring(guid):gsub("[^%w%-]",""),SourceStatus="Stamina source pending."}
 	active=c
 	local movement=c.Character:FindFirstChild("Movement")
 	local scriptObject=movement and movement:FindFirstChild("MovementController")
@@ -2466,7 +2466,9 @@ local function start()
 	if not prepared then log(c,"ERROR "..tostring(err));stop("START_ERROR");return end
 	if not save(c,"RECORDING")then stop("SAVE_FAILED");return end
 	button.Text="Stop + Save";button.BackgroundColor3=ui.Colors.Danger
-	source(c,scriptObject)
+	local modules=game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
+	local core=modules and modules:FindFirstChild("Core")
+	source(c,core and core:FindFirstChild("Stamina"))
 end
 button=ui.FitColumn(ui.Button(card,"Record Stamina",0,0,180,start,ui.Colors.AccentSoft),0,72)
 ui.FitColumn(ui.Button(card,"Copy Trace",0,0,180,function()

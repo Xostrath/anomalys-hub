@@ -2086,7 +2086,9 @@ local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2
 local busy=false
 local function relevant(name)
  name=name:lower()
- return name=="ki" or name=="maxki" or name:find("race",1,true) or name:find("species",1,true) or name:find("power",1,true)
+ -- Any Ki/energy-like name, to find where the Ki maximum lives (the ESP Ki bar has none yet, 2026-11-17).
+ return name:find("ki",1,true) or name:find("energy",1,true) or name:find("charge",1,true) or name:find("stamina",1,true)
+  or name:find("max",1,true) or name:find("race",1,true) or name:find("species",1,true) or name:find("power",1,true)
   or name:find("suppress",1,true) or name:find("transform",1,true) or name:find("form",1,true)
 end
 local function capture()
@@ -2124,6 +2126,24 @@ local function capture()
     end
    end
    count+=1
+  end
+  -- The local Ki HUD: bar frames show the fill fraction the game itself draws, labels show any "x / y" text.
+  local hud=players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
+  hud=hud and hud:FindFirstChild("KiHud")
+  local own=players.LocalPlayer.Character
+  local kiObject=own and own:FindFirstChild("Ki")
+  log("KIHUD "..(hud and hud:GetFullName() or "unavailable").." Character.Ki="..tostring(kiObject and kiObject:IsA("ValueBase") and kiObject.Value))
+  if hud then
+   local seen=0
+   for _,object in ipairs(hud:GetDescendants())do
+    if seen>=600 then log("LIMIT KiHud 600 objects");break end
+    if object:IsA("GuiObject")then
+     seen+=1
+     local s=object.Size
+     local text=object:IsA("TextLabel") and (" text="..string.format("%q",object.Text:sub(1,60))) or ""
+     log(string.format("HUD %s [%s] visible=%s size=(%.3f,%d,%.3f,%d)%s",object:GetFullName(),object.ClassName,tostring(object.Visible),s.X.Scale,s.X.Offset,s.Y.Scale,s.Y.Offset,text))
+    end
+   end
   end
   log("END players="..count)
   local report=table.concat(lines,"\n")
@@ -2259,16 +2279,29 @@ local function makeEntry(model, root)
 		TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center,
 		TextYAlignment = Enum.TextYAlignment.Bottom,
 	}, entry.Gui)
+	-- 32 spare pixels each side hold the health bar, as in the player ESP box.
 	entry.BoxGui = create("BillboardGui", {
-		Name = "AnomalySparklingNPCBox", Size = UDim2.new(width, 8, height, 8),
+		Name = "AnomalySparklingNPCBox", Size = UDim2.new(width, 64, height, 8),
 		StudsOffsetWorldSpace = offset, AlwaysOnTop = true, LightInfluence = 0,
 		Adornee = root, ClipsDescendants = false,
 	}, ui.Gui)
 	local box = create("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.new(1, -8, 1, -8), BackgroundTransparency = 1, BorderSizePixel = 0,
+		Size = UDim2.new(1, -64, 1, -8), BackgroundTransparency = 1, BorderSizePixel = 0,
 	}, entry.BoxGui)
 	entry.Stroke = create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.4}, box)
+	-- Same look as the player ESP health bar: dark track just right of the box, red fill from the bottom.
+	entry.HealthBar = create("Frame", {
+		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 9 - 32, 0, 4), Size = UDim2.new(0, 7, 1, -8),
+		BackgroundColor3 = Color3.fromRGB(8, 8, 8), BackgroundTransparency = 0.02, BorderSizePixel = 0, ZIndex = 3,
+	}, entry.BoxGui)
+	create("UICorner", {CornerRadius = UDim.new(0, 3)}, entry.HealthBar)
+	create("UIStroke", {Color = Color3.fromRGB(15, 15, 15), Thickness = 1}, entry.HealthBar)
+	entry.HealthFill = create("Frame", {
+		AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.fromRGB(239, 55, 62), BorderSizePixel = 0, ZIndex = 4,
+	}, entry.HealthBar)
+	create("UICorner", {CornerRadius = UDim.new(0, 3)}, entry.HealthFill)
 	return entry
 end
 
@@ -2309,7 +2342,11 @@ local function updateNpc(model, localRoot, characters)
 	entry.Gui.Enabled = #lines > 0
 	entry.Gui.MaxDistance = state.NpcEspDistance
 	entry.BoxGui.MaxDistance = state.NpcEspDistance
-	entry.BoxGui.Enabled = settings.Box == true
+	-- Enemies get a health bar (user, 2026-11-17); regular NPCs keep the HP text only.
+	local bar = kind == "Enemy" and settings.Health == true and finite(humanoid.Health) and finite(humanoid.MaxHealth) and humanoid.MaxHealth > 0
+	entry.HealthBar.Visible = bar
+	if bar then entry.HealthFill.Size = UDim2.fromScale(1, math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)) end
+	entry.BoxGui.Enabled = settings.Box == true or bar
 	entry.Stroke.Enabled = settings.Box == true
 end
 

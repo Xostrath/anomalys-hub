@@ -1754,6 +1754,16 @@ controller.BeginSparklingParryObservation=function(callback)
   if probe.Callback==callback then probe.Callback=nil;probe.Targets={}end
  end,#probe.Coverage>0 and table.concat(probe.Coverage,", ") or "outgoing hooks unavailable; local inputs and incoming events only"
 end
+-- Same hooks for other read-only captures (Visuals CEXP Finder, 2026-11-17): any target set, one owner at a time.
+controller.BeginSparklingRemoteObservation=function(targets,callback)
+ if active then return nil,"manual combat recorder is active"end
+ if probe.Callback then return nil,"another capture (Auto Parry diagnostics?) owns the outgoing hooks"end
+ probe.Targets=targets;probe.Callback=callback
+ installHooks()
+ return function()
+  if probe.Callback==callback then probe.Callback=nil;probe.Targets={}end
+ end,#probe.Coverage>0 and table.concat(probe.Coverage,", ") or "outgoing hooks unavailable; incoming events and text only"
+end
 local function syncRemotes(c)
 	local paths = {}
 	local function add(folder, names)
@@ -2932,6 +2942,125 @@ local function hiddenScan()
  if not ok then status.Text="Hidden scan failed: "..tostring(err):sub(1,160)end
 end
 ui.FitColumn(ui.Button(card,"Hidden Value Scan",0,0,180,hiddenScan,colors.AccentSoft),1,72)
+
+-- CEXP Finder: CEXP is not in the client profile (SP-V010); the server only reveals it when Varrik is asked. Start this, talk to
+-- Varrik (and the Title Master), then stop. Read-only: logs incoming remote events, outgoing requests and their replies through the
+-- combat recorder's shared hooks (never sends anything itself), and new on-screen / NPC / chat text that holds a number.
+local finder={Active=false}
+local finderCard=ui.Card(ui.Pages.Recorders,"SPARKLING CEXP FINDER","Start, talk to Varrik (and the Title Master), then Stop. Records what the server sends back so CEXP can be read automatically. Sends nothing.",186)
+finderCard.LayoutOrder=32
+local finderStatus=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,56),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Ready. Output: sparkling_cexp_capture_latest.txt"},finderCard)
+local function sample(item,depth)
+ depth=depth or 0
+ local kind=typeof(item)
+ if kind=="string" then return string.format("%q",item:sub(1,400))end
+ if kind=="Instance" then return item:GetFullName():sub(1,160)end
+ if kind=="table" then
+  if depth>=3 then return "{...}"end
+  local parts,n={},0
+  pcall(function()
+   for key,value in next,item do
+    n+=1;if n>24 then table.insert(parts,"...");break end
+    table.insert(parts,tostring(key):sub(1,40).."="..sample(value,depth+1))
+   end
+  end)
+  return "{"..table.concat(parts,", ").."}"
+ end
+ return tostring(item):sub(1,120)
+end
+local function finderLog(text)
+ if not finder.Active then return end
+ if #finder.Lines<8000 then table.insert(finder.Lines,string.format("%.3f %s",os.clock()-finder.Started,text))end
+end
+local function finderSave()
+ if not finder.Lines then return false end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ local header="SPARKLING CEXP FINDER v1 // READ ONLY\nplace="..game.PlaceId.." universe="..game.GameId
+  .."\nIN = server->you remote event. OUT/RETURN = your game's own request and the server's reply (shared hook). TEXT = new or changed text with a number.\n"
+ return type(writefile)=="function" and pcall(writefile,"AnomalyHub/universal/sparkling_cexp_capture_latest.txt",header..table.concat(finder.Lines,"\n"))
+end
+local function interesting(text)
+ text=tostring(text or "")
+ return text:match("%d") and #text<=400
+end
+local function stopFinder(reason)
+ if not finder.Active then return end
+ finderLog("STOP "..reason)
+ finder.Active=false
+ for _,connection in ipairs(finder.Connections)do pcall(function()connection:Disconnect()end)end
+ if finder.StopHooks then pcall(finder.StopHooks)end
+ local saved=finderSave()
+ finderStatus.Text=(saved and "Saved " or "Save failed for ")..#finder.Lines.." lines to sparkling_cexp_capture_latest.txt. "..reason
+ finder.Button.Text="Start CEXP Finder"
+end
+local function watchText(object)
+ if not (object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox")) or object:IsDescendantOf(ui.Gui) then return end
+ local function report(kind)
+  if finder.Active and interesting(object.Text) and finder.Seen[object]~=object.Text then
+   finder.Seen[object]=object.Text
+   finderLog("TEXT "..kind.." "..object:GetFullName():sub(1,180).." = "..string.format("%q",object.Text:sub(1,300)))
+  end
+ end
+ report("NEW")
+ table.insert(finder.Connections,object:GetPropertyChangedSignal("Text"):Connect(function()report("CHANGED")end))
+end
+local function startFinder()
+ if finder.Active then stopFinder("Stopped.");return end
+ finder={Active=true,Started=os.clock(),Lines={},Connections={},Seen=setmetatable({},{__mode="k"}),Button=finder.Button}
+ finder.Button.Text="Stop CEXP Finder"
+ finderLog("START")
+ -- Incoming: every RemoteEvent the game has in ReplicatedStorage.
+ local count=0
+ for _,object in ipairs(rs:GetDescendants())do
+  if object:IsA("RemoteEvent")then
+   count+=1
+   local path=object:GetFullName()
+   table.insert(finder.Connections,object.OnClientEvent:Connect(function(...)
+    local args=table.pack(...)
+    finderLog("IN "..path.." "..sample(args))
+   end))
+  end
+ end
+ finderLog("COVERAGE incoming RemoteEvents="..count)
+ -- Outgoing requests and replies (RemoteFunction replies are where a "what's my CEXP?" answer would arrive).
+ if type(controller.BeginSparklingRemoteObservation)=="function"then
+  local targets={}
+  for _,object in ipairs(rs:GetDescendants())do
+   if object:IsA("RemoteEvent") or object:IsA("RemoteFunction")then targets[object]=object:GetFullName()end
+  end
+  local stop,detail=controller.BeginSparklingRemoteObservation(targets,function(remote,direction,args,started,id,result,path)
+   finderLog(direction.." "..tostring(path).." call="..id.." args="..sample(args)..(result and (" result="..sample(result)) or ""))
+  end)
+  finder.StopHooks=stop
+  finderLog("COVERAGE outgoing: "..tostring(stop and detail or detail))
+ else finderLog("COVERAGE outgoing: shared hooks unavailable")end
+ -- Text: your screen, NPC billboards in the world, and chat/bubble messages.
+ local gui=localPlayer:FindFirstChildOfClass("PlayerGui")
+ if gui then
+  for _,object in ipairs(gui:GetDescendants())do watchText(object)end
+  table.insert(finder.Connections,gui.DescendantAdded:Connect(watchText))
+ end
+ table.insert(finder.Connections,workspace.DescendantAdded:Connect(watchText))
+ local chat=game:GetService("TextChatService")
+ table.insert(finder.Connections,chat.MessageReceived:Connect(function(message)
+  finderLog("CHAT "..tostring(message.TextSource and message.TextSource.Name or "system").." = "..string.format("%q",tostring(message.Text):sub(1,300)))
+ end))
+ finderStatus.Text="Recording. Talk to Varrik now, then press Stop (auto-stops after 3 minutes)."
+ task.spawn(function()
+  local started=finder.Started
+  while finder.Active and finder.Started==started do
+   task.wait(5)
+   if finder.Active and finder.Started==started then
+    finderSave()
+    if os.clock()-started>180 then stopFinder("Auto-stopped after 3 minutes.")end
+   end
+  end
+ end)
+end
+finder.Button=ui.Button(finderCard,"Start CEXP Finder",14,72,180,startFinder,colors.AccentSoft)
+finder.Button.Size=UDim2.new(1,-28,0,34)
+controller.RegisterCleanup(function()stopFinder("Unloaded.")end)
 
 end)()
 ;(function()

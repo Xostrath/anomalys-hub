@@ -8,8 +8,8 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. User-supplied entry place: `120525873606470`.
 - Current objective: collect enough diagnostics to explain every automatic-defense attempt or skip before changing its timings.
-- Current defense: off-by-default experiment covering exactly two melee animations. It is not verified as reliable auto parry.
-- Latest implementation: **Sparkling auto-parry diagnostics v2**. Source and public/private builds compile; 47 assertions passed in a mocked Luau runtime. **This version has not been tested live.**
+- Current defense: off-by-default active trial covering five shared combo animations, with PvP/PvE filters and continuous diagnostics. Reliable timing remains unproven (SP-T017–SP-T019).
+- Latest implementation: **Combat page v6 / diagnostics v4**. Source/public/private compilation and 121 mocked assertions passed. Live input, cleanup and one cooldown retry are observed; counter attribution remains uncertain (SP-T019).
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -24,10 +24,10 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Power ESP | Direct Character.PowerLevel numeric value; rounded whole numbers with commas | Numeric source observed; formatting compiled | Base, effective, or suppressed power? |
 | Ki ESP | Blue bar next to red health bar; requires known Ki and explicit positive MaxKi for fill | Ki observed; bar compiled | No verified MaxKi source; unknown max shows an empty track marked `?` |
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
-| Auto parry | Two animation IDs, 8-stud range, facing and line-of-sight gates, brief F input | First v1 log reviewed; outcomes ambiguous | Reliable timing, coverage, and causality unverified |
+| Auto parry | Five shared combo trials, configurable range/timing, facing/LOS gates and F input | Active v6 / diagnostics v4 reviewed through SP-T019 | Reliable timing and input/outcome attribution unverified |
 | NPC ESP v1 (SP-T010) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-T012): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v6 (SP-T017) | **Combat → Auto Parry // TIMING TEST**. Five shared combo trials, timing/hold controls, actual F input and continuous diagnostics; possible opponent-parry correlation | 121 mocked assertions and compilation passed; live inputs/logging reviewed in SP-T018, timing reliability unproven | Investigate head-effect LOS and delayed request correlation before further timing changes |
-| Parry diagnostics v2 | Decision/geometry/input/action/state/outcome logs with session histories | 47 mocked assertions and build compilation | Real executor hook coverage and live results |
+| Combat page v6 (SP-T017) | **Combat → Auto Parry // TIMING TEST**. Five shared combo trials, timing/hold controls, actual F input and continuous diagnostics; possible opponent-parry correlation | 121 mocked assertions and compilation passed; live inputs/logging and cooldown retry reviewed through SP-T019, timing reliability unproven | Investigate head-effect LOS and delayed request correlation before further timing changes |
+| Parry diagnostics v4 | Active attempt, geometry, input/request and self/other-counter histories | Live reports reviewed through SP-T019 | Early releases and interleaved F cycles require better attribution |
 
 ## Sources and capture workflow
 
@@ -491,3 +491,40 @@ Other earlier-session LOS blockers were a real nearby NPC's arm/GripBrick and a 
 Latest mapped rejection reasons besides LOS: Counter cooldown 10, attacker facing 4, manual/input F already down 2, out of range 8. There were no DEFER events in either session, so short-cooldown rechecks remain mock-validated only. Existing shared combo coverage remains enabled.
 
 Verdict: **live active input/cleanup/request observation and opponent-counter correlation logging verified; timings and actual parry reliability unproven.** No code or timing values changed during this review. Next priority is the repeatedly observed head-effect obstruction and better delayed-request/release correlation, then timing trials that account for the measured input-to-request lag. Preserve this baseline and change one timing variable at a time; do not infer reliable timing from raw counter ratios.
+
+
+## SP-012 / SP-T019 — repeated active tests, early releases and live deferral (2026-11-17)
+
+Reviewed three finalized diagnostics-v4 histories from main-world place `110405289082842`. All retain range 8, PvP/PvE enabled, offset 0 ms and hold 120 ms. These are user-run live captures; no runtime changes or game control occurred during review. Raw captures remain local.
+
+| Session start (Unix) | Duration / stop | Automatic attempts | Self counters | Other counters | Possible parried | Negative-health events |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1794949545 | 73.147 s / disabled | 10 | 4 | 6 | 3 | 33 |
+| 1794949665 | 4.601 s / focus loss | 0 | 0 | 0 | 0 | 24 |
+| 1794949677 | 65.343 s / disabled | 7 | 2 | 19 | 2 | 26 |
+
+All reports end held=false with zero dropped lines. All 17 automatic key-up API calls report success; each press has an observed Defend=true and a subsequent Defend=false. No error/input-failure/frame-gap events were present. All attempts target the same nearby NPC binding, not players. Six of ten earlier attempts and five of seven latest attempts precede negative-health observations by at most 0.5 s. This is temporal association, not an independent failure rate or attacker attribution.
+
+### Input interleaving changes the interpretation
+
+Two combo-3 (`95937874840716`) trials had close self-counter receipts: earlier attempt 1 at 11.4695 s followed by Counter Parry at 11.5617 s (~92 ms), and latest attempt 5 at 38.8015 s followed by Counter Parry at 38.9104 s (~109 ms). Both tracks ran at speed 1.15; distances were 2.828 and 4.703 studs. These are repeatable temporal candidates, not proven automatic successes: multiple F/Defend cycles outside automatic attempts occur immediately beforehand.
+
+In both cases, an INPUT F-up / Defend=false occurs **before** the module's scheduled F_UP: 11.5700 versus 11.6148 s, and 38.9173 versus 38.9665 s. The logger still considers F held until its deadline. The input origin remains unknown; do not assert the user manually released it or that the game forcibly released it without more evidence. This demonstrates interleaving between observed input/request state and the automation's internal held state.
+
+The previous review's shortcut of pairing only false requests after F_UP is insufficient for these new cases. Pair the next observed Defend request after a candidate true, require it to be false, and never cross an intervening true request. Otherwise the latest attempt 5 would incorrectly acquire the false request from a separate F cycle at 39.1042 s, producing a fabricated 249.8 ms defense span. Its actual adjacent true/false request span is 62.9 ms. Earlier attempt 1's span is 56.3 ms. These remain client request intervals, not server windows or proven input ownership.
+
+Across the 10 earlier attempts, press-to-Defend delay is 44.2–61.4 ms; API holds 131.0–185.2 ms; adjacent true/false spans 56.3–127.8 ms. Across the latest seven, delay is 47.1–69.8 ms; API holds 120.9–165.2 ms; adjacent request spans 51.6–114.3 ms. Other than the two early-release cases, false requests follow scheduled F_UP by 0.9–4.8 ms. A configured 120 ms hold still cannot be treated as a measured 120 ms defense window.
+
+The other earlier self counters were at 14.6305 and 28.8724 s (no automatic attempt in the preceding second), and 57.7432 s (attempt 9 about 626 ms earlier, with damage in between). The latest other self counter at 10.1212 s has no automatic candidate within one second. Do not turn total counter counts into an automatic success rate.
+
+### First observed cooldown deferral
+
+Earlier cue 169, combo 2, deferred at 41.1465 s with 60.8 ms Counter cooldown remaining. It passed revalidation and pressed F at 41.2568 s, cue age 153.7 ms and 49.5 ms late relative to the rescheduled deadline. Negative health arrived at 41.3036 s; observed Defend=true followed at 41.3076 s, about 4 ms later. **The bounded retry mechanism executed live; this instance did not demonstrate timely defense.** Client receipt order is not server execution order. Account for scheduling lateness and input-to-request delay before considering a delayed cue useful.
+
+### Remaining coverage and next handoff
+
+The earlier session has two LOS skips: the local `Workspace.Visuals.anotherHead<local-character>` effect and an unidentified `Workspace.Thrown.Part`. The latest has four: three local head-effect blockers and one Thrown.Part. Do not assume every generic Part is cosmetic or ignore whole folders. The head-effect obstruction remains a repeated, separately scoped investigation.
+
+Possible-parried matches occur earlier at 4.4457, 27.2290 and 40.7071 s, and latest at 8.2369 and 49.0203 s. They remain recipient/attack/geometry/short-cooldown correlations, not proven attacker identities; none overlaps an automatically held F in these reports.
+
+**Current verdict:** input generation, cleanup, diagnostics and one cooldown retry are observed live; reliable parry timing remains unproven. Before another timing adjustment, improve diagnostic correlation to capture early observed releases and intervening F cycles, inspect the exact head-effect obstacle, and use an exchange without extra F input to distinguish automatic outcomes. Preserve offset 0 / hold 120 as the baseline. No runtime code or settings changed in this review; the live session remains under the user's control.

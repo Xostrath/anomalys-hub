@@ -2760,8 +2760,8 @@ ui.FitColumn(ui.Button(card,"Hidden Value Scan",0,0,180,hiddenScan,colors.Accent
 
 end)()
 ;(function()
--- Combat page v7: user-authorized active timing experiment with continuous diagnostics.
--- Shared five-combo catalog; seed delays are experimental, not measured server windows.
+-- Combat page v8: user-authorized active timing experiment with continuous diagnostics.
+-- Hits 2-5 timing trial; first-hit animation is logged but cannot queue defense.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -2776,7 +2776,7 @@ local okInput,vim=pcall(game.GetService,game,"VirtualInputManager")
 if not okInput then vim=nil end
 local ui=controller.UI
 -- Client observations, not server parry-window measurements. Timing unchanged.
-local attacks={['114493250337466']=.04,['84394230178792']=.04,['95937874840716']=0,['139487903747364']=0,['131649056441662']=.04}
+local attacks={['84394230178792']=.04,['95937874840716']=0,['139487903747364']=0,['131649056441662']=.04}
 local enabled,closed=false,false
 local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local sendingAttempt
@@ -2929,7 +2929,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s; save=5s."
   .."\nConfig: mode=active_test range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:disabled,combo2:0.04,combo3:0,combo4:0,combo5:0.04 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -3076,12 +3076,12 @@ end
 
 -- Combat page in the Hunter X Enter section style: an "Auto Parry" section of keybindable rows, then "Don't Parry If".
 local page=ui.Pages.Combat or ui.Pages.Auto
-local parrySection=ui.Section(page,"Auto Parry // TIMING TEST",312,true)
+local parrySection=ui.Section(page,"Auto Parry // HITS 2-5 TEST",312,true)
 parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Experimental F inputs for five combo attacks. Timing is unverified. Diagnostics always record while enabled."},card)
+ Text="Off. Testing hits 2-5. First hit is recorded only. Diagnostics always record while enabled."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -3156,6 +3156,7 @@ local function observe(model,track)
  end
  if seen[track] and now-seen[track]<.2 then skip("duplicate_track",detail);return end
  local id=track.Animation and track.Animation.AnimationId:match("%d+")
+ if id=="114493250337466"then skip("first_hit_disabled","stage=observe "..detail);return end
  local seed=id and attacks[id]
  local delay=seed and math.max(0,seed+settings.TimingOffsetMs/1000)
  if delay==nil then skip("unmapped_animation",detail);return end

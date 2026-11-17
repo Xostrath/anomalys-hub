@@ -4,12 +4,12 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 
 ## Read first
 
-**Current mode: ACTIVE TIMING TEST (Combat page v7 / diagnostics v5).** The user explicitly requested active auto parry with recording and opponent-parry handling. This supersedes the temporary passive-only instruction; see SP-T021 for the latest correlation/LOS changes. Old mode instructions remain historical.
+**Current mode: HITS 2-5 TIMING TEST (Combat page v8 / diagnostics v5); first-hit parry disabled at user request.** The user explicitly requested active auto parry with recording and opponent-parry handling. This supersedes the temporary passive-only instruction; see SP-T021 for the latest correlation/LOS changes. Old mode instructions remain historical.
 
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. User-supplied entry place: `120525873606470`.
 - Current objective: collect enough diagnostics to explain every automatic-defense attempt or skip before changing its timings.
-- Current defense: off-by-default active trial covering five shared combo animations, with PvP/PvE filters and continuous diagnostics. Reliable timing remains unproven (SP-T017–SP-T019).
-- Latest implementation: **Combat page v7 / diagnostics v5**. Source and both build variants compile; 155 mocked assertions passed. Ordinary delayed-release correlation and the scoped head-effect exclusion are verified in the v5 live capture (SP-T022); broader reliability remains unproven.
+- Current defense: off-by-default hits 2-5 trial, with first-hit animation recorded but no first-hit F input. PvP/PvE filters and continuous diagnostics remain; see SP-T023.
+- Latest implementation: **Combat page v8 / diagnostics v5**. First-hit disabled for later-hit trials; 157 mocked assertions and source/both-build compilation passed. Awaiting live validation of this mode (SP-T023). Prior v5 correlation/LOS live results remain in SP-T022.
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -26,7 +26,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
 | Auto parry | Five shared combo trials, configurable range/timing, facing/LOS gates and F input | Active v7 / diagnostics v5 reviewed through SP-T022 | Reliable timing and input/outcome attribution unverified |
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v7 (SP-T021) | Five active combo trials; continuous diagnostics v5; narrow local head-effect LOS exclusion | 155 mocked assertions and compilation passed; live fixes verified in SP-T022 | Isolate combo-3 timing; retain other seeds and account for changed receipt latency |
+| Combat page v8 (SP-T023) | HITS 2-5 TEST; first hit logged/skipped; existing timing/correlation/LOS retained | 157 mocked assertions and compilation passed; mode untested live | Verify no first-hit input and evaluate later-hit outcomes separately |
 | Parry diagnostics v5 | Recent API/input/request correlation; early releases and intervening input flags; bounded LOS object properties | Live: 25 release pairs and one unmatched cycle correctly separated (SP-T022) | Early-release/ambiguous-window branches remain mock-tested |
 
 ## Sources and capture workflow
@@ -643,3 +643,34 @@ F_DOWN-log to Defend-true receipt shrank to **14.5–18.9 ms** (median 16.2), ve
 Other rejections: observed Counter cooldown 8, out of range 7, self-facing 7, stopped track 1, unmapped animation 131. No DEFER event, other-counter pairing, or early observed release was exercised.
 
 **Current handoff:** v5 ordinary delayed-release correlation, unmatched-cycle separation and the scoped head-effect exclusion are verified live in this capture. Retain the current timings as the successful comparison baseline for combos 1/2/5. The next timing investigation should isolate combo 3, preserving the other seeds rather than moving the global offset based on this one run. Combo 4 and broader player/weapon coverage remain unvalidated. No additional generic log is needed to establish the two fixes; do not silently promote all automation to reliable based on this favorable session.
+
+
+## SP-016 / SP-T023 — first-hit disabled for later-hit trials (2026-11-17)
+
+**User instruction:** review the new recording and remove first-hit parry to test the others. Current **Combat page v8 / diagnostics v5** is explicitly **Auto Parry // HITS 2-5 TEST**. This supersedes the earlier instruction to retain all five active seeds for the next comparison.
+
+### Latest pre-change recording
+
+Reviewed finalized diagnostics-v5 session starting Unix 1794952495, main-world place `110405289082842`. It stopped on focus loss at 80.948 s, held=false, no dropped lines or input/release/logger/error/frame-gap failures. Baseline remained range 8, offset 0 ms, hold 120 ms, PvP/PvE enabled. Totals: 29 automatic attempts, 19 self-counter messages, 8 other-counter messages, 3 possible-parried correlations and 30 negative-health observations. All 29 API releases succeeded with observed corresponding Defend false requests.
+
+| Combo | Attempts | Sole recent automatic candidate for self counter | Damage within 0.5 s after attempt |
+| --- | --- | --- | --- |
+| 1 | 12 | 11 | 1 |
+| 2 | 6 | 4 | 1 |
+| 3 | 5 | 2 | 3 |
+| 4 | 4 | 0 | 4 |
+| 5 | 2 | 0 | 0 |
+
+The 17 sole-candidate messages had no recorded input conflicts. Two additional self-counter messages were ambiguous: at 51.1438 s, attempts 21/22 were recent with an intervening input flagged for 21; at 61.4087 s, attempts 25/26 were recent with an intervening input flagged for 25. Do not credit either ambiguous message to a particular combo or turn this table into confirmed success rates. No damage after combo 5 does not itself establish a successful parry. The three possible-parried events remain heuristic. A short-cooldown defer occurred at 60.2114 s with 46.8 ms remaining; this review does not claim its eventual outcome as a distinct success.
+
+Input-to-request delay remained low: 12.9–19.6 ms, median 16.4; actual holds 120.4–135.9 ms; adjacent Defend request spans 105.2–120.8 ms. No LOS rejection appeared. The new evidence reinforces repeated first-hit counter correlations while exposing later-hit variability, motivating the user's requested experiment rather than global timing changes.
+
+### Implementation and validation
+
+Animation **114493250337466 (combo 1)** is removed from the active timing catalog. Its observed animation start/stop remains recorded; the observer explicitly logs **SKIP reason=first_hit_disabled stage=observe** before scheduling. It never queues a defense attempt, consumes a pulse, or generates F input on its own. This applies to both NPC and player ownership because both use the same observer. It is deliberately disabled, not mislabeled as an unknown animation.
+
+Hits 2–5 keep their existing seeds: combo 2=0.04 s, 3=0 s, 4=0 s, 5=0.04 s. Range, facing/LOS, cooldowns, input cleanup, offset/hold controls, target filters and continuous diagnostics are retained. Header Config now states `trialSeeds=combo1:disabled,...`; the Combat section and initial status explicitly identify the experiment. There is no new persisted toggle; restore hit 1 only on a later request. Diagnostics remain schema v5; implementation is Combat page v8.
+
+**157 mocked assertions passed:** 47 logger/lifecycle, 44 active-feature/catalog checks (including first-hit animation logged/skipped with no generated input and all four remaining hits still active), 26 PvP/PvE, 6 settings/reload, 34 correlation/LOS. Source and both staged builds compile. This change is not live-validated yet. Source and exact module replacements preserve the concurrent Visuals tab / Profile Scan change from commit 2bac7ed and the latest installed private contents.
+
+**Next check:** reload the installed hub, enable the HITS 2-5 TEST, and retain offset=0 / hold=120. Verify first-hit skip events and no combo-1 F_DOWN; then inspect subsequent combo attempts, request/counter receipts and cooldowns. First-hit damage is expected to become visible when its automatic defense is intentionally disabled; distinguish it from a failed later-hit attempt. Actual cooldown or other gates may still prevent a later hit from being attempted. Keep the user's live session under their control and record later findings here.

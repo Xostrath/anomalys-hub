@@ -165,3 +165,7 @@ Combat page v7 / diagnostics v5 retains recent F pulses for asynchronous request
 Sparkling has a **Visuals** tab (`src/SparklingVisuals.lua`; page created in `src/UniversalHub.lua`, after Combat in the sidebar). A player dropdown at the top defaults to you. Profile rows cover CEXP, battle power, stats, personality, race and race variant, form mastery, limit break progress, karma, latent power, emotion and relationships.
 
 Only fields with a confirmed source are read (battle power, race). The rest show "Not found yet" until **Recorders → Sparkling Profile Scan** locates them. ESP/Visuals experiment IDs use the separate **SP-V###** series; see the [Sparkling note](docs/games/sparkling.md).
+
+### Sparkling later-hit trial (2026-11-17)
+
+At the user's request, Combat page v8 / diagnostics v5 disables first-hit parry and keeps hits 2-5 active with unchanged seeds. First-hit animation remains recorded with first_hit_disabled skips. Reload to use the HITS 2-5 TEST section. See [SP-T023](docs/games/sparkling.md) for validation, latest recording and next-test interpretation.

@@ -117,7 +117,7 @@ local state = {
 	SpectateTarget = nil,
 	EspEnabled = false,
 	EspDistance = 2500,
-	EspSettings = {Name = true, Race = true, BattlePower = true, Level = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
+	EspSettings = {Name = true, Race = true, BattlePower = true, Ki = true, SelfOutline = false, Level = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
 	NpcEspEnabled = false,
 	NpcEspDistance = 2500,
 	BeyondNenParryTargets = "Auto",
@@ -363,7 +363,7 @@ local function makePage(name)
 end
 for _, name in ipairs({"Home", "General", "ESP", "Servers", "Settings"}) do makePage(name) end
 if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
-if env.__AnomalyDetectedProfile == "HunterXEnter" then makePage("Auto") end
+if env.__AnomalyDetectedProfile == "HunterXEnter" or env.__AnomalyDetectedProfile == "Sparkling" then makePage("Auto") end
 if env.__AnomalyDetectedProfile == "HunterXEnter" or env.__AnomalyDetectedProfile == "Sparkling" then makePage("Recorders") end
 
 local function selectTab(name)
@@ -1150,6 +1150,11 @@ local function updateEsp(target, localRoot)
 	if settings.Level and (not controller.EspKnownResourcesOnly or levelText ~= "--") then table.insert(lines, "LEVEL // " .. levelText) end
 	if controller.Profile == "Sparkling" then
 		if settings.Race then table.insert(lines, "RACE // " .. (extra and extra.Race or "Unavailable")) end
+		if settings.Ki then
+			local ki = extra and extra.Ki
+			local text = type(ki)=="number" and ki==ki and ki>=0 and ki<math.huge and string.format("%.2f",ki) or "Unavailable"
+			table.insert(lines,"KI // "..text)
+		end
 		if settings.BattlePower then
 			local power = extra and extra.BattlePower
 			local text = type(power)=="number" and power==power and power>=0 and power<math.huge and string.format("%.2f",power) or "Unavailable"
@@ -1863,6 +1868,7 @@ local function start(mode)
 	if closed or controller.IsUnloaded() then return end
 	if active and active.Mode==mode then stop("STOPPED");return end
 	if active then stop("SWITCHED_ACTIVITY") end
+	if controller.StopSparklingAutoParry then controller.StopSparklingAutoParry("Paused for manual recording") end
 	serial+=1
 	local ok,nonce=pcall(Http.GenerateGUID,Http,false)
 	if not ok then nonce=tostring(math.floor(os.clock()*1000000)).."_"..serial end
@@ -1964,10 +1970,28 @@ end
 function controller.ResolvePlayerEspData(target,character)
  local power=character and character:FindFirstChild("PowerLevel")
  local value=power and (power:IsA("NumberValue") or power:IsA("IntValue")) and power.Value or nil
- return {Race=explicitRace(target,character),BattlePower=finite(value) and value or nil}
+ local ki=character and character:FindFirstChild("Ki")
+ local kiValue=ki and (ki:IsA("NumberValue") or ki:IsA("IntValue")) and ki.Value or nil
+ return {Race=explicitRace(target,character),BattlePower=finite(value) and value or nil,Ki=finite(kiValue) and kiValue or nil}
 end
-ui.PlayerEspCard.Size=UDim2.new(1,0,0,282)
-ui.OptionGrid(ui.PlayerEspCard,{{"Name","Player name"},{"Race","Race"},{"BattlePower","Power level"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"}},state.EspSettings,136)
+ui.PlayerEspCard.Size=UDim2.new(1,0,0,324)
+ui.OptionGrid(ui.PlayerEspCard,{{"Name","Player name"},{"Race","Race"},{"BattlePower","Power level"},{"Ki","Ki level"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"},{"SelfOutline","Self outline"}},state.EspSettings,136)
+local outline=Instance.new("Highlight")
+outline.Name="SparklingSelfOutline"
+outline.FillTransparency=1
+outline.OutlineTransparency=0
+outline.OutlineColor=ui.Colors.Accent
+outline.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
+outline.Enabled=false
+outline.Parent=ui.Gui
+local function refreshOutline()
+ local char=players.LocalPlayer.Character
+ local humanoid=char and char:FindFirstChildOfClass("Humanoid")
+ outline.Adornee=char
+ outline.Enabled=state.EspSettings.SelfOutline==true and humanoid~=nil and humanoid.Health>0
+end
+controller.Connect(game:GetService("RunService").Heartbeat,refreshOutline)
+controller.RegisterCleanup(function()outline:Destroy()end)
 
 local card=ui.Card(ui.Pages.Recorders,"SPARKLING ESP DATA","Capture visible race and power fields to verify player labels. No requests are sent.",200)
 card.LayoutOrder=30
@@ -1977,7 +2001,7 @@ local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2
 local busy=false
 local function relevant(name)
  name=name:lower()
- return name:find("race",1,true) or name:find("species",1,true) or name:find("power",1,true)
+ return name=="ki" or name=="maxki" or name:find("race",1,true) or name:find("species",1,true) or name:find("power",1,true)
   or name:find("suppress",1,true) or name:find("transform",1,true) or name:find("form",1,true)
 end
 local function capture()
@@ -2028,6 +2052,173 @@ local function capture()
 end
 local button=ui.Button(card,"Capture ESP Data",14,72,180,capture,ui.Colors.AccentSoft)
 button.Size=UDim2.new(1,-28,0,34)
+
+end)()
+;(function()
+-- Experimental: only two observed attack animations; F input, never remote replay.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local player=game:GetService("Players").LocalPlayer
+local input=game:GetService("UserInputService")
+local guiService=game:GetService("GuiService")
+local run=game:GetService("RunService")
+local rs=game:GetService("ReplicatedStorage")
+local okInput,vim=pcall(game.GetService,game,"VirtualInputManager")
+if not okInput then vim=nil end
+local ui=controller.UI
+-- Animation-to-counter receipt intervals observed: ~.20/.23s and ~.10s.
+-- These are client observations, not server parry-window measurements.
+local attacks={['84394230178792']=.04,['95937874840716']=0}
+local enabled,closed,held=false,false,false
+local releaseAt,nextPulse,nextScan,cooldownUntil=0,0,0,0
+local watched,pending,seen={},{},setmetatable({},{__mode="k"})
+local ownCharacter=player.Character
+local attempts,confirmed=0,0
+local lastAttempt=-math.huge
+local lastConfirmedAttempt=0
+local lines={"SPARKLING AUTO PARRY EXPERIMENT v1 // F input; two observed animation IDs only. Outcome correlation is not proof of causation."}
+local function log(text)
+ table.insert(lines,string.format('%.4f %s',os.clock(),text))
+ if #lines>400 then table.remove(lines,2)end
+ if type(writefile)=="function"then
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  pcall(writefile,"AnomalyHub/universal/sparkling_auto_parry_latest.txt",table.concat(lines,"\n"))
+ end
+end
+local card=ui.Card(ui.Pages.Auto,"AUTO PARRY // EXPERIMENTAL","Two recorded melee attacks only. Checks range, facing and clear sight; results need live testing.",232)
+for _,child in ipairs(card:GetChildren())do
+ if child:IsA("TextLabel") and child.Position.Y.Offset==31 then child.Size=UDim2.new(1,-28,0,54)end
+end
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,142),Size=UDim2.new(1,-28,0,76),BackgroundTransparency=1,
+ Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Off. Does not cover heavy attacks, projectiles, or other fighting styles. Never enables itself after reload."},card)
+local button
+local function release()
+ if not held then return true end
+ local ok=pcall(function()vim:SendKeyEvent(false,Enum.KeyCode.F,false,game)end)
+ if ok then held=false end
+ return ok
+end
+local function clearWatch()
+ for _,entry in pairs(watched)do entry.Connection:Disconnect()end
+ table.clear(watched);table.clear(pending)
+end
+local function stop(reason)
+ enabled=false;clearWatch()
+ local released=release()
+ if button then button.Text="Auto Parry: OFF"end
+ status.Text=reason..(released and "" or " F release failed; press and release F manually.")
+ log("STOP "..reason)
+end
+local function roots(model)
+ local hum=model and model:FindFirstChildOfClass("Humanoid")
+ local root=model and model:FindFirstChild("HumanoidRootPart")
+ if not hum or hum.Health<=0 or not root or not root:IsA("BasePart")then return end
+ return root,hum
+end
+local function threat(model)
+ if not model or not model:IsDescendantOf(workspace)then return false end
+ local char=player.Character
+ local root=roots(char)
+ local other=roots(model)
+ if not root or not other or model==char then return false end
+ local delta=root.Position-other.Position
+ local distance=delta.Magnitude
+ if distance<.1 or distance>8 then return false end
+ local direction=delta.Unit
+ if other.CFrame.LookVector:Dot(direction)<.2 or root.CFrame.LookVector:Dot(-direction)<0 then return false end
+ local params=RaycastParams.new()
+ params.FilterType=Enum.RaycastFilterType.Exclude
+ params.FilterDescendantsInstances={char,model}
+ if workspace:Raycast(other.Position,delta,params)then return false end
+ return true
+end
+local function observe(model,track)
+ if not enabled or (seen[track] and os.clock()-seen[track]<.2)then return end
+ local id=track.Animation and track.Animation.AnimationId:match("%d+")
+ local delay=id and attacks[id]
+ if delay==nil or not threat(model)then return end
+ seen[track]=os.clock()
+ if #pending>=8 then return end
+ table.insert(pending,{Model=model,Track=track,Id=id,At=os.clock()+delay,Expires=os.clock()+.25})
+ log("CUE animation="..id)
+end
+local function sync()
+ local live=workspace:FindFirstChild("Live")
+ local wanted={}
+ if live then
+  for _,model in ipairs(live:GetChildren())do
+   local root,hum=roots(model)
+   local localRoot=roots(player.Character)
+   if model~=player.Character and root and localRoot and (root.Position-localRoot.Position).Magnitude<=30 then
+    local animator=hum:FindFirstChildOfClass("Animator")
+    if animator then
+     wanted[model]=true
+     if watched[model] and watched[model].Animator~=animator then watched[model].Connection:Disconnect();watched[model]=nil end
+     if not watched[model]then
+      watched[model]={Animator=animator,Connection=animator.AnimationPlayed:Connect(function(track)observe(model,track)end)}
+     end
+    end
+   end
+  end
+ end
+ for model,entry in pairs(watched)do if not wanted[model]then entry.Connection:Disconnect();watched[model]=nil end end
+end
+button=ui.Button(card,"Auto Parry: OFF",14,96,180,function()
+ if enabled then stop("Disabled.");return end
+ if not vim then status.Text="Virtual input unavailable.";return end
+ if not release()then status.Text="Release F manually before enabling.";return end
+ enabled=true;ownCharacter=player.Character;nextScan=0;nextPulse=0
+ seen=setmetatable({},{__mode="k"})
+ button.Text="Auto Parry: ON";log("START")
+end,ui.Colors.AccentSoft)
+button.Size=UDim2.new(1,-28,0,34)
+local function update()
+ local now=os.clock()
+ if held and (now>=releaseAt or not enabled)then release()end
+ if not enabled or closed then return end
+ if player.Character~=ownCharacter or not roots(ownCharacter)then stop("Character changed or died. Enable again when ready.");return end
+ if input:GetFocusedTextBox() or guiService.MenuIsOpen then release();table.clear(pending);return end
+ if now>=nextScan then nextScan=now+.2;sync()end
+ for i=#pending,1,-1 do
+  local cue=pending[i]
+  if now>=cue.At then
+   table.remove(pending,i)
+   if now<=cue.Expires and not held and now>=nextPulse and now>=cooldownUntil and not input:IsKeyDown(Enum.KeyCode.F)
+    and cue.Track.IsPlaying and threat(cue.Model) then
+    local ok=pcall(function()vim:SendKeyEvent(true,Enum.KeyCode.F,false,game)end)
+    if not ok then stop("F input failed.");return end
+    held=true;releaseAt=now+.12;nextPulse=now+.3
+    attempts+=1;lastAttempt=now
+    log("F_DOWN attempt="..attempts.." animation="..cue.Id)
+   end
+  end
+ end
+ status.Text=string.format("Experimental ON · %d attempts · %d counters after attempts\n8-stud range; only two mapped attacks.",attempts,confirmed)
+end
+controller.Connect(run.Heartbeat,function()
+ local ok,err=pcall(update)
+ if not ok then stop("Error: "..tostring(err):sub(1,120))end
+end)
+local requests=rs:FindFirstChild("Requests")
+local cooldown=requests and requests:FindFirstChild("CooldownNT")
+if cooldown and cooldown:IsA("RemoteEvent")then controller.Connect(cooldown.OnClientEvent,function(data)
+ if type(data)=="table" and data.name=="Counter" and type(data.duration)=="number" and data.duration==data.duration and data.duration>=0 and data.duration<=30 then
+  cooldownUntil=os.clock()+data.duration
+ end
+end)end
+local effects=requests and requests:FindFirstChild("Effects")
+if effects and effects:IsA("RemoteEvent")then controller.Connect(effects.OnClientEvent,function(kind,model,message)
+ if enabled and kind=="Weave" and model==player.Character and (message=="Counter Parry!" or message=="Perfect Counter!")
+  and os.clock()-lastAttempt<=1 and attempts~=lastConfirmedAttempt then
+  lastConfirmedAttempt=attempts;confirmed+=1;log("COUNTER_AFTER_ATTEMPT "..message.." attempt="..attempts)
+ end
+end)end
+controller.Connect(input.WindowFocusReleased,function()if enabled then stop("Paused: game lost focus. Enable again to resume.")end end)
+controller.Connect(player.OnTeleport,function()stop("Teleport")end)
+controller.StopSparklingAutoParry=stop
+controller.RegisterCleanup(function()closed=true;stop("Unloaded")end)
 
 end)()
 if anomalyProfile == 'HunterXEnter' then

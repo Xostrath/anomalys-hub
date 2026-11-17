@@ -9,7 +9,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. User-supplied entry place: `120525873606470`.
 - Current objective: collect enough diagnostics to explain every automatic-defense attempt or skip before changing its timings.
 - Current defense: off-by-default isolated hit-3 / hit-4 trial. Nonselected known hits are recorded without F input. See SP-T025; existing seeds remain unchanged.
-- Latest implementation: **Combat page v9 / diagnostics v5**. Single-hit selector, separate sessions on switch; 187 mocked assertions and source/both-build compilation passed. Awaiting live validation of this mode (SP-T025).
+- Latest implementation: **Combat page v9 / diagnostics v5**. Single-hit selector, separate sessions on switch; 187 mocked assertions and source/both-build compilation passed. Hit-3-only filtering and cleanup verified live against Shadow (SP-T026); hit-4 mode/switch still awaits live validation.
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -26,7 +26,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
 | Auto parry | Selectable isolated hit-3/hit-4 trial; other hits recorded without F input | Earlier timing evidence through SP-T024; selector implemented in SP-T025 | Selected-hit outcomes and broader timing reliability unverified |
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v9 (SP-T025) | SINGLE HIT TEST selector; switch stops/saves and releases before selecting the next hit | 187 mocked assertions and compilation passed; untested live | Verify selected-hit-only input and compare hit-3/hit-4 histories separately |
+| Combat page v9 (SP-T025) | SINGLE HIT TEST selector; switch stops/saves and releases before selecting the next hit | 187 mocked assertions and compilation passed; hit-3 filtering verified live in SP-T026 | Verify hit-4 selection/switch and compare histories without pooling different target contexts |
 | Parry diagnostics v5 | Recent API/input/request correlation; early releases and intervening input flags; bounded LOS object properties | Live: 25 release pairs and one unmatched cycle correctly separated (SP-T022) | Early-release/ambiguous-window branches remain mock-tested |
 
 ## Sources and capture workflow
@@ -772,3 +772,24 @@ SP-T023–SP-T024 show mixed hit-3 results and damage associated with hit 4, but
 **187 mocked assertions passed:** 47 logger/lifecycle, 41 active feature/deferral/counter checks, 26 PvP/PvE, 7 settings/reload, 1 invalid-hit fallback, 34 asynchronous correlation/LOS, and 31 selector-specific cases. Selector cases cover each known combo under both selections, first-hit logging without input, selected-hit persistence, session headers after switching, key-up on switch, stopped hooks, disabled next run, queued-cue removal, release failure/recovery and player-owned targets. Updated source and staged public/private builds compile. The selector and resulting single-hit trials are **not yet live-validated**.
 
 Next: reload, leave **Test hit: 3**, offset=0 and hold=120, then enable and finish a short exchange. For hit 4, click the selector and enable again; switching finalizes the earlier run. Inspect the histories separately. Required acceptance: no F_DOWN animation outside the selected hit, consistent testHit header, expected filtered skips, paired release requests and cleanup. Then compare selected-hit phase/request/counter/damage observations before proposing a delay adjustment. Nonselected-hit damage is expected and must not be automatically attributed to the selected attempt. Keep the previously favorable hit-2 seed intact; do not tune a global delay from mixed-combo totals.
+
+
+## SP-019 / SP-T026 — isolated hit-3 test against Shadow (2026-11-17)
+
+**Evidence:** finalized diagnostics-v5 session starting Unix 1794954744, main-world place 110405289082842, Combat page v9. Header testHit=3, offset=0 ms, hold=120 ms, range=8, both target filters enabled. Manually disabled at 33.467 s; held=false, zero dropped lines, no logger/input/release/error/frame-gap failures. Totals: 3 automatic attempts, 1 self-counter message, 0 negative-health observations, no other-counter or possible-parried events. Runtime code and settings unchanged during this review.
+
+**Important context change:** all three attempts targeted the NPC binding named **Shadow**, not the Thug5 binding from prior tests. The capture does not establish this target's damage rules or confirm that every observed animation was an attack that would have damaged the local character. Do not compare zero observed damage directly with the earlier Thug5 failure counts or count all three as confirmed successful parries.
+
+**Selected-hit filtering verified live:** all F_DOWN events use hit-3 animation 95937874840716. Five first-hit cues log first_hit_disabled; 13 other known-hit cues log trial_hit_filtered. There are zero automatic inputs for any nonselected hit. Four selected cues queued: three executed and one was rejected for Counter cooldown. Another selected cue failed self-facing. Ordinary input correlation and release cleanup worked for all three executed attempts.
+
+| Attempt | F press time | Distance | Track phase / speed | Subsequent self-counter receipt |
+| --- | --- | --- | --- | --- |
+| 1 | 4.5005 s | 4.485 studs | 0.0192 s / 1.15 | None |
+| 2 | 23.7989 s | 4.968 studs | 0.0192 s / 1.15 | 23.9597 s, approximately 161 ms after press |
+| 3 | 26.7390 s | 3.812 studs | 0.0192 s / 1.15 | None |
+
+Attempt 2 is the only recent automatic candidate for that counter and has inputConflicts=[]. Its Defend=true receipt is at 23.8179 s, false at 23.9337 s, then the self counter at 23.9597 s. This is a useful isolated temporal correlation, not a server-confirmed success window. Attempts 1/3 have neither negative health nor a counter; their result remains inconclusive.
+
+All three release records have pairValid=true, correct cycleAttempt, after_api_up_request and no intervening down. Input-to-request delay is 19.0–23.6 ms; API holds 134.0–152.3 ms; adjacent true/false request spans 115.8–133.8 ms. Three additional F cycles at 28.0395–28.3880, 30.8840–31.0768 and 31.1147–31.2698 s correctly remain unmatched. They occur after the three automatic attempts and do not create additional automatic successes. Their source is unknown. At 31.2896 s, a later hit-3 cue was skipped with 0.9033 s observed Counter cooldown remaining; do not bypass that gate.
+
+**Handoff:** hit-3-only filtering, report selection, ordinary request correlation and cleanup are now live-validated. The hit-4 selection and switch-between-runs behavior still need live validation; their mocked tests remain separate evidence. Next select Test hit: 4, then enable a separate run at offset=0 / hold=120. Record the target context: Shadow and Thug5 cannot be silently pooled as equivalent damage trials. The current small hit-3 sample does not establish a replacement delay, so preserve the seeds until a discriminating comparison is available.

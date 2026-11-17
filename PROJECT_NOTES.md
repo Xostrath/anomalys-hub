@@ -153,3 +153,8 @@ The user temporarily requested recording instead of automatic parrying. Combat â
 ### Sparkling active timing test (2026-11-17)
 
 The user explicitly superseded record-only mode and requested active auto parry with continuous diagnostics and opponent-parry handling. Combat page v6 / diagnostics v4 starts OFF on reload, uses the shared five-combo trial catalog, timing-offset/hold controls, bounded cooldown rechecks, and a narrow Z-vanish-dummy LOS exclusion. Opponent counter attribution remains heuristic and requires recent local attack, geometry and a paired short local cooldown. See [SP-T017 in the Sparkling handoff](docs/games/sparkling.md) for trial values, validation and next steps. Preserve concurrent chatsâ€™ updates when publishing or installing.
+
+
+### Sparkling correlation and LOS diagnostics (2026-11-17)
+
+Combat page v7 / diagnostics v5 retains recent F pulses for asynchronous request correlation, flags early releases/intervening inputs, and logs bounded LOS object properties. LOS reraycasts past the exact current local head-effect BasePart under Workspace.Visuals. Timings are unchanged; v5 is compile/mock validated and awaits live testing. See [Sparkling SP-T021](docs/games/sparkling.md) for fields, evidence limits and the next check.

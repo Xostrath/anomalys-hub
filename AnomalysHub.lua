@@ -2393,7 +2393,7 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Combat page v6: user-authorized active timing experiment with continuous diagnostics.
+-- Combat page v7: user-authorized active timing experiment with continuous diagnostics.
 -- Shared five-combo catalog; seed delays are experimental, not measured server windows.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -2464,6 +2464,87 @@ local function log(event,detail)
  if #session.Lines>=12000 or session.Bytes+#line+1>3000000 then session.Dropped+=1;return end
  table.insert(session.Lines,line);session.Bytes+=#line+1
 end
+-- Correlation is diagnostic only: input origin and server acceptance remain unknown.
+-- Keep recent API pulses after release so asynchronous input/request receipts retain context.
+local function pulseById(id)
+ if not session then return end
+ for _,pulse in ipairs(session.Pulses)do if pulse.Id==id then return pulse end end
+end
+local function correlateInput(direction)
+ local now=os.clock()
+ session.InputSerial+=1
+ local matched,association
+ local possible={}
+ for i=#session.Pulses,1,-1 do
+  local pulse=session.Pulses[i]
+  if direction=="DOWN" and not pulse.InputDown and now-pulse.DownAt>=0 and now-pulse.DownAt<=.2 then
+   table.insert(possible,{Pulse=pulse,Association="api_down_window"})
+  elseif direction=="UP" and pulse.InputDown and not pulse.InputUp then
+   if pulse.UpRequestedAt and now-pulse.UpRequestedAt>=0 and now-pulse.UpRequestedAt<=.2 then
+    table.insert(possible,{Pulse=pulse,Association="api_up_window"})
+   elseif held and heldAttempt==pulse.Id and not pulse.UpRequestedAt and now-pulse.DownAt<=.5 then
+    table.insert(possible,{Pulse=pulse,Association="early_up_while_api_held"})
+   end
+  end
+ end
+ if #possible==1 then matched=possible[1].Pulse;association=possible[1].Association
+ elseif #possible>1 then association="ambiguous_api_window"end
+ local entry={At=now,Direction=direction,Serial=session.InputSerial,Pulse=matched,Association=association or "unmatched"}
+ if matched then
+  if direction=="DOWN"then matched.InputDown=entry else matched.InputUp=entry end
+ end
+ if direction=="DOWN"then
+  -- Any new down after a request breaks the earlier request's isolation, even with no new request yet.
+  if session.DefendCycle then session.DefendCycle.Interleaved=true end
+  for _,pulse in ipairs(session.Pulses)do
+   if pulse~=matched and now-pulse.DownAt<=1 then pulse.InterveningDown=true end
+  end
+ end
+ session.LastFInput=entry
+ return string.format(" inputSeq=%d attempt=%s association=%s apiHeld=%s temporalOnly=true",entry.Serial,matched and matched.Id or "none",entry.Association,tostring(held))
+end
+local function correlateDefend(direction,args,callId)
+ if direction:sub(1,4)~="OUT " or args[1]~="Defend" or type(args[2])~="boolean"then return end
+ -- OUT and RETURN for one call must never advance the state twice; duplicate OUT IDs are bounded too.
+ if session.DefendCalls[callId]then return end
+ session.DefendCalls[callId]=true;table.insert(session.DefendCallOrder,callId)
+ if #session.DefendCallOrder>64 then session.DefendCalls[table.remove(session.DefendCallOrder,1)]=nil end
+ local now=os.clock()
+ local down=args[2]
+ local inputReceipt=session.LastFInput
+ local fresh=inputReceipt and inputReceipt.Direction==(down and "DOWN" or "UP") and not inputReceipt.Consumed
+  and now-inputReceipt.At>=0 and now-inputReceipt.At<=.2
+ if fresh then inputReceipt.Consumed=true end
+ local pulse=fresh and inputReceipt.Pulse or nil
+ local common="call="..callId.." value="..tostring(down).." inputSeq="..tostring(fresh and inputReceipt.Serial or "none")
+  .." inputAttempt="..tostring(pulse and pulse.Id or "none").." association="..(fresh and inputReceipt.Association or "unmatched_request")
+  .." attribution=temporal_only syntheticOrigin=unknown serverAccepted=unknown"
+ if down then
+  if session.DefendCycle then
+   log("DEFEND_CYCLE_END","cycle="..session.DefendCycle.Id.." reason=intervening_true releaseObserved=false")
+  end
+  session.DefendSerial+=1
+  session.DefendCycle={Id=session.DefendSerial,At=now,Pulse=pulse,InputSequence=fresh and inputReceipt.Serial or nil}
+  if pulse then pulse.RequestDownAt=now end
+  log("DEFEND_REQUEST",common.." cycle="..session.DefendSerial.." apiDownAge="..tostring(pulse and now-pulse.DownAt or "unavailable"))
+ else
+  local cycle=session.DefendCycle
+  session.DefendCycle=nil -- A false cannot be reused by another true, including orphan/ambiguous receipts.
+  local paired=cycle and now-cycle.At<=1 and not cycle.Interleaved
+  local samePulse=paired and pulse and cycle.Pulse==pulse
+  local releaseState="unmatched"
+  if samePulse then
+   pulse.RequestUpAt=now
+   releaseState=pulse.UpRequestedAt and "after_api_up_request" or "before_api_up_request"
+  end
+  log("DEFEND_REQUEST",common.." cycle="..tostring(cycle and cycle.Id or "none")
+   .." requestSpan="..tostring(cycle and now-cycle.At or "unavailable").." pairValid="..tostring(paired==true)
+   .." cycleAttempt="..tostring(samePulse and pulse.Id or "none").." releaseState="..releaseState
+   .." apiUpAge="..tostring(samePulse and pulse.UpRequestedAt and now-pulse.UpRequestedAt or "unavailable")
+   .." interveningDown="..tostring(cycle and cycle.Interleaved==true or false))
+ end
+end
+
 local function sortedCounts(counts)
  local parts={}
  for key,value in pairs(counts)do table.insert(parts,key.."="..tostring(value))end
@@ -2471,16 +2552,17 @@ local function sortedCounts(counts)
 end
 local function report(reason)
  if not session then return nil end
- return "SPARKLING AUTO PARRY DIAGNOSTICS v4 // ACTIVE TIMING TEST\n"
+ return "SPARKLING AUTO PARRY DIAGNOSTICS v5 // ACTIVE TIMING TEST\n"
   .."session="..session.Id.." place="..game.PlaceId.." universe="..game.GameId.." unix="..session.Unix.." localClock="..session.Started
   .."\nHISTORY="..session.Path
   .."\nCoverage: attack decisions, F API down/up results, nearby Workspace.Live animation starts, local combat input events, incoming CooldownNT/Effects, health and sampled local state."
   .."\nThis experiment sends F input, not gameplay remotes. Shared Action hooks only observe/forward. F_DOWN API success and OUT/RETURN are not server acceptance; direct/namecall paths may duplicate a call."
   .."\nSELF_COUNTER lists recent actual attempts; attacker and causation remain unknown. OTHER_COUNTER logs other recipients. POSSIBLE_PARRIED requires recent local attack + nearby facing opponent counter + a local Counter=0.5 notice within 0.2s; this is a heuristic, not confirmation."
+  .."\nDEFEND_REQUEST pairs adjacent observed requests with recent F input/API pulses (200ms window). Early releases and intervening inputs are explicit; all attribution is temporal. Stop disconnects hooks, so post-stop request receipts may be unavailable."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s; save=5s."
   .."\nConfig: mode=active_test range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 typingAlwaysPauses=true cosmeticDummyExclusion=exact_Zvanishdummy"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -2566,15 +2648,32 @@ local function onScreen(model)
  local _,visible=camera:WorldToViewportPoint(root.Position)
  return visible
 end
-local function cosmeticDummy(instance)
+local function cosmeticObstacle(instance)
+ -- Only the current local character's exact direct BasePart; never exclude all Visuals.
+ local visuals=workspace:FindFirstChild("Visuals")
+ local char=player.Character
+ if visuals and char and instance and instance:IsA("BasePart") and instance.Parent==visuals
+  and instance.Name=="anotherHead"..char.Name then return instance,"local_head_effect"end
  local thrown=workspace:FindFirstChild("Thrown")
  local cursor=instance
  for _=1,8 do
   if not cursor then return end
-  if cursor.Name=="Zvanishdummy" and cursor:IsA("Model") and cursor.Parent==thrown then return cursor end
+  if thrown and cursor.Name=="Zvanishdummy" and cursor:IsA("Model") and cursor.Parent==thrown then return cursor,"zvanish_dummy"end
   cursor=cursor.Parent
  end
 end
+local function logLosObject(instance,excluded,kind)
+ if not session or session.LosObjects[instance] or session.LosObjectCount>=32 then return end
+ session.LosObjects[instance]=true;session.LosObjectCount+=1
+ local detail="object="..sample(instance).." class="..sample(instance.ClassName).." exclusion="..(kind or "none")
+  .." excludedRoot="..(excluded and sample(excluded)or "none")
+ if instance:IsA("BasePart")then
+  detail..=" canCollide="..tostring(instance.CanCollide).." canQuery="..tostring(instance.CanQuery)
+   .." anchored="..tostring(instance.Anchored).." size="..sample(instance.Size)
+ end
+ log("LOS_OBJECT",detail)
+end
+
 local function threat(model)
  if not model or not model:IsDescendantOf(workspace)then return false,"actor_unloaded",""end
  local char=player.Character
@@ -2600,9 +2699,10 @@ local function threat(model)
   params.FilterDescendantsInstances=exclusions
   local hit=workspace:Raycast(other.Position,delta,params)
   if not hit then return true,"clear",detail.." los=clear ignoredCosmetics="..table.concat(ignored,",")end
-  local dummy=cosmeticDummy(hit.Instance)
-  if not dummy then return false,"line_of_sight",detail.." obstacle="..sample(hit.Instance)end
-  table.insert(exclusions,dummy);table.insert(ignored,sample(dummy))
+  local cosmetic,kind=cosmeticObstacle(hit.Instance)
+  logLosObject(hit.Instance,cosmetic,kind)
+  if not cosmetic then return false,"line_of_sight",detail.." obstacle="..sample(hit.Instance).." ignoredCosmetics="..table.concat(ignored,",")end
+  table.insert(exclusions,cosmetic);table.insert(ignored,kind..":"..sample(cosmetic))
  end
  return false,"los_iteration_limit",detail
 end
@@ -2619,7 +2719,10 @@ local function release(reason,force)
  if not held then return true end
  local now=os.clock()
  if not force and now<nextReleaseRetry then return false end
+ local pulse=pulseById(heldAttempt)
+ if pulse then pulse.UpRequestedAt=now end
  local ok,err=pcall(function()vim:SendKeyEvent(false,Enum.KeyCode.F,false,game)end)
+ if pulse then pulse.UpOK=ok end
  log("F_UP",string.format("attempt=%d ok=%s heldFor=%.4f lateBy=%.4f reason=%s error=%s",heldAttempt,tostring(ok),now-heldAt,math.max(0,now-releaseAt),reason,ok and "none" or sample(err)))
  if ok then held=false else nextReleaseRetry=now+.1 end
  if session and not session.Open then save(session.StopReason)end
@@ -2775,7 +2878,7 @@ local function start()
  if controller.IsSparklingRecording and controller.IsSparklingRecording()then status.Text="Stop + Save the manual combat recording before enabling Auto Parry.";return end
  local id=tostring(os.time()).."_"..http:GenerateGUID(false)
  session={Open=true,Id=id,Path=rootPath.."sparkling_auto_parry_"..id..".txt",Unix=os.time(),Started=os.clock(),
-  Lines={},Bytes=0,Dropped=0,Counts={},Skips={},Actors=setmetatable({},{__mode="k"}),ActorSerial=0,CueSerial=0,Recent={},
+  Lines={},Bytes=0,Dropped=0,Counts={},Skips={},Actors=setmetatable({},{__mode="k"}),ActorSerial=0,CueSerial=0,Recent={},Pulses={},InputSerial=0,DefendSerial=0,DefendCalls={},DefendCallOrder={},LosObjects=setmetatable({},{__mode="k"}),LosObjectCount=0,
   Damage=0,OtherCounters=0,PossibleParried=0,State={},NextState=0,NextClock=0,NextSave=os.clock()+5,Gate=nil}
  attempts=0;observedCounters=0;lastLocalAttack=-math.huge;lastCounterNotice=nil;table.clear(opponentCandidates)
  enabled=true;ownCharacter=player.Character;nextScan=0;nextPulse=0
@@ -2787,6 +2890,7 @@ local function start()
   local ok,disconnect,description=pcall(controller.BeginSparklingParryObservation,guarded("ActionProbe",function(remote,direction,args,started,id,result,path)
    if not session or not session.Open or started<session.Started then return end
    if direction:sub(1,4)=="OUT " and (args[1]=="MouseButton1" or (args[1]=="MouseButton2" and args[2]~="Up") or args[1]=="AerialM1" or args[1]=="Rush")then lastLocalAttack=os.clock()end
+   correlateDefend(direction,args,id)
    log("ACTION","direction="..sample(direction).." call="..id.." requestStart="..string.format("%.4f",started-session.Started)
     .." path="..sample(path).." action="..sample(args[1]).." value="..sample(args[2]).." extra3="..sample(args[3]).." argc="..tostring(args.n or #args)
     .." duringAttempt="..tostring(sendingAttempt or (held and heldAttempt)or "none").." returned="..tostring(result~=nil))
@@ -2957,6 +3061,8 @@ local function update(dt)
     log("CUE_ACCEPTED","offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
     sendingAttempt=attempts+1;heldAttempt=sendingAttempt
     held=true;heldAt=now;releaseAt=now+settings.HoldMs/1000;nextPulse=now+.3;nextReleaseRetry=0
+    table.insert(session.Pulses,{Id=heldAttempt,DownAt=now})
+    if #session.Pulses>16 then table.remove(session.Pulses,1)end
     local ok,err=pcall(function()vim:SendKeyEvent(true,Enum.KeyCode.F,false,game)end)
     sendingAttempt=nil
     if not ok then log("F_DOWN_FAILED","attempt="..heldAttempt.." cue="..cue.Serial.." error="..sample(err));stop("F input failed.");return end
@@ -2992,7 +3098,9 @@ if effects and effects:IsA("RemoteEvent")then controller.Connect(effects.OnClien
  if kind=="Weave" and (message=="Counter Parry!" or message=="Perfect Counter!")then
   if model==player.Character then
    local count,list=candidates(os.clock());observedCounters+=1
-   log("SELF_COUNTER","message="..sample(message).." candidateCount="..count.." attempts=["..list.."] attribution="..(count==0 and "none" or count==1 and "temporal_only" or "ambiguous"))
+   local inputConflicts={}
+   for _,pulse in ipairs(session.Pulses)do if os.clock()-pulse.DownAt<=1 and pulse.InterveningDown then table.insert(inputConflicts,tostring(pulse.Id))end end
+   log("SELF_COUNTER","inputConflicts=["..table.concat(inputConflicts,",").."] message="..sample(message).." candidateCount="..count.." attempts=["..list.."] attribution="..(count==0 and "none" or count==1 and "temporal_only" or "ambiguous"))
   else
    session.OtherCounters+=1
    local ownRoot=roots(player.Character)
@@ -3035,11 +3143,13 @@ controller.Connect(run.Heartbeat,guarded("HealthBinding",function()
  if char~=healthCharacter or hum~=healthHumanoid then healthCharacter=char;healthHumanoid=hum;bindHealth(char)end
 end))
 local function inputEvent(direction,object,processed)
- if not enabled or input:GetFocusedTextBox()then return end
+ if not session or not session.Open then return end
  local key=object.KeyCode.Name
+ if input:GetFocusedTextBox() and key~="F"then return end
  local mouse=object.UserInputType.Name
  if key=="F" or key=="G" or key=="Q" or mouse=="MouseButton1" or mouse=="MouseButton2"then
-  log("INPUT","direction="..direction.." key="..key.." type="..mouse.." processed="..tostring(processed).." syntheticOrigin=unknown")
+  local correlation=key=="F" and correlateInput(direction) or ""
+  log("INPUT","direction="..direction.." key="..key.." type="..mouse.." processed="..tostring(processed).." syntheticOrigin=unknown"..correlation)
  end
 end
 controller.Connect(input.InputBegan,guarded("InputBegan",function(object,processed)inputEvent("DOWN",object,processed)end))

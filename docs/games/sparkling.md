@@ -4,12 +4,12 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 
 ## Read first
 
-**Current mode: ACTIVE TIMING TEST (Combat page v6 / diagnostics v4).** The user explicitly requested active auto parry with recording and opponent-parry handling. This supersedes the temporary passive-only instruction; see SP-T017 at the end. Old mode instructions remain historical.
+**Current mode: ACTIVE TIMING TEST (Combat page v7 / diagnostics v5).** The user explicitly requested active auto parry with recording and opponent-parry handling. This supersedes the temporary passive-only instruction; see SP-T021 for the latest correlation/LOS changes. Old mode instructions remain historical.
 
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. User-supplied entry place: `120525873606470`.
 - Current objective: collect enough diagnostics to explain every automatic-defense attempt or skip before changing its timings.
 - Current defense: off-by-default active trial covering five shared combo animations, with PvP/PvE filters and continuous diagnostics. Reliable timing remains unproven (SP-T017–SP-T019).
-- Latest implementation: **Combat page v6 / diagnostics v4**. Source/public/private compilation and 121 mocked assertions passed. Live input, cleanup and one cooldown retry are observed; counter attribution remains uncertain (SP-T019).
+- Latest implementation: **Combat page v7 / diagnostics v5**. Source and both build variants compile; 155 mocked assertions passed. v5 correlation and scoped head-effect exclusion await live testing (SP-T021); prior live evidence remains in SP-T018–SP-T020.
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -26,8 +26,8 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
 | Auto parry | Five shared combo trials, configurable range/timing, facing/LOS gates and F input | Active v6 / diagnostics v4 reviewed through SP-T019 | Reliable timing and input/outcome attribution unverified |
 | NPC ESP v1 (SP-T010) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-T012): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v6 (SP-T017) | **Combat → Auto Parry // TIMING TEST**. Five shared combo trials, timing/hold controls, actual F input and continuous diagnostics; possible opponent-parry correlation | 121 mocked assertions and compilation passed; Live inputs/cleanup and one cooldown retry observed; isolated counter candidate in SP-T020, timing reliability unproven | Investigate head-effect LOS and delayed request correlation before further timing changes |
-| Parry diagnostics v4 | Active attempt, geometry, input/request and self/other-counter histories | Live reports reviewed through SP-T019 | Early releases and interleaved F cycles require better attribution |
+| Combat page v7 (SP-T021) | Five active combo trials; continuous diagnostics v5; narrow local head-effect LOS exclusion | 155 mocked assertions and compilation passed; v5 untested live | Verify exact excluded object and input/request correlation before timing changes |
+| Parry diagnostics v5 | Recent API/input/request correlation; early releases and intervening input flags; bounded LOS object properties | Implemented / simulated checks passed (SP-T021) | Validate asynchronous receipts and actual obstacle properties live |
 
 ## Sources and capture workflow
 
@@ -560,3 +560,32 @@ Eight Counter=5 notices and one Counter=0.5 notice were observed. The first seve
 All three LOS skips again name the local `Workspace.Visuals.anotherHead<local-character>` effect, at 18.1444, 33.9440 and 53.7075 s. The middle skip also had 2.588 s cooldown remaining, so removing that obstacle alone would not have made the cue eligible. Other skips: out-of-range 13, self-facing 1, unmapped animation 198.
 
 **Handoff:** the no-extra-F exchange provides a better automatic-result candidate than the mixed-input tests, but baseline timing remains unreliable. Keep this evidence alongside SP-T019's interleaving cases. Next implementation priorities remain precise input/request correlation and inspection of the exact head-effect LOS blocker, followed by one-variable timing trials. More unchanged generic recordings are not required to establish these repeated issues. No script, live-session state or timing setting was changed during this review.
+
+
+## SP-014 / SP-T021 — request correlation and scoped head-effect LOS fix (2026-11-17)
+
+**User authorization:** proceed with the input-correlation and repeated head-effect obstruction fixes after SP-T020. Implemented in `src/SparklingAutoParry.lua`, **Combat page v7 / diagnostics v5**. The public artifact and installed private artifact receive only the exact module replacement from their current contents, preserving concurrent ESP/other changes. No game-session control or timing adjustment is part of this change.
+
+### Request/input correlation
+
+Recent API pulses are retained in a bounded 16-entry list after key-up. F input events now include `inputSeq`, a temporal candidate `attempt`, and an association: `api_down_window`, `api_up_window`, `early_up_while_api_held`, `ambiguous_api_window`, or `unmatched`. Receipt windows are 200 ms; an early-up candidate requires the same currently held pulse within 0.5 s and no preceding API release request. Multiple eligible pulses stay ambiguous. These are diagnostic windows, not game timing windows. API release still occurs after an early observed release, preserving cleanup.
+
+New **DEFEND_REQUEST** events describe observed outgoing boolean Defend requests. OUT/RETURN observations for one call do not advance the pairing state twice; duplicate OUT IDs are suppressed within a bounded 64-call cache. Each input receipt can be consumed only once. A true begins a request cycle; a later true closes/replaces the prior cycle. A false consumes that current cycle and cannot be reused. A pair has at most a one-second span and cannot cross an intervening F-down. `cycleAttempt` additionally requires both receipts to correlate with the same API pulse. Unmatched, stale, conflicting and ambiguous cases retain unknown attribution rather than borrowing the nearest attempt.
+
+Fields include `inputAttempt`, `cycle`, `requestSpan`, `pairValid`, `cycleAttempt`, `releaseState`, `apiDownAge` or `apiUpAge`, and `interveningDown`. `releaseState=before_api_up_request` exposes SP-T019's early release; delayed ordinary releases retain the candidate attempt through `after_api_up_request`. `pairValid` describes an adjacent request interval, **not a successful parry or proven synthetic input**. The existing raw ACTION `duringAttempt` field remains contextual; use the new correlation events rather than treating a post-release `duringAttempt=none` as a missing release.
+
+SELF_COUNTER now also lists `inputConflicts` for recent attempts with a later observed F-down. Existing counter candidate counts remain temporal. Unknown request/input origin and server acceptance are explicit. Distinct hook paths may still duplicate a request under different call IDs; those do not justify inventing a successful cycle. Hooks disconnect at stop, so asynchronous post-stop request receipts can be unavailable; successful API release and missing post-stop observation remain distinct.
+
+Reference: reused Beyond Nen's separation of API input, input receipt, request receipt and conflicting subsequent inputs (`BeyondNenAutoParry.lua`, `UnmatchedDownAfter` / result-attribution checks). No Beyond Nen remote semantics, timings, weapon IDs or server confirmation assumptions were transferred. Hunter X Enter's UI/recorder conventions remain unchanged.
+
+### Narrow local head-effect exclusion
+
+LOS now reraycasts past a hit only when it is the exact **BasePart named `anotherHead` + current local Character.Name, directly under Workspace.Visuals**. The existing exact Zvanishdummy Model-under-Thrown exclusion remains. Other-player names, stale character names, same-name objects elsewhere, model wrappers, generic Thrown.Part, real rigs and map geometry remain blockers. A wall behind an excluded object still blocks, and the existing five-ray bound remains.
+
+This is a scoped trial based on the repeated ray-hit paths in SP-T018–SP-T020. Actual live properties/gameplay purpose are not proven solely by the name. New **LOS_OBJECT** events capture the hit object's class, CanCollide, CanQuery, Anchored, Size, matched exclusion and excluded root, once per observed object with a 32-object session cap. Cue details retain `ignoredCosmetics`, including when a wall behind an effect blocks the ray. These observations allow the next capture to verify the exact live object instead of expanding exclusions by guesswork.
+
+### Validation and handoff
+
+**155 mocked assertions passed:** 47 logger/lifecycle regressions, 42 active trial/catalog/LOS/deferral/opponent-counter checks, 26 player/NPC checks, 6 settings/reload checks, and 34 new asynchronous correlation/early-release/interleaving/scoped-LOS checks. New cases include delayed requests after API release, early release followed by a separate F cycle, duplicate OUT/RETURN, intervening down without a new request, repeated true, stale/orphan receipts, overlapping release windows, new-session reset, exact head-part matching, walls behind it, wrong names/parents/classes, changed character names and bounded LOS observations. Updated source and both staged public/private variants compile. These are simulated checks, **not live validation of v5**.
+
+Reload the installed hub to use v5, then enable Auto Parry (still off on reload). Preserve offset=0 / hold=120 for the first comparison; diagnostics continue automatically. Inspect new DEFEND_REQUEST/INPUT correlation and LOS_OBJECT plus ignoredCosmetics, then actual damage/counter observations. Do not adjust multiple timing variables or claim reliable defense merely because the obstruction no longer blocks. Source seeds, range/cooldown gates, hold settings, target filters and existing stop/release behavior are retained. The user controls live testing.

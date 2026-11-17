@@ -271,7 +271,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -76, 0, 20), Size = UDim2.fromOffset(146, 18),
-	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v18" or "UNIVERSAL // ACTIVE",
+	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v19" or "UNIVERSAL // ACTIVE",
 	TextColor3 = colors.Accent, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1494,7 +1494,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v18",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v19",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1504,7 +1504,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v18 loaded; bounded Hunger Value Test available.")
+print("[Anomaly] Hunter X Enter adapter v19 loaded; passive Hunger Update Trace available.")
 
 end)()
 ;(function()
@@ -2900,116 +2900,221 @@ end)
 
 end)()
 ;(function()
--- Passive hunger investigation. Does not alter values, invoke remotes, or execute captured scripts.
+-- Passive hunger trace: scoped sources, attributes, incoming events and forwarded local writes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
-if type(controller)~="table" or controller.Profile~="HunterXEnter" then return end
+if type(controller)~="table" or controller.Profile~="HunterXEnter"then return end
 local player=game:GetService("Players").LocalPlayer
 local rs=game:GetService("ReplicatedStorage")
 local run=game:GetService("RunService")
 local http=game:GetService("HttpService")
 local ui=controller.UI
-local card=ui.Card(ui.Pages.Recorders,"HUNGER INVESTIGATION // v1","Observe hunger while idle or after eating. Captures matching client scripts if readable; changes nothing.",180)
+local card=ui.Card(ui.Pages.Recorders,"HUNGER UPDATE TRACE // v2","40s: idle 10s, run 10s, eat one Bread, then wait. Observes local writers, incoming updates and relevant client code.",190)
 card.LayoutOrder=80
-local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,52),BackgroundTransparency=1,
-	Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
-	Text="Ready. Capture 45 seconds; eat once if convenient."},card)
-local active,button,closed=nil,nil,false
-local function write(path,value)
-	if type(writefile)~="function"then return false end
-	if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
-	return pcall(writefile,path,value)
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,60),BackgroundTransparency=1,
+ Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Ready. Does not change hunger, send requests, or control training. Missing hook coverage is reported."},card)
+local active,closed,button=nil,false,nil
+local probe=env.__AnomalyHunterHungerObserver
+if type(probe)~="table"then probe={};env.__AnomalyHunterHungerObserver=probe end
+local function log(c,text)
+ if active~=c or #c.Lines>=2500 then return end
+ table.insert(c.Lines,string.format("%.4f %s",os.clock()-c.Started,tostring(text):sub(1,2500)))
 end
-local function log(c,value)
-	if active~=c or #c.Lines>=1000 then return end
-	table.insert(c.Lines,string.format("%.3f %s",os.clock()-c.Started,tostring(value):sub(1,1200)))
+local function write(path,data)
+ if type(writefile)~="function"then return false end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ return pcall(writefile,path,data)
 end
 local function save(c,reason)
-	local report="HUNTER HUNGER INVESTIGATION v1 // READ ONLY\nClient source cannot establish server authority.\nNo inputs, game requests, mutations, require, or execution of captured scripts.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
-	local latest=write("AnomalyHub/universal/hunter_hunger_capture_latest.txt",report)
-	local history=write(c.Path..".txt",report)
-	return latest or history
+ local text="HUNTER HUNGER UPDATE TRACE v2 // PASSIVE\nNo values changed, requests sent, automatic inputs, require, or captured code execution.\nLocal writes forwarded unchanged. Hook paths may duplicate observations. No observed local writer is NOT proof of server authority. Event timing is correlation, not causation.\nLimits: 40s; 2500 report lines; 8 sources, 2MB each, 5s each; 2 concurrent source readers.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
+ local a=write("AnomalyHub/universal/hunter_hunger_trace_latest.txt",text)
+ local b=write(c.Path..".txt",text)
+ return a or b
 end
 local function stop(reason)
-	local c=active;if not c then return end
-	log(c,"STOP "..reason);active=nil
-	local saved=save(c,reason)
-	button.Text="Capture Hunger";button.BackgroundColor3=ui.Colors.Surface
-	status.Text=saved and ("Saved: "..reason..". Client source results are listed in the report.") or "Saving failed."
+ local c=active;if not c then return end
+ log(c,"STOP "..reason);active=nil;probe.Callback=nil;probe.Player=nil
+ for _,conn in ipairs(c.Connections)do conn:Disconnect()end
+ local saved=save(c,reason)
+ button.Text="Trace Hunger Updates"
+ status.Text=saved and ("Saved: "..reason..". Sources and coverage are listed in the report.") or "Save failed."
 end
-local function sourceTargets(c)
-	local roots={}
-	for _,root in pairs({player:FindFirstChildOfClass("PlayerScripts"),rs:FindFirstChild("Modules"),player:FindFirstChildOfClass("PlayerGui")})do table.insert(roots,root)end
-	local queue={};for _,root in pairs(roots)do if root then table.insert(queue,{root,0})end end
-	local index,targets=1,{}
-	while index<=#queue and index<=1500 do
-		local pair=queue[index];index+=1
-		local object,depth=pair[1],pair[2]
-		local name=object.Name:lower()
-		if not name:find("admin",1,true)then
-			if (object:IsA("LocalScript") or object:IsA("ModuleScript")) and (name:find("hunger",1,true) or name:find("saturation",1,true))then
-				table.insert(targets,object);if #targets>=3 then log(c,"LIMIT maximum 3 matching client scripts");break end
-			end
-			if depth<6 then for _,child in ipairs(object:GetChildren())do
-				if #queue>=1500 then log(c,"LIMIT discovery 1500 objects");break end
-				table.insert(queue,{child,depth+1})
-			end end
-		end
-	end
-	log(c,"SOURCE_TARGETS "..#targets.." scanned="..(index-1))
-	return targets
+local function allowed(object)
+ if typeof(object)~="Instance"then return false end
+ if not object:IsA("LocalScript") and not object:IsA("ModuleScript")then return false end
+ local cursor=object
+ while cursor do
+  local n=cursor.Name:lower()
+  if n:find("admin",1,true) or n:find("chat",1,true) or n:find("phone",1,true) or n:find("antimacro",1,true)then return false end
+  cursor=cursor.Parent
+ end
+ for _,root in pairs({player:FindFirstChildOfClass("PlayerScripts"),player:FindFirstChildOfClass("PlayerGui"),player.Character,player:FindFirstChildOfClass("Backpack"),rs:FindFirstChild("Modules")})do
+  local p=object
+  while p do if p==root then return true end;p=p.Parent end
+ end
+ return false
 end
-local function captureSource(c,object,index)
-	local path=object:GetFullName();log(c,"SOURCE_TARGET "..path)
-	local resolved=false
-	local function finish(value,reason)
-		if resolved or active~=c then return end;resolved=true
-		if type(value)=="string" and value:match("%S") and #value<=2000000
-			and not value:lower():find("failed to decompile",1,true) and not value:lower():find("decompilation failed",1,true)then
-			local file=c.Path.."_"..index.."_"..object.Name:gsub("[^%w_]","")..".lua"
-			log(c,write(file,value) and ("SOURCE_SAVED "..file.." bytes="..#value.." path="..path) or ("SOURCE_SAVE_FAILED "..path))
-		else log(c,"SOURCE_UNAVAILABLE "..path.." "..reason)end
-		save(c,"RECORDING")
-	end
-	task.delay(5,function()finish(nil,"5s deadline; late results ignored")end)
-	task.spawn(function()
-		local ok,value=pcall(function()return object.Source end)
-		if ok and type(value)=="string" and value:match("%S")then finish(value,"empty or larger than 2MB");return end
-		if resolved or active~=c then return end
-		local reader=env.decompile or decompile
-		if type(reader)~="function"then finish(nil,"decompiler unavailable");return end
-		local success,result=pcall(reader,object)
-		finish(success and result or nil,"unreadable, failed, empty or larger than 2MB")
-	end)
+local function queueSource(c,object,why)
+ if not allowed(object) or c.SeenSources[object]then return end
+ c.SeenSources[object]=true
+ if #c.Sources>=8 then log(c,"LIMIT 8 sources; omitted "..object:GetFullName());return end
+ table.insert(c.Sources,object);log(c,"SOURCE_QUEUED "..object:GetFullName().." reason="..why)
+end
+local function discover(c)
+ local roots={{player:FindFirstChildOfClass("PlayerScripts"),1500},{rs:FindFirstChild("Modules"),2000},{player.Character,600},{player:FindFirstChildOfClass("Backpack"),300},{player:FindFirstChildOfClass("PlayerGui"),1000}}
+ local candidates,seen={},{}
+ local names={stamina=true,movementcontroller=true,inventoryclient=true,inventorycontroller=true,foodclient=true,foodcontroller=true,survivalclient=true,survivalcontroller=true,playerdataclient=true,statsclient=true,statscontroller=true}
+ for _,spec in ipairs(roots)do
+  local root,budget=spec[1],spec[2]
+  if root then
+   local queue={{root,0}};local index,limited=1,false
+   while index<=#queue do
+    local pair=queue[index];index+=1
+    local obj,depth=pair[1],pair[2];local n=obj.Name:lower()
+    if not n:find("admin",1,true) and not n:find("chat",1,true) and not n:find("phone",1,true) and not n:find("antimacro",1,true) and obj~=ui.Gui then
+     if allowed(obj) and not seen[obj]then
+      seen[obj]=true
+      local priority=(n:find("hunger",1,true) or n:find("saturation",1,true) or n:find("nutrition",1,true)) and 0
+       or (n:find("food",1,true) or n:find("inventory",1,true)) and 1 or names[n] and 2
+      local parent=obj.Parent
+      if not priority and parent and (parent.Name=="Bread" or parent.Name=="Onigiri")then priority=1 end
+      if priority then table.insert(candidates,{Object=obj,Priority=priority});log(c,"CANDIDATE "..obj:GetFullName())end
+     end
+     if depth<10 then
+      for _,child in ipairs(obj:GetChildren())do
+       if #queue>=budget then limited=true;break end
+       table.insert(queue,{child,depth+1})
+      end
+     elseif #obj:GetChildren()>0 then limited=true end
+    end
+   end
+   log(c,"DISCOVERY "..root:GetFullName().." scanned="..(index-1).." limited="..tostring(limited))
+  end
+ end
+ table.sort(candidates,function(a,b)if a.Priority==b.Priority then return a.Object:GetFullName()<b.Object:GetFullName()end;return a.Priority<b.Priority end)
+ for i=1,math.min(6,#candidates)do queueSource(c,candidates[i].Object,"named candidate")end
+ if #candidates>6 then log(c,"LIMIT first 6 candidates queued; 2 slots reserved for observed local writers")end
+end
+local function readSource(c,object,index)
+ c.Reading+=1
+ local resolved=false;local path=object:GetFullName()
+ local function finish(value,reason)
+  if resolved or active~=c then return end;resolved=true
+  if type(value)=="string" and value:match("%S") and #value<=2000000 and not value:lower():find("failed to decompile",1,true) and not value:lower():find("decompilation failed",1,true)then
+   local file=c.Path.."_"..index.."_"..object.Name:gsub("[^%w_]","")..".lua"
+   log(c,write(file,value) and ("SOURCE_SAVED "..file.." bytes="..#value.." path="..path) or "SOURCE_SAVE_FAILED "..path)
+  else log(c,"SOURCE_UNAVAILABLE "..path.." "..reason)end
+ end
+ task.delay(5,function()finish(nil,"5s deadline; late results ignored")end)
+ task.spawn(function()
+  local completed,err=pcall(function()
+  if active~=c or resolved then return end
+  local ok,value=pcall(function()return object.Source end)
+  if ok and type(value)=="string" and value:match("%S")then finish(value,"empty/oversized source");return end
+  local reader=env.decompile or decompile
+  if type(reader)~="function"then finish(nil,"decompiler unavailable");return end
+  local success,result=pcall(reader,object)
+  finish(success and result or nil,"unreadable/failed/empty/oversized source")
+  end)
+  c.Reading-=1
+  if not completed then finish(nil,"reader error: "..tostring(err))end
+ end)
+end
+local function hooks(c)
+ local wrap=env.newcclosure or newcclosure or function(f)return f end
+ local calling=env.getcallingscript or getcallingscript
+ local method=env.getnamecallmethod or getnamecallmethod
+ local function forward(original,kind,self,...)
+  local key,value=...
+  if self==probe.Player and probe.Callback and (key=="Hunger" or key=="Saturation" or key=="HungerMult")then
+   local ok,writer=false,nil
+   if type(calling)=="function"then ok,writer=pcall(calling)end
+   pcall(probe.Callback,kind,key,value,ok and writer or nil)
+  end
+  return original(self,...)
+ end
+ local hook=env.hookmetamethod or hookmetamethod
+ if not probe.Namecall and type(hook)=="function" and type(method)=="function"then
+  local original
+  local ok,err=pcall(function()
+   original=hook(game,"__namecall",wrap(function(self,...)
+    if self==probe.Player and probe.Callback then
+     local valid,name=pcall(method)
+     if valid and name=="SetAttribute"then return forward(original,"namecall",self,...)end
+    end
+    return original(self,...)
+   end))
+  end)
+  if ok then probe.Namecall=true else log(c,"HOOK_ERROR namecall "..tostring(err))end
+ end
+ local hf=env.hookfunction or hookfunction
+ if not probe.Direct and type(hf)=="function"then
+  local original
+  local ok,err=pcall(function()original=hf(player.SetAttribute,wrap(function(self,...)return forward(original,"direct",self,...)end))end)
+  if ok then probe.Direct=true else log(c,"HOOK_ERROR direct "..tostring(err))end
+ end
+ log(c,"COVERAGE localSetAttribute namecall="..tostring(probe.Namecall==true).." direct="..tostring(probe.Direct==true).." callerIdentity="..tostring(type(calling)=="function"))
+end
+local function incoming(c)
+ for _,path in ipairs({"PhysicsRemote","InventoryRemotes.InventoryUpdated"})do
+  local obj=rs
+  for n in path:gmatch("[^.]+")do obj=obj and obj:FindFirstChild(n)end
+  if obj and obj:IsA("RemoteEvent")then
+   table.insert(c.Connections,obj.OnClientEvent:Connect(function(...)
+    if active~=c then return end
+    local args=table.pack(...);local fields={"argc="..args.n}
+    for i=1,math.min(args.n,4)do
+     local v=args[i]
+     if type(v)=="table"then
+      for _,key in ipairs({"Hunger","Saturation","HungerMult","Bread","Onigiri","hunger","saturation"})do
+       local item=rawget(v,key);if type(item)=="number" or type(item)=="boolean"then table.insert(fields,i.."."..key.."="..tostring(item))end
+      end
+     elseif type(v)=="number" or type(v)=="boolean"then table.insert(fields,i.."="..tostring(v))
+     elseif i==1 and type(v)=="string"then table.insert(fields,"action="..v:sub(1,60))end
+    end
+    log(c,"INCOMING "..path.." "..table.concat(fields," "))
+   end))
+   log(c,"WATCH_INCOMING "..path)
+  else log(c,"MISSING_INCOMING "..path)end
+ end
 end
 local function sample(c)
-	for _,key in ipairs({"Hunger","Saturation","HungerMult"})do
-		local value=tostring(player:GetAttribute(key))
-		if c.Previous[key]~=value then c.Previous[key]=value;log(c,"PLAYER@"..key.."="..value)end
-	end
-	local char=player.Character;local hum=char and char:FindFirstChildOfClass("Humanoid")
-	if hum and c.Health~=hum.Health then c.Health=hum.Health;log(c,"HEALTH="..hum.Health)end
+ local char=player.Character;local h=char and char:FindFirstChildOfClass("Humanoid")
+ log(c,"SAMPLE Hunger="..tostring(player:GetAttribute("Hunger")).." Saturation="..tostring(player:GetAttribute("Saturation")).." health="..tostring(h and h.Health).." running="..tostring(char and char:GetAttribute("Running")))
 end
-button=ui.Button(card,"Capture Hunger",14,72,180,function()
-	if closed then return end
-	if active then stop("STOPPED");return end
-	local ok,id=pcall(http.GenerateGUID,http,false);if not ok then id=tostring(os.clock())end
-	local c={Started=os.clock(),Previous={},Lines={},NextSave=0,NextSample=0,Character=player.Character,
-		Path="AnomalyHub/universal/hunter_hunger_"..os.time().."_"..tostring(id):gsub("[^%w%-]","")}
-	active=c;sample(c)
-	if not save(c,"RECORDING")then stop("SAVE_FAILED");return end
-	button.Text="Stop + Save";button.BackgroundColor3=ui.Colors.AccentSoft
-	local success,targets=pcall(sourceTargets,c)
-	if success then for index,object in ipairs(targets)do captureSource(c,object,index)end else log(c,"DISCOVERY_FAILED "..tostring(targets))end
+button=ui.Button(card,"Trace Hunger Updates",14,72,180,function()
+ if closed then return end
+ if active then stop("STOPPED");return end
+ local ok,id=pcall(http.GenerateGUID,http,false)
+ local c={Started=os.clock(),Character=player.Character,Lines={},Connections={},Sources={},SeenSources={},NextSource=1,Reading=0,NextSample=0,NextSave=0,
+  Path="AnomalyHub/universal/hunter_hunger_trace_"..os.time().."_"..tostring(ok and id or os.clock()):gsub("[^%w%-]","")}
+ active=c;sample(c)
+ if not save(c,"RECORDING")then stop("SAVE_FAILED");return end
+ probe.Player=player
+ probe.Callback=function(kind,key,value,writer)
+  if active~=c then return end
+  log(c,"LOCAL_SET "..kind.." "..key.." value="..(type(value)=="number" and tostring(value) or "<"..type(value)..">").." writer="..(typeof(writer)=="Instance" and writer:GetFullName() or "unavailable"))
+  queueSource(c,writer,"observed hunger writer")
+ end
+ table.insert(c.Connections,player.AttributeChanged:Connect(function(key)
+  if active==c and (key=="Hunger" or key=="Saturation" or key=="HungerMult")then log(c,"ATTRIBUTE "..key.."="..tostring(player:GetAttribute(key)))end
+ end))
+ local prepared,err=pcall(function()incoming(c);hooks(c);discover(c)end)
+ if not prepared then log(c,"START_ERROR "..tostring(err));stop("START_ERROR");return end
+ button.Text="Stop + Save"
 end)
 controller.Connect(run.Heartbeat,function()
-	local c=active;if not c then return end
-	local now=os.clock()
-	if player.Character~=c.Character then stop("CHARACTER_CHANGED");return end
-	if now-c.Started>=45 then stop("COMPLETE");return end
-	if now>=c.NextSample then c.NextSample=now+.25;local ok=pcall(sample,c);if not ok then stop("SAMPLE_FAILED");return end end
-	if now>=c.NextSave then c.NextSave=now+5;if not save(c,"RECORDING")then stop("SAVE_FAILED");return end end
-	status.Text=string.format("Recording %.0fs / 45s. Idle, or eat once normally.\nNo hunger values are changed.",now-c.Started)
+ local c=active;if not c then return end
+ local now=os.clock()
+ if player.Character~=c.Character then stop("CHARACTER_CHANGED");return end
+ local h=c.Character and c.Character:FindFirstChildOfClass("Humanoid")
+ if h and h.Health<=0 then stop("DEATH");return end
+ if now-c.Started>=40 or #c.Lines>=2500 then stop(#c.Lines>=2500 and "LINE_LIMIT" or "COMPLETE");return end
+ while c.Reading<2 and c.NextSource<=#c.Sources do local i=c.NextSource;c.NextSource+=1;readSource(c,c.Sources[i],i)end
+ if now>=c.NextSample then c.NextSample=now+.5;sample(c)end
+ if now>=c.NextSave then c.NextSave=now+2;if not save(c,"RECORDING")then stop("SAVE_FAILED");return end end
+ status.Text=string.format("Tracing %.0fs / 40s. Idle 10s, run 10s, eat once, then wait.\n%d client sources queued. No hunger values changed.",now-c.Started,#c.Sources)
 end)
 controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
 controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)

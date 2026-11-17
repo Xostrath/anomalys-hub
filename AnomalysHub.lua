@@ -271,7 +271,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -76, 0, 20), Size = UDim2.fromOffset(146, 18),
-	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v15" or "UNIVERSAL // ACTIVE",
+	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v16" or "UNIVERSAL // ACTIVE",
 	TextColor3 = colors.Accent, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1493,7 +1493,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v15",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v16",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1503,7 +1503,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v15 loaded; Food Shop recorder available.")
+print("[Anomaly] Hunter X Enter adapter v16 loaded; Auto Buy Bread available.")
 
 end)()
 ;(function()
@@ -2986,6 +2986,135 @@ controller.Connect(run.Heartbeat,function()
 end)
 controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
 controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)
+
+end)()
+;(function()
+-- Bread purchase only, from the observed BuyBread(quantity) / "ok" transaction.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter"then return end
+local player=game:GetService("Players").LocalPlayer
+local rs=game:GetService("ReplicatedStorage")
+local run=game:GetService("RunService")
+local ui=controller.UI
+local gate=env.__AnomalyHunterFoodPurchase
+if type(gate)~="table"then gate={};env.__AnomalyHunterFoodPurchase=gate end
+local state={Enabled=false,Closed=false,Character=player.Character,Stock=nil,Revision=0,Target=10,NextCheck=0,NextBuy=0}
+local card=ui.Card(ui.Pages.Auto,"AUTO BUY FOOD // v1","Keeps Bread in stock. If stock is unknown, buys 1 first to read inventory. Eating is not automated yet.",206)
+card.LayoutOrder=20
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,146),Size=UDim2.new(1,-28,0,48),BackgroundTransparency=1,
+ Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Off. Target: 10 Bread."},card)
+local button
+local lines={}
+local function log(message)
+ if #lines>=150 then table.remove(lines,1)end
+ table.insert(lines,string.format("%.3f %s",os.clock(),message))
+ if type(writefile)=="function"then
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  pcall(writefile,"AnomalyHub/universal/hunter_auto_food_test.txt","HUNTER AUTO BUY FOOD v1 // Bread only\n"..table.concat(lines,"\n"))
+ end
+end
+local function stop(reason)
+ state.Enabled=false;state.Pending=nil
+ if button then button.Text="Auto Buy Bread: OFF"end
+ status.Text=reason;log("STOP "..reason)
+end
+local function bindInventory()
+ local folder=rs:FindFirstChild("InventoryRemotes")
+ local event=folder and folder:FindFirstChild("InventoryUpdated")
+ if event==state.Event then return event~=nil end
+ if state.Connection then state.Connection:Disconnect();state.Connection=nil end
+ state.Event=nil;state.Stock=nil
+ if not event or not event:IsA("RemoteEvent")then return false end
+ state.Event=event
+ state.Connection=event.OnClientEvent:Connect(function(items)
+  if state.Closed or type(items)~="table"then return end
+  -- The captured update is a full item-name -> count map; reject other shapes.
+  local size=0
+  for name,count in pairs(items)do
+   size+=1
+   if size>1000 or type(name)~="string" or type(count)~="number" or count~=count or count<0 or count>100000000 or count%1~=0 then return end
+  end
+  state.Stock=items.Bread or 0;state.Revision+=1
+  if state.Enabled then log("INVENTORY Bread="..state.Stock.." revision="..state.Revision)end
+ end)
+ return true
+end
+local function living()
+ local char=player.Character
+ local h=char and char:FindFirstChildOfClass("Humanoid")
+ return char==state.Character and h and h.Health>0
+end
+button=ui.Button(card,"Auto Buy Bread: OFF",14,72,180,function()
+ if state.Enabled then stop("Off.");return end
+ if state.Closed or controller.IsUnloaded()then return end
+ if gate.Pending then status.Text="A previous purchase is still waiting for a response.";return end
+ state.Character=player.Character
+ if not living()then status.Text="Wait until your character is alive.";return end
+ if not bindInventory()then status.Text="Inventory update event unavailable.";return end
+ state.Enabled=true;state.Pending=nil;state.NextBuy=0
+ button.Text="Auto Buy Bread: ON";status.Text="Checking Bread stock…";log("START target="..state.Target.." stock="..tostring(state.Stock))
+end)
+button.Size=UDim2.new(1,-28,0,30)
+local picker
+picker=ui.Button(card,"Keep: 10 Bread",14,108,180,function()
+ if state.Enabled or gate.Pending then status.Text="Turn Auto Buy off and wait for any purchase before changing the target.";return end
+ state.Target=state.Target==10 and 1 or 10
+ picker.Text="Keep: "..state.Target.." Bread";status.Text="Off. Target: "..state.Target.." Bread."
+end)
+picker.Size=UDim2.new(1,-28,0,30)
+controller.Connect(run.Heartbeat,function()
+ if state.Closed then return end
+ local now=os.clock()
+ if player.Character~=state.Character then
+  state.Character=player.Character;state.Stock=nil
+  if state.Enabled then stop("Character changed. Enable again when ready.")end
+ end
+ if now>=state.NextCheck then state.NextCheck=now+1;bindInventory()end
+ if not state.Enabled then return end
+ if not living()then stop("Character unavailable or dead.");return end
+ local pending=state.Pending
+ if pending then
+  if pending.Done and pending.Result=="ok" and state.Revision>pending.Revision and state.Stock and state.Stock>=(pending.Before or 0)+pending.Quantity then
+   log("CONFIRMED quantity="..pending.Quantity.." Bread="..state.Stock)
+   state.Pending=nil;state.NextBuy=now+3
+   status.Text="Bread: "..state.Stock.." / "..state.Target..". Purchase confirmed."
+  elseif pending.Done and pending.Result~="ok" then
+   stop("Purchase failed: "..tostring(pending.Result):sub(1,100)..". No retry.")
+  elseif now-pending.Started>=10 then
+   stop("Purchase not confirmed within 10 seconds. Check inventory before enabling again.")
+  end
+  return
+ end
+ if gate.Pending or now<state.NextBuy then return end
+ if state.Stock and state.Stock>=state.Target then status.Text="Bread: "..state.Stock.." / "..state.Target..". Waiting until stock drops.";return end
+ local events=rs:FindFirstChild("RemoteEvents")
+ local buy=events and events:FindFirstChild("BuyBread")
+ if not buy or not buy:IsA("RemoteFunction") or not bindInventory()then stop("Food shop or inventory remote unavailable.");return end
+ -- Both 1 and 10 were observed; use singles for partial refills.
+ local quantity=state.Stock==0 and state.Target==10 and 10 or 1
+ pending={Quantity=quantity,Before=state.Stock,Revision=state.Revision,Started=now}
+ state.Pending=pending;gate.Pending=pending
+ status.Text="Buying "..quantity.." Bread; waiting for inventory confirmation…"
+ log("REQUEST quantity="..quantity.." before="..tostring(state.Stock))
+ task.spawn(function()
+  if state.Closed or not state.Enabled or state.Pending~=pending or not living()then
+   if gate.Pending==pending then gate.Pending=nil end
+   return
+  end
+  local ok,result=pcall(function()return buy:InvokeServer(quantity)end)
+  if gate.Pending==pending then gate.Pending=nil end
+  if state.Closed or state.Pending~=pending then return end
+  pending.Done=true;pending.Result=ok and result or ("Request error: "..tostring(result))
+  log("RESPONSE "..tostring(pending.Result))
+ end)
+end)
+bindInventory()
+controller.Connect(player.OnTeleport,function()stop("Teleporting.")end)
+controller.RegisterCleanup(function()
+ stop("Unloaded.");state.Closed=true
+ if state.Connection then state.Connection:Disconnect();state.Connection=nil end
+end)
 
 end)()
 ;(function()

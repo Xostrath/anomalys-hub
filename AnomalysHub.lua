@@ -2055,6 +2055,8 @@ function controller.ResolvePlayerEspData(target,character)
   if not finite(candidate) or candidate<=0 then return end
   if maxKi and maxKi~=candidate then conflicting=true else maxKi=candidate end
  end
+ -- The maximum lives on the Ki value itself: Character.Ki@Max (ESP Data capture 2026-11-17, all 12 players; one read 200.7/441.6).
+ if ki then acceptMax(ki:GetAttribute("Max"))end
  if character then
   acceptMax(character:GetAttribute("MaxKi"))
   local object=character:FindFirstChild("MaxKi")

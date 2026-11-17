@@ -366,8 +366,8 @@ local function makePage(name)
 end
 for _, name in ipairs({"Home", "General", "ESP", "Servers", "Settings"}) do makePage(name) end
 if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
-if env.__AnomalyDetectedProfile == "HunterXEnter" then makePage("Auto") end
--- Sparkling has no autos yet; its Auto Parry lives on Combat.
+if env.__AnomalyDetectedProfile == "HunterXEnter" or env.__AnomalyDetectedProfile == "Sparkling" then makePage("Auto") end
+-- Sparkling: Auto holds training (Auto Meditation); Auto Parry lives on Combat.
 if env.__AnomalyDetectedProfile == "Sparkling" then makePage("Combat"); makePage("Visuals") end
 if env.__AnomalyDetectedProfile == "HunterXEnter" or env.__AnomalyDetectedProfile == "Sparkling" then makePage("Recorders") end
 
@@ -2517,6 +2517,9 @@ local function refreshProfile()
  end)
 end
 local function own(key)return profile and profile[key] end
+-- Shared with Auto Meditation (stops at the 400 Ki cap).
+controller.SparklingProfile=function()return profile,profileAt end
+controller.SparklingRefreshProfile=refreshProfile
 local function decode(text)
  if type(text)~="string" then return nil end
  local ok,result=pcall(function()return http:JSONDecode(text)end)
@@ -3061,6 +3064,163 @@ end
 finder.Button=ui.Button(finderCard,"Start CEXP Finder",14,72,180,startFinder,colors.AccentSoft)
 finder.Button.Size=UDim2.new(1,-28,0,34)
 controller.RegisterCleanup(function()stopFinder("Unloaded.")end)
+
+end)()
+;(function()
+-- Sparkling Auto Meditation v1. Plays the Mind Training minigame with normal key input; sends no game requests itself.
+-- From the tutorial capture (2026-11-17): M sends Action("Meditate") and opens PlayerGui["Mind Training"]; Frame.Start shows a
+-- W/A/S/D letter about once a second and the player presses it. A repeated letter doesn't change the text, so a prompt still
+-- showing 1.05s after the last press is pressed again (the user's own repeats were ~1.05s apart). Meditation raises the Ki stat
+-- (profile "Mind") up to 400 per the game guide. Reference: Hunter X Enter training key macros and Beyond Nen Auto Meditation.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local player=game:GetService("Players").LocalPlayer
+local input=game:GetService("UserInputService")
+local guiService=game:GetService("GuiService")
+local run=game:GetService("RunService")
+local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
+local ui=controller.UI
+local page=ui.Pages.Auto
+if not page then return end
+
+local KEYS={W=Enum.KeyCode.W,A=Enum.KeyCode.A,S=Enum.KeyCode.S,D=Enum.KeyCode.D}
+local CAP=400
+local path="AnomalyHub/universal/sparkling_auto_meditation_latest.txt"
+local state={Enabled=false,Closed=false,Lines={},Presses=0,Sessions=0,Held={}}
+
+local function log(text)
+ if #state.Lines>=1500 then table.remove(state.Lines,1)end
+ table.insert(state.Lines,string.format("%.3f %s",os.clock(),text))
+end
+local function save()
+ if type(writefile)~="function" then return end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ pcall(writefile,path,"SPARKLING AUTO MEDITATION v1 // key input only\nPROMPT = letter shown, PRESS = key sent, REPEAT = same letter pressed again after 1.05s,"
+  .." CHANGE = other prompt property changes (looking for a cleaner new-prompt signal), SESSION = Mind Training opened/closed.\n"..table.concat(state.Lines,"\n"))
+end
+
+local section=ui.Section(page,"Auto Training",96,true)
+section.Frame.LayoutOrder=-50
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,32),Size=UDim2.new(1,-28,0,58),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Off. Presses M, then the W/A/S/D letter Mind Training shows. Stops at 400 Ki, on damage, or when chat/menu opens."},section.Body)
+local button
+
+local function tap(key)
+ local ok=pcall(function()vim:SendKeyEvent(true,key,false,game)end)
+ if ok then state.Held[key]=os.clock()+.06 end
+ return ok
+end
+local function releaseAll()
+ for key in pairs(state.Held)do pcall(function()vim:SendKeyEvent(false,key,false,game)end)end
+ table.clear(state.Held)
+end
+local function stop(reason)
+ if not state.Enabled then return end
+ state.Enabled=false;releaseAll()
+ button.Text="Auto Meditation: OFF"
+ status.Text=reason.." Presses: "..state.Presses..", sessions: "..state.Sessions.."."
+ log("STOP "..reason);save()
+end
+local function prompt()
+ local gui=player:FindFirstChildOfClass("PlayerGui")
+ local screen=gui and gui:FindFirstChild("Mind Training")
+ local frame=screen and screen:FindFirstChild("Frame")
+ local start=frame and frame:FindFirstChild("Start")
+ if not start or not start:IsA("TextButton") then return nil end
+ local visible=start.Visible and frame.Visible and (not screen:IsA("ScreenGui") or screen.Enabled)
+ return start,visible
+end
+local function mind()
+ local read=controller.SparklingProfile
+ local data=type(read)=="function" and read() or nil
+ local value=data and tonumber(data.Mind)
+ return value
+end
+local function toggle()
+ if state.Closed then return end
+ if state.Enabled then stop("Off.");return end
+ if not vim then status.Text="Key input is unavailable in this executor.";return end
+ local character=player.Character
+ local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+ if not humanoid or humanoid.Health<=0 then status.Text="Wait until your character is alive.";return end
+ state.Enabled=true;state.Lines={};state.Presses=0;state.Sessions=0;state.Character=character;state.Health=humanoid.Health
+ state.Letter=nil;state.PressAt=nil;state.LastPress=0;state.NextM=0;state.Open=false;state.Watched=nil
+ if controller.SparklingRefreshProfile then pcall(controller.SparklingRefreshProfile)end
+ state.NextProfile=os.clock()+30
+ button.Text="Auto Meditation: ON";status.Text="On."
+ log("START mind="..tostring(mind()))
+end
+button=ui.Checkbox(section.Body,"Auto Meditation","Auto Meditation: OFF",toggle)
+button.Position=UDim2.fromOffset(14,0)
+
+-- Log any other property change on the prompt, to learn how the game marks a new prompt with the same letter.
+local function watch(start)
+ if state.Watched==start then return end
+ state.Watched=start
+ for _,property in ipairs({"Visible","Size","Position","BackgroundColor3","TextColor3","BackgroundTransparency","TextTransparency","Rotation"})do
+  local connection;connection=start:GetPropertyChangedSignal(property):Connect(function()
+   if not state.Enabled or state.Watched~=start then connection:Disconnect();return end
+   if #state.Lines<1400 then log("CHANGE "..property.."="..tostring(start[property]))end
+  end)
+ end
+end
+
+controller.Connect(run.Heartbeat,function()
+ local now=os.clock()
+ for key,untilAt in pairs(state.Held)do if now>=untilAt then pcall(function()vim:SendKeyEvent(false,key,false,game)end);state.Held[key]=nil end end
+ if state.Closed or not state.Enabled then return end
+ local character=player.Character
+ local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+ if character~=state.Character or not humanoid or humanoid.Health<=0 then stop("Character changed or died.");return end
+ if humanoid.Health<state.Health-.5 then stop("Took damage.");return end
+ state.Health=math.max(state.Health,humanoid.Health)
+ if input:GetFocusedTextBox() or guiService.MenuIsOpen then stop("Chat or the Roblox menu opened.");return end
+ if now>=state.NextProfile then
+  state.NextProfile=now+30
+  if controller.SparklingRefreshProfile then pcall(controller.SparklingRefreshProfile)end
+  local value=mind()
+  log("MIND "..tostring(value))
+  if value and value>=CAP then stop("Ki reached "..CAP..", the meditation cap.");return end
+ end
+ local start,visible=prompt()
+ -- A prompt hidden for under 0.8s is a gap between letters, not the end of the session (only an end-of-session hide was captured).
+ if not visible and state.Open then
+  state.HiddenSince=state.HiddenSince or now
+  if now-state.HiddenSince<.8 then return end
+ end
+ if visible then state.HiddenSince=nil end
+ if not visible then
+  if state.Open then state.Open=false;state.HiddenSince=nil;log("SESSION closed");save();state.NextM=now+1.5 end
+  if now>=state.NextM then
+   state.NextM=now+4
+   if tap(Enum.KeyCode.M)then log("PRESS M (start meditating)")else stop("Key input failed.")end
+  end
+  status.Text=string.format("Starting meditation... Presses: %d · sessions: %d",state.Presses,state.Sessions)
+  return
+ end
+ if not state.Open then state.Open=true;state.Sessions+=1;state.Letter=nil;log("SESSION opened");watch(start)end
+ local letter=start.Text:upper():match("^%s*([WASD])%s*$")
+ if letter and letter~=state.Letter then
+  state.Letter=letter;state.PressAt=now+.15+math.random()*.2;state.Repeat=false
+  log("PROMPT "..letter)
+ elseif letter and not state.PressAt and now-state.LastPress>=1.05 then
+  -- Same letter still showing: the game re-used it for a new prompt.
+  state.PressAt=now;state.Repeat=true
+ end
+ if letter and state.PressAt and now>=state.PressAt then
+  state.PressAt=nil;state.LastPress=now
+  if not tap(KEYS[letter])then stop("Key input failed.");return end
+  state.Presses+=1
+  log((state.Repeat and "REPEAT " or "PRESS ")..letter)
+  if state.Presses%20==0 then save()end
+ end
+ local value=mind()
+ status.Text=string.format("Meditating. Presses: %d · sessions: %d%s",state.Presses,state.Sessions,value and (" · Ki "..value.." / "..CAP) or "")
+end)
+controller.Connect(player.OnTeleport,function()stop("Teleporting.")end)
+controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
 
 end)()
 ;(function()

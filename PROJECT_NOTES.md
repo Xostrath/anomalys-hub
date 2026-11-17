@@ -174,3 +174,8 @@ At the user's request, Combat page v8 / diagnostics v5 disables first-hit parry 
 ### Sparkling isolated-hit selector (2026-11-17)
 
 Combat page v9 / diagnostics v5 selects hit 3 or hit 4 only. Switching stops/saves the prior session and releases F; it never starts the next run automatically. Selection persists, active state does not. Other hits remain recorded with explicit skip reasons, and all timing seeds remain unchanged. See [SP-T025](docs/games/sparkling.md) for validation and the separate-run workflow.
+
+
+### Sparkling Auto tab (2026-11-17)
+
+Sparkling has an **Auto** tab again, holding an Auto Training section with Auto Meditation (`src/SparklingAutoMeditation.lua`, which plays the Mind Training key prompts). Auto Parry stays on Combat. Visuals exposes `controller.SparklingProfile` / `SparklingRefreshProfile` for other modules. Autos use the **SP-A###** experiment series in the [Sparkling note](docs/games/sparkling.md).

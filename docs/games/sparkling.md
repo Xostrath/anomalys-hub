@@ -153,6 +153,21 @@ SP-T005 local-clock details: attempts at 2609.3927 (`84394230178792`), 2609.8081
 ## Change history
 
 - 2026-11-17 — **ID note:** ESP/Visuals entries use their own **SP-V###** series because two chats were numbering SP-T### in parallel and collided (SP-T011–T014). The renumbered entries are V001 (was T010), V002 (T011), V003 (T012), V004 (T013) and V005 (T014). Commit messages 9189a4c, de2c942, 115adaf and 0cd2f94 still cite the old numbers. GPT's SP-T011–T014 are unrelated parry entries.
+- 2026-11-17 — Auto Meditation v1 (SP-A001; autos use the **SP-A###** series). The Auto tab is back for Sparkling, with an "Auto Training" section (`src/SparklingAutoMeditation.lua`).
+  - **Evidence (tutorial capture, 24–45 s):**
+    - M sends `Action("Meditate")`, which opens `PlayerGui["Mind Training"].Frame.Start` (TextButton).
+    - The text shows W/A/S/D about every 1 s and the user pressed the shown key after ~0.45–0.55 s. A repeated letter produced no text change; the user re-pressed W at ~1.05 s intervals.
+    - The UI hid after ~20 s.
+    - No per-key remote appeared, but only the combat remotes were watched.
+  - **Guide:** M raises the Ki stat up to 400 (profile `Mind`, 100 for the user); J enters the Meditation World (Meditation Type only).
+  - **Behaviour:**
+    - Press M when the prompt is closed (1.5 s after a session ends, retry every 4 s).
+    - Press each new letter after 0.15–0.35 s; re-press the same letter if it is still shown 1.05 s after the last press.
+    - A hide under 0.8 s is not the session end.
+    - Stops at Mind ≥ 400 (profile, re-read every 30 s), on damage, death, chat/menu or teleport.
+    - Logs PROMPT/PRESS/REPEAT/CHANGE/SESSION to `sparkling_auto_meditation_latest.txt`. CHANGE records other prompt properties, to find a cleaner new-prompt signal.
+  - **Reference:** Hunter X Enter training key macros; Beyond Nen Auto Meditation (which used server prompt events, not available here).
+  - Implemented / untested live.
 - 2026-11-17 — CEXP Finder v1 (SP-V011). The user's main reason for the Visuals tab is CEXP, which the client profile doesn't contain.
   - New **Recorders → Sparkling CEXP Finder**: start, talk to Varrik (and the Title Master), stop; auto-stops after 3 min. Output: `sparkling_cexp_capture_latest.txt`.
   - It logs every ReplicatedStorage RemoteEvent's incoming payloads, outgoing FireServer/InvokeServer calls **with their replies**, new or changed numeric text in PlayerGui and Workspace (NPC billboards), and TextChatService messages. It sends nothing.

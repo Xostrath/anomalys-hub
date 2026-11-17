@@ -267,7 +267,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v2\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v3\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
 	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -995,7 +995,7 @@ local function updateEsp(target, localRoot)
 	local function updateResourceBar(bar, current, maximum, enabled)
 		current, maximum = tonumber(current), tonumber(maximum)
 		local visible = current ~= nil and maximum ~= nil and maximum > 0
-		bar.Background.Visible = enabled == true
+		bar.Background.Visible = enabled == true and (not controller.EspKnownResourcesOnly or visible)
 		if not visible then
 			bar.Fill.Size = UDim2.fromScale(1, 0)
 			return
@@ -1013,9 +1013,11 @@ local function updateEsp(target, localRoot)
 	if settings.Name then table.insert(lines, target.DisplayName) end
 	local level = extra and tonumber(extra.Level)
 	local levelText = level and level == level and level >= 0 and level < math.huge and tostring(math.floor(level)) or "--"
-	if settings.Level then table.insert(lines, "LEVEL // " .. levelText) end
+	if settings.Level and (not controller.EspKnownResourcesOnly or levelText ~= "--") then table.insert(lines, "LEVEL // " .. levelText) end
 	if settings.Distance then table.insert(lines, string.format("%d STUDS", math.floor(distance + 0.5))) end
 	entry.InfoLabel.Text = table.concat(lines, "\n")
+	entry.InfoLabel.TextColor3 = controller.EspActorColor or colors.Text
+	entry.BoxStroke.Color = controller.EspActorColor or Color3.new(1,1,1)
 	entry.Gui.Enabled = #lines > 0
 	entry.BoxStroke.Enabled = settings.Box == true
 	entry.BoxGui.Enabled = settings.Box or settings.Health or settings.Energy or settings.Stamina
@@ -1388,15 +1390,15 @@ local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "HunterXEnter" then return end
 
-controller.AdapterStatus = "Fingerprint confirmed; macro recorders ready"
+controller.AdapterStatus = "Player/NPC ESP and macro recorders ready"
 controller.GameIdentity = {
 	UniverseId = 9857379797,
 	ObservedPlaceId = 76571518635501,
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v2",
-	"Game detected. Shared tools and manual-play recorders are ready. Macros are not automated yet.", 116)
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v3",
+	"Player/NPC ESP and manual-play recorders are ready. Macros are not automated yet.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 72), Size = UDim2.new(1, -28, 0, 28),
@@ -1405,7 +1407,155 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training recorders are in Auto. Each capture keeps its own session history.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v2 loaded; macro recorders ready.")
+print("[Anomaly] Hunter X Enter adapter v3 loaded; ESP and macro recorders ready.")
+
+end)()
+;(function()
+-- Hunter X Enter player/NPC overlays. Reads loaded models; no game requests.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "HunterXEnter" then return end
+local Players = game:GetService("Players")
+local Run = game:GetService("RunService")
+local world = game:GetService("Workspace")
+local ui, state = controller.UI, controller.State
+local create = ui.Create
+local playerColor, npcColor = Color3.fromRGB(255,255,255), Color3.fromRGB(255,150,50)
+controller.EspActorColor = playerColor
+controller.EspKnownResourcesOnly = true
+ui.PlayerEspCard.Size = UDim2.new(1,0,0,240)
+ui.OptionGrid(ui.PlayerEspCard, {{"Name","Player name"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"}}, state.EspSettings,136)
+
+-- Exact NPC card names from the linked Hunter X Enter Trello, reviewed Nov 16.
+-- This allows known static service/quest rigs without treating every prop as an NPC.
+local staticNames = {}
+for name in ("Wing|Gon Freecss|Killua Zoldyck|Kite|Kaito|Yori|Saniro|Kento|Yuki|Kenshin|Miyako|Shota|Umi|Hayato|Naomi|Ayanokoji|Ela|Piti"):gmatch("[^|]+") do
+	staticNames[name:lower():gsub("[^%w]","")] = true
+end
+local tracked, entries, characters = {}, {}, {}
+local added, removed, watching, closed = nil, nil, false, false
+local function remember(character) if character then characters[character] = true end end
+local function bindPlayer(target)
+	remember(target.Character)
+	controller.Connect(target.CharacterAdded, remember)
+	controller.Connect(target.CharacterRemoving, remember)
+end
+for _, target in ipairs(Players:GetPlayers()) do bindPlayer(target) end
+controller.Connect(Players.PlayerAdded,bindPlayer)
+local function belongsToPlayer(model)
+	local ancestor = model
+	while ancestor and ancestor ~= world do
+		if characters[ancestor] or (ancestor:IsA("Model") and Players:GetPlayerFromCharacter(ancestor)) then return true end
+		ancestor = ancestor.Parent
+	end
+	return false
+end
+local function knownStatic(model)
+	return staticNames[model.Name:lower():gsub("[^%w]","")] == true
+end
+local function rootOf(model, humanoid)
+	local root = (humanoid and humanoid.RootPart) or model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head") or model.PrimaryPart
+	if not root and knownStatic(model) then root = model:FindFirstChildWhichIsA("BasePart",true) end
+	return root and root:IsA("BasePart") and root:IsDescendantOf(model) and root or nil
+end
+local function removeEntry(model)
+	local entry=entries[model]; if not entry then return end
+	entry.Gui:Destroy(); entry.BoxGui:Destroy(); entries[model]=nil
+end
+local function track(object)
+	local model=object:IsA("Model") and object or object.Parent
+	if not model or not model:IsA("Model") or tracked[model] or belongsToPlayer(model) then return end
+	if model:FindFirstChildOfClass("Humanoid") or knownStatic(model) then tracked[model]=true end
+end
+local function stopWatching()
+	watching=false
+	if added then added:Disconnect();added=nil end
+	if removed then removed:Disconnect();removed=nil end
+	for model in pairs(entries) do removeEntry(model) end
+	table.clear(tracked)
+end
+local function startWatching()
+	if watching or closed then return end
+	watching=true
+	added=world.DescendantAdded:Connect(track)
+	removed=world.DescendantRemoving:Connect(function(object)
+		if tracked[object] then tracked[object]=nil;removeEntry(object) end
+		if object:IsA("Humanoid") or object:IsA("BasePart") then
+			local entry=entries[object.Parent]
+			if entry and (object==entry.Root or object==entry.Humanoid) then removeEntry(object.Parent) end
+		end
+	end)
+	for _, object in ipairs(world:GetDescendants()) do track(object) end
+end
+local function makeEntry(model, root, humanoid)
+	local width,height,offset=4,6,Vector3.zero
+	local ok,bounds,size=pcall(model.GetBoundingBox,model)
+	if ok and typeof(bounds)=="CFrame" and typeof(size)=="Vector3" then
+		width=math.clamp(size.X+.35,2.8,20);height=math.clamp(size.Y+.35,4.5,30);offset=bounds.Position-root.Position
+	end
+	local entry={Root=root,Humanoid=humanoid}
+	entry.Gui=create("BillboardGui",{Name="AnomalyHunterNPC",Size=UDim2.fromOffset(240,56),StudsOffsetWorldSpace=offset+Vector3.new(0,height/2+1.8,0),
+		AlwaysOnTop=true,LightInfluence=0,Adornee=root},ui.Gui)
+	entry.Label=create("TextLabel",{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,Font=Enum.Font.GothamSemibold,TextSize=11,
+		TextColor3=npcColor,TextStrokeColor3=Color3.new(),TextStrokeTransparency=.12,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Bottom},entry.Gui)
+	entry.BoxGui=create("BillboardGui",{Name="AnomalyHunterNPCBox",Size=UDim2.new(width,8,height,8),StudsOffsetWorldSpace=offset,
+		AlwaysOnTop=true,LightInfluence=0,Adornee=root,ClipsDescendants=false},ui.Gui)
+	local box=create("Frame",{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.5),Size=UDim2.new(1,-8,1,-8),BackgroundTransparency=1,BorderSizePixel=0},entry.BoxGui)
+	create("UIStroke",{Color=npcColor,Thickness=1.4},box)
+	return entry
+end
+local function update(model, localRoot)
+	if not model:IsDescendantOf(world) then tracked[model]=nil;removeEntry(model);return end
+	local humanoid=model:FindFirstChildOfClass("Humanoid")
+	local root=rootOf(model,humanoid)
+	if belongsToPlayer(model) or not localRoot or not root or (humanoid and humanoid.Health<=0) or (not humanoid and not knownStatic(model)) then removeEntry(model);return end
+	local distance=(root.Position-localRoot.Position).Magnitude
+	if distance>state.NpcEspDistance then removeEntry(model);return end
+	local entry=entries[model]
+	if not entry or entry.Root~=root or entry.Humanoid~=humanoid then
+		removeEntry(model);entry=makeEntry(model,root,humanoid);entries[model]=entry
+	end
+	local name=humanoid and humanoid.DisplayName
+	if type(name)~="string" or not name:match("%S") then name=model.Name end
+	local settings=state.NpcEspSettings
+	local lines={}
+	if settings.Name then table.insert(lines,name) end
+	if settings.Distance then table.insert(lines,string.format("%d STUDS",math.floor(distance+.5))) end
+	entry.Label.Text=table.concat(lines,"\n")
+	entry.Gui.Enabled=#lines>0
+	entry.Gui.MaxDistance=state.NpcEspDistance
+	entry.BoxGui.MaxDistance=state.NpcEspDistance
+	entry.BoxGui.Enabled=settings.Box==true
+end
+local card=ui.Card(ui.Pages.ESP,"NPC ESP // v1","Orange NPC names and boxes. Players use white names and boxes. Only loaded characters can be shown.",254)
+card.LayoutOrder=20
+ui.Create("TextLabel",{Position=UDim2.new(.5,4,0,62),Size=UDim2.new(.5,-18,0,16),BackgroundTransparency=1,
+	Font=Enum.Font.Gotham,Text="MAX DISTANCE (STUDS)",TextSize=9,TextColor3=ui.Colors.Muted},card)
+ui.FitColumn(ui.Button(card,state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF",0,0,180,function(button)
+	state.NpcEspEnabled=not state.NpcEspEnabled
+	button.Text=state.NpcEspEnabled and "NPC ESP: ON" or "NPC ESP: OFF"
+	button.BackgroundColor3=state.NpcEspEnabled and ui.Colors.AccentSoft or ui.Colors.Surface
+	if state.NpcEspEnabled then startWatching() else stopWatching() end
+	controller.SaveConfig()
+end,state.NpcEspEnabled and ui.Colors.AccentSoft or ui.Colors.Surface),0,86)
+ui.FitColumn(ui.ValueBox(card,"NPC range",0,0,180,state.NpcEspDistance,function(box)
+	local value=tonumber(box.Text)
+	if value and value==value then state.NpcEspDistance=math.clamp(value,100,10000) end
+	box.Text=tostring(math.floor(state.NpcEspDistance));controller.SaveConfig()
+end),1,86)
+ui.OptionGrid(card,{{"Name","NPC name"},{"Distance","Distance"},{"Box","Body box"}},state.NpcEspSettings,136)
+local elapsed=0
+controller.Connect(Run.Heartbeat,function(delta)
+	if closed or not state.NpcEspEnabled then return end
+	elapsed+=delta;if elapsed<.15 then return end;elapsed=0
+	for _, target in ipairs(Players:GetPlayers()) do remember(target.Character) end
+	for model in pairs(characters) do if not model:IsDescendantOf(world) then characters[model]=nil end end
+	local character=Players.LocalPlayer.Character
+	local root=character and character:FindFirstChild("HumanoidRootPart")
+	for model in pairs(tracked) do update(model,root) end
+end)
+controller.RegisterCleanup(function()closed=true;stopWatching();table.clear(characters)end)
+if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()

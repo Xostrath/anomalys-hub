@@ -2495,7 +2495,17 @@ local FIELDS={
   if not label and not percent then return "Open your stats menu once" end
   return (label or "?")..(percent and (" · "..percent) or "")
  end},
- {Label="Relationships",Resolve=function()return nil end},
+ -- The character carries a child named "[Rank]\n<character name>" (Profile Scan: "[Stranger]\nAlmo" on the user's own character).
+ -- Ranks per the game guide: Good Friend, Friends, Familiar, Stranger, Adversary, Enemy, Nemesis.
+ {Label="Relationships",Resolve=function(target)
+  local character=target.Character
+  if not character then return nil end
+  for _,child in ipairs(character:GetChildren())do
+   local rank=child.Name:match("^%[(.-)%]\n")
+   if rank and rank~="" then return (target==localPlayer and "Self tag: " or "")..rank.." (?)" end
+  end
+  return nil
+ end},
 }
 
 -- Player picker: defaults to you; the list rebuilds as players join and leave.
@@ -2563,7 +2573,7 @@ controller.Connect(run.Heartbeat,function(dt)
   local missing=text==nil
   if missing then
    -- CEXP, Form Mastery and Relationships have no source yet; the rest are just absent right now.
-   text=(field.Label:find("CEXP",1,true) or field.Label=="Form Mastery" or field.Label=="Relationships") and "Not found yet"
+   text=(field.Label:find("CEXP",1,true) or field.Label=="Form Mastery") and "Not found yet"
     or (target.Character and "Unavailable" or "No character")
   end
   values[index].Text=text
@@ -2681,7 +2691,7 @@ local function hiddenScan()
  if busy or controller.IsUnloaded()then return end
  busy=true;status.Text="Hidden value scan running (may take a few seconds)..."
  local ok,err=pcall(function()
-  local lines={"SPARKLING HIDDEN VALUE SCAN v1 // READ ONLY","place="..game.PlaceId.." universe="..game.GameId,
+  local lines={"SPARKLING HIDDEN VALUE SCAN v3 // READ ONLY","place="..game.PlaceId.." universe="..game.GameId,
    "TABLE = a client memory table with a matching key (raw read, no metamethods). GUIDE = the game's guide text. REMOTE = name only, never called."}
   local function log(s)if #lines<5000 then table.insert(lines,s)end end
   local gc=getgc or env.getgc
@@ -2690,7 +2700,7 @@ local function hiddenScan()
    local got,objects=pcall(gc,true)
    if not got or type(objects)~="table" then log("getgc failed: "..tostring(objects))
    else
-    local checked,found,signatures=0,0,{}
+    local checked,found,signatures,matched=0,0,{},{}
     for _,object in ipairs(objects)do
      if type(object)=="table" then
       checked+=1
@@ -2711,6 +2721,8 @@ local function hiddenScan()
        -- Many tables share a shape (one per NPC or item); log each shape once with a count.
        local signature=hit.."|"..text:gsub("=[^,}]*","")
        signatures[signature]=(signatures[signature] or 0)+1
+       -- Keep every matched object (up to 16 per shape) for the full dumps below.
+       if signatures[signature]<=16 then table.insert(matched,{Object=object,Signature=signature,Key=hit,Text=text})end
        if signatures[signature]==1 then
         found+=1
         if found<=600 then log("TABLE key="..hit.." "..text)end
@@ -2720,6 +2732,67 @@ local function hiddenScan()
     end
     log(string.format("TABLES checked=%d distinctMatches=%d",checked,found))
     for signature,count in pairs(signatures)do if count>1 then log("REPEATED x"..count.." "..signature:sub(1,200))end end
+    -- v2: full dumps. Profile data tables (CharacterName + Emotion + Trait keys; one per copy, later copies show only differing keys),
+    -- and the CEXP container (CEXP/PowerLevel/Zeni sub-tables, possibly per-player leaderboards).
+    local function flat(item)
+     local kind=type(item)
+     if kind=="string" then return string.format("%q",item:sub(1,300))end
+     if kind=="number" or kind=="boolean" then return tostring(item)end
+     if kind=="table" then local n=0;pcall(function()for _ in next,item do n+=1 end end);return "<table "..n..">"end
+     return "<"..typeof(item)..">"
+    end
+    -- Everything below reads with next only: v2's rawget lookups found nothing on the same tables next had just listed.
+    local function entries(object)
+     local list={}
+     pcall(function()for key,item in next,object do table.insert(list,{key,item})end end)
+     table.sort(list,function(a,b)return tostring(a[1])<tostring(b[1])end)
+     return list
+    end
+    local function deep(object,prefix,depth,budget)
+     for _,pair in ipairs(entries(object))do
+      if budget[1]<=0 then log(prefix.."... budget reached");return end
+      budget[1]-=1
+      log(prefix..tostring(pair[1]):sub(1,60).."="..flat(pair[2]))
+      if type(pair[2])=="table" and depth>0 then deep(pair[2],prefix.."  ",depth-1,budget)end
+     end
+    end
+    -- Classify the first pass's own matches by their printed text, the one view known to work.
+    local profiles,containers={},{}
+    for _,entry in ipairs(matched)do
+     local text=entry.Text
+     if text:find("CharacterName=",1,true) and text:find("Emotion=",1,true) then table.insert(profiles,entry.Object)
+     elseif text:find("CEXP=<table",1,true) then table.insert(containers,entry.Object)end
+    end
+    log("RAW_KEY_FORMS "..table.concat((function()
+     local forms={}
+     for _,pair in ipairs(profiles[1] and entries(profiles[1]) or {})do
+      if #forms<6 then table.insert(forms,typeof(pair[1])..":"..string.format("%q",tostring(pair[1])))end
+     end
+     return forms
+    end)(),", "))
+    log("PROFILE_TABLES "..#profiles)
+    local first
+    for index,profile in ipairs(profiles)do
+     if index>16 then break end
+     if not first then
+      first=profile
+      log("PROFILE copy=1 (full)")
+      pcall(deep,profile,"  ",1,{900})
+     else
+      local differ,base={},{}
+      for _,pair in ipairs(entries(first))do base[pair[1]]=flat(pair[2])end
+      for _,pair in ipairs(entries(profile))do
+       if flat(pair[2])~=base[pair[1]]then table.insert(differ,tostring(pair[1]).."="..flat(pair[2]))end
+      end
+      log("PROFILE copy="..index.." differs: "..(#differ==0 and "none" or table.concat(differ,", "):sub(1,800)))
+     end
+    end
+    log("CEXP_CONTAINERS "..#containers)
+    for index,container in ipairs(containers)do
+     if index>3 then break end
+     log("CONTAINER "..index)
+     pcall(deep,container,"  ",2,{500})
+    end
    end
   end
   local topics=rs:FindFirstChild("NEWUI")

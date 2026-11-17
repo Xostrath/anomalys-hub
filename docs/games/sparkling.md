@@ -153,6 +153,27 @@ SP-T005 local-clock details: attempts at 2609.3927 (`84394230178792`), 2609.8081
 ## Change history
 
 - 2026-11-17 — **ID note:** ESP/Visuals entries use their own **SP-V###** series because two chats were numbering SP-T### in parallel and collided (SP-T011–T014). The renumbered entries are V001 (was T010), V002 (T011), V003 (T012), V004 (T013) and V005 (T014). Commit messages 9189a4c, de2c942, 115adaf and 0cd2f94 still cite the old numbers. GPT's SP-T011–T014 are unrelated parry entries.
+- 2026-11-17 — Visuals v3 / Hidden Value Scan v3 (SP-V009).
+  - **User-confirmed:** Race Variant (`Character@Trait`) is correct.
+  - **Inconclusive:** Limit Break. The user's BP is ~15k, below the first limit, so 0 is expected either way.
+  - **Trello (board `ruce1V2a`, Mechanics list):**
+    - Limit breaks happen at 100k / 250k / 450k / 700k / 1M BP; a grey bar fills by fighting.
+    - CEXP comes from queues, fights and quests (one talent-card hand per 10k).
+    - Latent Power sets BP gain (raised by a Shenron wish).
+    - Relationship ranks: Good Friend, Friends, Familiar, Stranger, Adversary, Enemy, Nemesis.
+    - Emotion and Karma have numeric scales shown as images.
+    - Stats: Strength, Body Strength, Concentration, Reactions, Agility, Ki.
+    - The in-game guide (`NEWUI.KiMenu.GuideTopics.*@Words`) mirrors these cards.
+  - **Relationship lead (hypothesis):** the user's character has a child named `"[Stranger]\nAlmo"` (rank + newline + character name), apparently the overhead tag. Visuals now reads the bracketed rank from the target character and marks it (?).
+  - **Remote names found** (not called): `Requests.DataUpdated`, `Requests.FetchData` (RemoteFunction), `Requests.Relations`, `Requests.TitleData`, `Requests.SetCharacterInfo`, `Requests.AddStat`, `Requests.UpdateSlotData`.
+  - **Scan v2 failure:** v2 dumped nothing (`PROFILE_TABLES 0`) although its first pass matched the same 16 profile copies. Its second pass used `rawget`/exact key lookups that missed those tables (cause unknown). v3 dumps the first pass's own matched objects via `next` and logs the raw key types.
+- 2026-11-17 — Hidden Value Scan v1 reviewed (SP-V008). 56,018 client tables checked, 18 distinct matches:
+  - **Client profile data table found:** keys include `CharacterName`, `Emotion` (number: −57.29 for the user, whose menu shows "Sad"), `Trait`, `Agility`, `Reactions`, `CoreStr`, `Limit`, `EventWins`, `TalentDraw`, `SkillMastery` (JSON string, "[]"), `SlotData` (JSON), `KiAwakened`, `MuscleDense`, `HairColor`, `Width`, `CounterOnR`. 16 copies exist (staleness unknown).
+  - A label→key map: Ki Style→`KiStyle`, Zeni, Age, Combat Style→`CombatStyle`, Title, Name→`CharacterName`, Faction, Emotion, Karma, Personality, **Sub Type→`Trait`**. This supports Race Variant = `Trait`.
+  - A script environment exposes `getEmotion` and `getKarma`.
+  - A container with `CEXP`/`PowerLevel`/`Zeni`/`DragonBall`/`Namekian`/`EventWins`/`Spins`/`Capsule` sub-tables (purpose unknown, possibly leaderboards), plus a sibling table of formatter functions with the same keys.
+  - Also seen: `Unbound_Potential` (a talent list) and `Korin's_Potential_Unlock` (quest list).
+  - Scan v2 dumps the full profile table (and how its copies differ) and the CEXP container to depth 2.
 - 2026-11-17 — Visuals v2 (SP-V007). **Profile Scan reviewed** (main world; the user's own character plus 3 other players, keyword-only for others). The user notes some values are hidden in-game.
   - **Replicated character data, readable for every player:**
     - `@Karma`: a number (user −35; others 0/−5/−15); the menu shows only a label.

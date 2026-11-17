@@ -267,7 +267,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v1\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v2\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
 	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -297,6 +297,7 @@ local function makePage(name)
 end
 for _, name in ipairs({"Home", "General", "ESP", "Servers", "Settings"}) do makePage(name) end
 if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
+if env.__AnomalyDetectedProfile == "HunterXEnter" then makePage("Auto") end
 
 local function selectTab(name)
 	if not pages[name] then return end
@@ -1382,29 +1383,423 @@ note("READY v6"); save()
 end)()
 if anomalyProfile == 'HunterXEnter' then
 (function()
--- Hunter X Enter adapter scaffold. Shared tools only until feature captures.
+-- Hunter X Enter adapter: shared tools and passive macro recorders.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "HunterXEnter" then return end
 
-controller.AdapterStatus = "Fingerprint confirmed; shared tools active"
+controller.AdapterStatus = "Fingerprint confirmed; macro recorders ready"
 controller.GameIdentity = {
 	UniverseId = 9857379797,
 	ObservedPlaceId = 76571518635501,
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v1",
-	"Game detected. Shared tools are available; game-specific features are not mapped yet.", 116)
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v2",
+	"Game detected. Shared tools and manual-play recorders are ready. Macros are not automated yet.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
 	Position = UDim2.fromOffset(14, 72), Size = UDim2.new(1, -28, 0, 28),
 	BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 11,
 	TextColor3 = ui.Colors.Muted, TextWrapped = true,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Text = "Captured systems: combat, fishing, meditation, inventory and quests.",
+	Text = "Training recorders are in Auto. Each capture keeps its own session history.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v1 loaded; shared tools only.")
+print("[Anomaly] Hunter X Enter adapter v2 loaded; macro recorders ready.")
+
+end)()
+;(function()
+-- Passive macro preparation. No inputs, requests, replay, or decompilation.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "HunterXEnter" then return end
+local Players = game:GetService("Players")
+local Input = game:GetService("UserInputService")
+local Run = game:GetService("RunService")
+local Http = game:GetService("HttpService")
+local rs = game:GetService("ReplicatedStorage")
+local player, ui = Players.LocalPlayer, controller.UI
+local modes = {
+	{Id="meditation", Name="Meditation", Page="Auto", Help="Start meditation manually, complete 5–10 prompts, then exit meditation before saving."},
+	{Id="climb", Name="Climb", Page="Auto", Help="Approach a wall, climb, release, and repeat. Include a rest so stamina recovery is captured."},
+	{Id="strength", Name="Strength", Page="Auto", Help="Start push-ups manually, complete 5–10 prompts, then stop. Include the start and exit controls."},
+	{Id="speed", Name="Speed", Page="Auto", Help="Walk, start running, turn, stop, and rest. Repeat using your usual sprint controls."},
+}
+local active, closed, serial = nil, false, 0
+local basePath = "AnomalyHub/universal/hunter_x_enter_"
+local function sample(value, depth, seen)
+	depth, seen = depth or 0, seen or {}
+	local kind = typeof(value)
+	if kind == "Instance" then return value.ClassName .. ":" .. value:GetFullName() end
+	if kind == "string" then return string.format("%q", value:sub(1, 320)) end
+	if kind ~= "table" then return tostring(value) end
+	if seen[value] or depth >= 3 then return "<cycle/depth limit>" end
+	seen[value] = true
+	local parts, count = {}, 0
+	for key, item in pairs(value) do
+		count += 1; if count > 12 then table.insert(parts, "<field limit>"); break end
+		table.insert(parts, sample(key, depth + 1, seen) .. "=" .. sample(item, depth + 1, seen))
+	end
+	seen[value] = nil
+	return "{" .. table.concat(parts, ",") .. "}"
+end
+local function log(c, message)
+	if active ~= c then return end
+	local line = string.format("%.4f %s", os.clock() - c.Started, tostring(message):sub(1, 6000))
+	if #c.Lines >= 16000 or c.Bytes + #line + 1 > 4000000 then c.Limited = true; return end
+	c.Bytes += #line + 1; table.insert(c.Lines, line)
+end
+local function connect(c, signal, callback, bucket)
+	local connection = signal:Connect(function(...)
+		if active ~= c then return end
+		local ok, err = pcall(callback, ...)
+		if not ok then log(c, "CALLBACK_ERROR " .. tostring(err)) end
+	end)
+	table.insert(bucket or c.Connections, connection)
+	return connection
+end
+local function disconnect(list)
+	for _, connection in ipairs(list) do pcall(function() connection:Disconnect() end) end
+	table.clear(list)
+end
+local function save(c, reason)
+	c.Report = "HUNTER X ENTER " .. c.Mode.Name:upper() .. " RECORDER // PASSIVE v1\nplace=" .. game.PlaceId .. " universe=" .. game.GameId
+		.. "\nHistory=" .. c.Archive .. "\nNo inputs sent, remotes fired/invoked/replayed, or scripts decompiled. Text-entry and chat excluded."
+		.. "\nRemote calls are forwarded first; requestStart is their original observation time. Hook paths may duplicate a call."
+		.. "\nAnimation, health and attribute observations are not confirmed success verdicts. Server receipt time is not captured."
+		.. "\nLimits: 120s, 16000 lines/4MB, 20Hz motion/UI, 6 nearby loaded actors within 100 studs, 16 tracks each."
+		.. "\nGUI tree refresh 1s/600 objects, actor discovery 1s/1000 objects/depth 3, numeric stat scan 1s/400 objects. Limits are reported."
+		.. "\n" .. table.concat(c.Lines, "\n") .. "\nSTATUS=" .. reason .. (c.Limited and "\nREPORT LIMIT REACHED" or "")
+	c.Mode.Report = c.Report
+	if type(writefile) ~= "function" then return false end
+	if type(makefolder) == "function" then pcall(makefolder, "AnomalyHub"); pcall(makefolder, "AnomalyHub/universal") end
+	local latest = pcall(writefile, basePath .. c.Mode.Id .. "_capture.txt", c.Report)
+	c.HistorySaved = pcall(writefile, c.Archive, c.Report)
+	return latest or c.HistorySaved
+end
+local function relevant(name)
+	local key = name:lower()
+	for _, word in ipairs({"block", "parr", "perfect", "stun", "attack", "combat", "posture", "health", "stamina", "energy", "hunger", "saturation", "meditat", "strength", "speed", "climb", "pushup", "training", "sprint", "running", "nen", "weight", "busy", "cooldown"}) do
+		if key:find(word, 1, true) then return true end
+	end
+	return false
+end
+local function vector(v) return string.format("(%.2f,%.2f,%.2f)", v.X, v.Y, v.Z) end
+local function rootOf(model)
+	local root = model and model:FindFirstChild("HumanoidRootPart")
+	return root and root:IsA("BasePart") and root or nil
+end
+local function limit(c, key, text)
+	if not c.Limits[key] then c.Limits[key] = true; log(c, "LIMIT " .. text) end
+end
+local function walk(root, maxCount, maxDepth, visit)
+	local queue, index, count, truncated = {{root,0}}, 1, 0, false
+	while index <= #queue and count < maxCount do
+		local pair = queue[index]; index += 1; count += 1
+		local descend = visit(pair[1], pair[2])
+		if descend ~= false and pair[2] < maxDepth then
+			for _, child in ipairs(pair[1]:GetChildren()) do
+				if #queue >= maxCount then truncated = true; break end
+				table.insert(queue, {child, pair[2]+1})
+			end
+		end
+	end
+	return truncated or index <= #queue
+end
+
+-- Reuse forwarding hooks across hub reloads. Inactive hooks simply forward.
+local probe = env.__AnomalyHunterRecorderProbe
+if type(probe) ~= "table" then probe = {Targets={}, Coverage={}}; env.__AnomalyHunterRecorderProbe = probe end
+local function installHooks()
+	local wrap = env.newcclosure or newcclosure or function(f) return f end
+	local hook, method = env.hookmetamethod or hookmetamethod, env.getnamecallmethod or getnamecallmethod
+	if not probe.Namecall and type(hook) == "function" and type(method) == "function" then
+		local original
+		local ok = pcall(function()
+			original = hook(game, "__namecall", wrap(function(self, ...)
+				if not probe.Callback or not probe.Targets[self] then return original(self, ...) end
+				local valid, call = pcall(method)
+				if not valid or call ~= "FireServer" then return original(self, ...) end
+				local callback, started, args = probe.Callback, os.clock(), table.pack(...)
+				local result = table.pack(original(self, ...))
+				pcall(callback, self, "OUT namecall", args, started)
+				return table.unpack(result, 1, result.n)
+			end))
+		end)
+		if ok then probe.Namecall = true; table.insert(probe.Coverage, "namecall FireServer") end
+	end
+	local hookFunction = env.hookfunction or hookfunction
+	local target = next(probe.Targets)
+	if not probe.Direct and target and type(hookFunction) == "function" then
+		local original
+		local ok = pcall(function()
+			original = hookFunction(target.FireServer, wrap(function(self, ...)
+				if not probe.Callback or not probe.Targets[self] then return original(self, ...) end
+				local callback, started, args = probe.Callback, os.clock(), table.pack(...)
+				local result = table.pack(original(self, ...))
+				pcall(callback, self, "OUT direct", args, started)
+				return table.unpack(result, 1, result.n)
+			end))
+		end)
+		if ok then probe.Direct = true; table.insert(probe.Coverage, "direct FireServer") end
+	end
+end
+local function syncRemotes(c)
+	local paths = {}
+	local function add(folder, names)
+		for _, name in ipairs(names) do table.insert(paths, folder .. "." .. name) end
+	end
+	if c.Mode.Id == "meditation" then add("RemoteEvents", {"Meditate","MeditationKey","MeditationReady","MeditationSync","MeditationUI"})
+	elseif c.Mode.Id == "strength" then add("RemoteEvents", {"Pushup","PushupKey","PushupSync","PushupUI","WeightEquipResult"})
+	elseif c.Mode.Id == "block" then
+		add("Assets.Remotes", {"Combat","ClientFX","Replicate","KnockbackClient","EvasiveDash"})
+	end
+	local targets = {}
+	for _, path in ipairs(paths) do
+		local object = rs
+		for name in path:gmatch("[^.]+") do object = object and object:FindFirstChild(name) end
+		if object and object:IsA("RemoteEvent") then targets[object] = "ReplicatedStorage." .. path end
+	end
+	local movement = player.Character and player.Character:FindFirstChild("Movement")
+	local movementController = movement and movement:FindFirstChild("MovementController")
+	local event = movementController and movementController:FindFirstChild("Event")
+	if event and event:IsA("RemoteEvent") then targets[event] = event:GetFullName() end
+	probe.Targets = targets
+	for object, connection in pairs(c.RemoteConnections) do
+		if not targets[object] then connection:Disconnect(); c.RemoteConnections[object] = nil end
+	end
+	for object, name in pairs(targets) do
+		if not c.RemoteConnections[object] then
+			log(c, "WATCH " .. name)
+			c.RemoteConnections[object] = object.OnClientEvent:Connect(function(...)
+				if active == c then pcall(function(...) log(c, "REMOTE IN " .. name .. " args=" .. sample(table.pack(...))) end, ...) end
+			end)
+		end
+	end
+	installHooks()
+	local coverage = #probe.Coverage > 0 and table.concat(probe.Coverage, ", ") or "Outgoing hooks unavailable; inputs, UI, motion, stats and incoming events only"
+	if c.Coverage ~= coverage then c.Coverage = coverage; log(c, "COVERAGE " .. coverage) end
+end
+local function releaseActor(entry)
+	disconnect(entry.Connections)
+	for _, info in pairs(entry.Tracks) do if info.Connection then info.Connection:Disconnect() end end
+end
+local function bindActor(c, model)
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+	local entry = c.Actors[model]
+	if entry and entry.Humanoid ~= humanoid then releaseActor(entry); c.Actors[model] = nil; entry = nil end
+	if not entry then
+		c.ActorId += 1
+		entry = {Id=c.ActorId, Model=model, Humanoid=humanoid, Connections={}, Tracks={}}
+		c.Actors[model] = entry
+		log(c, "ACTOR id=" .. entry.Id .. " self=" .. tostring(model == player.Character) .. " path=" .. model:GetFullName())
+		connect(c, humanoid.HealthChanged, function(value) log(c, "HEALTH actor=" .. entry.Id .. " value=" .. value) end, entry.Connections)
+		connect(c, humanoid.StateChanged, function(old, new) log(c, "STATE actor=" .. entry.Id .. " " .. tostring(old) .. " -> " .. tostring(new)) end, entry.Connections)
+		local function attrs(object, label)
+			for key, value in pairs(object:GetAttributes()) do if relevant(key) then log(c, "ATTR_INITIAL actor=" .. entry.Id .. " " .. label .. "." .. key .. "=" .. sample(value)) end end
+			connect(c, object.AttributeChanged, function(key)
+				if relevant(key) then log(c, "ATTR actor=" .. entry.Id .. " " .. label .. "." .. key .. "=" .. sample(object:GetAttribute(key))) end
+			end, entry.Connections)
+		end
+		attrs(model, "Character"); if model == player.Character then attrs(player, "Player") end
+	end
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if animator and entry.Animator ~= animator then
+		if entry.AnimConnection then entry.AnimConnection:Disconnect() end
+		entry.Animator = animator
+		local function track(animation, label)
+			if entry.Tracks[animation] then return end
+			local count=0; for _ in pairs(entry.Tracks) do count += 1 end
+			if count >= 16 then limit(c,"tracks"..entry.Id,"16 tracks per actor"); return end
+			c.TrackId += 1
+			local info = {Id=c.TrackId}; entry.Tracks[animation] = info
+			log(c, label .. " actor=" .. entry.Id .. " track=" .. info.Id .. " id=" .. tostring(animation.Animation and animation.Animation.AnimationId)
+				.. " name=" .. animation.Name .. " phase=" .. animation.TimePosition .. " speed=" .. animation.Speed .. " length=" .. animation.Length)
+			info.Connection = animation.Stopped:Connect(function()
+				log(c,"ANIM_STOP actor=" .. entry.Id .. " track=" .. info.Id)
+				info.Connection:Disconnect(); entry.Tracks[animation] = nil
+			end)
+		end
+		entry.AnimConnection = connect(c, animator.AnimationPlayed, function(t) track(t,"ANIM_START") end, entry.Connections)
+		for _, animation in ipairs(animator:GetPlayingAnimationTracks()) do track(animation,"ANIM_EXISTING") end
+	end
+end
+local function syncActors(c)
+	local wanted, pool, seen = {}, {}, {}
+	local origin = rootOf(player.Character)
+	if player.Character then wanted[player.Character] = true end
+	local function candidate(model)
+		if seen[model] then return end; seen[model] = true
+		if not model:IsA("Model") or model == player.Character then return end
+		local root, humanoid = rootOf(model), model:FindFirstChildOfClass("Humanoid")
+		if origin and root and humanoid and humanoid.Health > 0 then
+			local distance = (root.Position-origin.Position).Magnitude
+			if distance <= 100 then table.insert(pool, {Model=model, Distance=distance}) end
+		end
+	end
+	if c.Mode.Id == "block" then
+		for _, p in ipairs(Players:GetPlayers()) do if p.Character then candidate(p.Character) end end
+		if walk(workspace,1000,3,function(object)
+			candidate(object)
+			return not object:IsA("Model") or not object:FindFirstChildOfClass("Humanoid")
+		end) then limit(c,"actors","Actor discovery reached 1000 objects") end
+		table.sort(pool,function(a,b)return a.Distance<b.Distance end)
+		for i=1,math.min(6,#pool) do wanted[pool[i].Model]=true end
+	end
+	for model in pairs(wanted) do bindActor(c,model) end
+	for model, entry in pairs(c.Actors) do
+		if not wanted[model] then log(c,"ACTOR_LEAVE id="..entry.Id);releaseActor(entry);c.Actors[model]=nil end
+	end
+	c.Nearby = math.min(6,#pool)
+end
+local function motion(c)
+	for _, entry in pairs(c.Actors) do
+		local root = rootOf(entry.Model)
+		if root then
+			local tracks = {}
+			for track, info in pairs(entry.Tracks) do
+				if track.IsPlaying then table.insert(tracks,string.format("%d:%.3f@%.3f",info.Id,track.TimePosition,track.Speed))
+				else if info.Connection then info.Connection:Disconnect() end;entry.Tracks[track]=nil end
+			end
+			log(c,"MOTION actor="..entry.Id.." pos="..vector(root.Position).." velocity="..vector(root.AssemblyLinearVelocity)
+				.." look="..vector(root.CFrame.LookVector).." health="..entry.Humanoid.Health.."/"..entry.Humanoid.MaxHealth
+				.." state="..tostring(entry.Humanoid:GetState()).." tracks="..table.concat(tracks,","))
+		end
+	end
+end
+local function excluded(object)
+	local name = object.Name:lower()
+	return object == ui.Gui or object:IsA("TextBox") or name:find("chat",1,true) or name:find("bubble",1,true) or name:find("phone",1,true)
+end
+local function refreshUI(c)
+	c.GuiObjects={}
+	local pg=player:FindFirstChildOfClass("PlayerGui")
+	if pg and walk(pg,600,12,function(object)
+		if excluded(object) then return false end
+		if object:IsA("GuiObject") or object:IsA("LayerCollector") then table.insert(c.GuiObjects,object) end
+	end) then limit(c,"gui","GUI discovery reached 600 objects; remaining objects omitted") end
+end
+local function visible(object)
+	while object and object~=player do
+		if excluded(object) then return false end
+		if object:IsA("GuiObject") and not object.Visible then return false end
+		if object:IsA("LayerCollector") and not object.Enabled then return false end
+		object=object.Parent
+	end
+	return true
+end
+local function snapshotUI(c)
+	local current={}
+	for _, object in ipairs(c.GuiObjects) do
+		if object.Parent and visible(object) then
+			local path=object:GetFullName()
+			local detail=object.ClassName
+			if object:IsA("GuiObject") then detail..=" pos="..tostring(object.AbsolutePosition).." size="..tostring(object.AbsoluteSize).." rotation="..object.Rotation end
+			if object:IsA("TextLabel") or object:IsA("TextButton") then detail..=" text="..sample(object.Text) end
+			if object:IsA("ImageLabel") or object:IsA("ImageButton") then detail..=" image="..sample(object.Image) end
+			current[path]=detail
+		end
+	end
+	for key,value in pairs(current) do if c.LastUI[key]~=value then log(c,"UI "..key.." "..value) end end
+	for key in pairs(c.LastUI) do if current[key]==nil then log(c,"UI_HIDDEN "..key) end end
+	c.LastUI=current
+end
+local function stats(c)
+	local current={}
+	local function scan(object)
+		if object:IsA("PlayerGui") or object:IsA("Backpack") or object:IsA("PlayerScripts") then return false end
+		if object:IsA("NumberValue") or object:IsA("IntValue") or object:IsA("BoolValue") then
+			if relevant(object.Name) then current[object:GetFullName()]=tostring(object.Value) end
+		end
+		for key,value in pairs(object:GetAttributes()) do if relevant(key) then current[object:GetFullName().."@"..key]=sample(value) end end
+	end
+	if walk(player,400,5,scan) then limit(c,"stats","Player stat discovery reached 400 objects") end
+	if player.Character and walk(player.Character,400,3,scan) then limit(c,"charstats","Character stat discovery reached 400 objects") end
+	for key,value in pairs(current) do if c.LastStats[key]~=value then log(c,"STAT "..key.."="..value) end end
+	for key in pairs(c.LastStats) do if current[key]==nil then log(c,"STAT_REMOVED "..key) end end
+	c.LastStats=current
+end
+local function stop(reason)
+	local c=active; if not c then return end
+	log(c,"STOP "..reason)
+	active=nil;probe.Callback=nil;probe.Targets={}
+	disconnect(c.Connections)
+	for _,connection in pairs(c.RemoteConnections) do connection:Disconnect() end
+	for _,entry in pairs(c.Actors) do releaseActor(entry) end
+	local saved=save(c,reason)
+	c.Mode.Button.Text="Record "..c.Mode.Name
+	c.Mode.Button.BackgroundColor3=ui.Colors.AccentSoft
+	c.Mode.Status.Text=saved and ("Saved: "..reason..(c.HistorySaved and ". Session history kept." or ". History write failed; latest file saved.")) or "Saving failed. Use Copy Recording before reload."
+end
+local function start(mode)
+	if closed or controller.IsUnloaded() then return end
+	if active and active.Mode==mode then stop("STOPPED");return end
+	if active then stop("SWITCHED_ACTIVITY") end
+	serial+=1
+	local ok,nonce=pcall(Http.GenerateGUID,Http,false)
+	if not ok then nonce=tostring(math.floor(os.clock()*1000000)).."_"..serial end
+	local c={Mode=mode,Started=os.clock(),Character=player.Character,Lines={},Bytes=0,Connections={},RemoteConnections={},Actors={},ActorId=0,TrackId=0,
+		Limits={},LastUI={},LastStats={},GuiObjects={},NextSync=0,NextFrame=0,NextSave=0,NextClock=0,
+		Archive=basePath..mode.Id.."_"..os.time().."_"..tostring(nonce):gsub("[^%w_%-]","")..".txt"}
+	active=c
+	probe.Callback=function(remote,direction,args,started)
+		if active~=c or started<c.Started then return end
+		log(c,"REMOTE "..direction.." "..tostring(probe.Targets[remote]).." requestStart="..string.format("%.4f",started-c.Started).." args="..sample(args))
+	end
+	local function input(direction,value,processed)
+		if Input:GetFocusedTextBox() then return end
+		local kind=value.UserInputType
+		if kind==Enum.UserInputType.MouseMovement or kind==Enum.UserInputType.MouseWheel then return end
+		log(c,"INPUT "..direction.." type="..tostring(kind).." key="..tostring(value.KeyCode).." processed="..tostring(processed).." pointer="..tostring(Input:GetMouseLocation()))
+	end
+	connect(c,Input.InputBegan,function(value,processed)input("DOWN",value,processed)end)
+	connect(c,Input.InputEnded,function(value,processed)input("UP",value,processed)end)
+	connect(c,Input.WindowFocusReleased,function()log(c,"WINDOW_FOCUS lost")end)
+	connect(c,Input.WindowFocused,function()log(c,"WINDOW_FOCUS gained")end)
+	local prepared,err=pcall(function()syncRemotes(c);syncActors(c);refreshUI(c);snapshotUI(c);stats(c);motion(c)end)
+	if not prepared then log(c,"ERROR "..tostring(err));stop("START_ERROR");return end
+	if not save(c,"RECORDING") then stop("SAVE_FAILED");return end
+	mode.Button.Text="Stop + Save";mode.Button.BackgroundColor3=ui.Colors.Danger
+	c.NextSave=os.clock()+5
+end
+for index,mode in ipairs(modes) do
+	local card=ui.Card(ui.Pages[mode.Page],mode.Name:upper().." RECORDER // v1",mode.Help,224)
+	card.LayoutOrder=index*10
+	mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,118),Size=UDim2.new(1,-28,0,92),BackgroundTransparency=1,
+		Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left,TextColor3=ui.Colors.Muted,
+		Text="Ready. Records manual play only, up to 2 minutes. One activity at a time."},card)
+	mode.Button=ui.FitColumn(ui.Button(card,"Record "..mode.Name,0,0,180,function()start(mode)end,ui.Colors.AccentSoft),0,72)
+	ui.FitColumn(ui.Button(card,"Copy Recording",0,0,180,function()
+		if active and active.Mode==mode then save(active,"RECORDING") end
+		if mode.Report and type(setclipboard)=="function" then pcall(setclipboard,mode.Report) end
+	end),1,72)
+end
+controller.Connect(Run.Heartbeat,function()
+	local c=active; if not c then return end
+	local now=os.clock()
+	if player.Character~=c.Character then stop("CHARACTER_CHANGED");return end
+	local humanoid=player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.Health<=0 then stop("DEATH");return end
+	if c.Limited or now-c.Started>=120 then stop(c.Limited and "LIMIT_REACHED" or "TIME_LIMIT");return end
+	local ok,err=pcall(function()
+		if now>=c.NextSync then c.NextSync=now+1;syncRemotes(c);syncActors(c);refreshUI(c);stats(c) end
+		if now>=c.NextFrame then c.NextFrame=now+0.05;motion(c);snapshotUI(c) end
+		if now>=c.NextClock then
+			c.NextClock=now+2
+			local serverOk,serverTime=pcall(workspace.GetServerTimeNow,workspace)
+			local pingOk,ping=pcall(player.GetNetworkPing,player)
+			log(c,"CLOCK local="..now.." unix="..os.time().." server="..tostring(serverOk and serverTime or "unavailable")
+				.." networkPingSeconds="..tostring(pingOk and ping or "unavailable"))
+		end
+	end)
+	if not ok then log(c,"ERROR "..tostring(err));stop("CAPTURE_ERROR");return end
+	if now>=c.NextSave then c.NextSave=now+5;if not save(c,"RECORDING") then stop("SAVE_FAILED");return end end
+	c.Mode.Status.Text=string.format("Recording %.0fs / 120s · %d lines%s\n%s\n%s",now-c.Started,#c.Lines,
+		c.Mode.Id=="block" and (" · nearby actors: "..tostring(c.Nearby)) or "",c.Mode.Help,c.Coverage or "")
+end)
+controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
+controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)
 
 end)()
 end

@@ -26,7 +26,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
 | Auto parry | Five shared combo trials, configurable range/timing, facing/LOS gates and F input | Active v6 / diagnostics v4 reviewed through SP-T019 | Reliable timing and input/outcome attribution unverified |
 | NPC ESP v1 (SP-T010) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-T012): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v6 (SP-T017) | **Combat → Auto Parry // TIMING TEST**. Five shared combo trials, timing/hold controls, actual F input and continuous diagnostics; possible opponent-parry correlation | 121 mocked assertions and compilation passed; live inputs/logging and cooldown retry reviewed through SP-T019, timing reliability unproven | Investigate head-effect LOS and delayed request correlation before further timing changes |
+| Combat page v6 (SP-T017) | **Combat → Auto Parry // TIMING TEST**. Five shared combo trials, timing/hold controls, actual F input and continuous diagnostics; possible opponent-parry correlation | 121 mocked assertions and compilation passed; Live inputs/cleanup and one cooldown retry observed; isolated counter candidate in SP-T020, timing reliability unproven | Investigate head-effect LOS and delayed request correlation before further timing changes |
 | Parry diagnostics v4 | Active attempt, geometry, input/request and self/other-counter histories | Live reports reviewed through SP-T019 | Early releases and interleaved F cycles require better attribution |
 
 ## Sources and capture workflow
@@ -528,3 +528,35 @@ The earlier session has two LOS skips: the local `Workspace.Visuals.anotherHead<
 Possible-parried matches occur earlier at 4.4457, 27.2290 and 40.7071 s, and latest at 8.2369 and 49.0203 s. They remain recipient/attack/geometry/short-cooldown correlations, not proven attacker identities; none overlaps an automatically held F in these reports.
 
 **Current verdict:** input generation, cleanup, diagnostics and one cooldown retry are observed live; reliable parry timing remains unproven. Before another timing adjustment, improve diagnostic correlation to capture early observed releases and intervening F cycles, inspect the exact head-effect obstacle, and use an exchange without extra F input to distinguish automatic outcomes. Preserve offset 0 / hold 120 as the baseline. No runtime code or settings changed in this review; the live session remains under the user's control.
+
+
+## SP-013 / SP-T020 — mostly isolated automatic-input baseline (2026-11-17)
+
+**Evidence:** finalized diagnostics-v4 session starting Unix 1794949846, main-world place `110405289082842`, 62.601 seconds, manually disabled. Same baseline: range 8, both target filters enabled, offset 0 ms, hold 120 ms. Totals: 10 automatic attempts, 1 self counter, 12 other counters, 0 possible-parried matches, 51 negative-health observations; held=false, zero dropped lines, no input/error/frame-gap failures. All attempted targets were the nearby NPC binding. This review changes documentation only.
+
+**Input isolation:** all 10 automatic presses have their corresponding observed F-down, Defend=true, successful F-up API result, observed F-up and Defend=false. No additional F cycles are present before attempt 10 completes. Three extra F/Defend cycles occur at 59.2983–59.7923 s, after its release; their origin is unknown. Thus the earlier self-counter exchange is isolated from extra observed F input, while the full session is not entirely automatic-only. No outgoing local attack requests were observed, consistent with zero possible-parried matches; the 12 other counters cannot be assigned to attacks by the local character.
+
+### Cleaner positive candidate: combo 2
+
+| Event | Client receipt time |
+| --- | --- |
+| NPC combo-2 animation `84394230178792` starts | 54.2107 s |
+| Attempt 9 presses F | 54.2613 s |
+| Observed Defend=true | 54.3179 s |
+| F-up API succeeds / observed Defend=false | 54.3831 / 54.3852 s |
+| Self Counter Parry message | 54.5123 s |
+| Local Counter=0.5 notification / CounterImpact effect | 54.5145 / 54.5149 s |
+
+At the attempt, distance=4.253 studs, attacker facing dot=0.908, self dot=0.851, track speed=1.15, phase=0.115 s, LOS clear. The self counter follows the automatic press by about 251 ms and the observed defense request by 194 ms; no other automatic attempt or extra F cycle is nearby. The next negative-health observation is at 58.0790 s, 3.818 seconds after the press. **This is the strongest isolated automatic-defense candidate in this review series**, with corroborating self effects and no immediate damage. It is still client-side temporal evidence, not server-confirmed attacker identity or a calibrated success window. Other nearby actors were active. The short 67.3 ms true/false request span and counter receipt after release must not be interpreted as an exact server window.
+
+### Reliability and repeated limits
+
+Eight of the ten attempts were followed by negative-health observations within 0.5 s. Attempt 6's next damage was about 0.693 s later; attempt 9's was 3.818 s later. Do not label the session a confirmed 10% success rate or count each damage event as a distinct failed attempt. The earlier combo-3 positive candidates did not reproduce in this cleaner baseline: its three attempts each precede damage by approximately 113–180 ms.
+
+Press-to-Defend delays remain 42.3–60.5 ms. Actual key holds are 121.9–171.5 ms despite the 120 ms setting; adjacent true/false request spans are 67.3–121.3 ms. Releases follow the F-up API by 0.8–4.6 ms, with no early-release cases in the automatic sequences.
+
+Eight Counter=5 notices and one Counter=0.5 notice were observed. The first seven long notices occur roughly 0.48–0.57 s after attempts 1–7; the eighth follows attempt 10 amid the later extra F inputs. This is a repeatable timing association, not proof that five seconds means failure or that short duration always means success. The scheduler rejected 23 cues for observed Counter cooldown, with no DEFER events. Preserve actual cooldown gating rather than bypassing it to increase attempts.
+
+All three LOS skips again name the local `Workspace.Visuals.anotherHead<local-character>` effect, at 18.1444, 33.9440 and 53.7075 s. The middle skip also had 2.588 s cooldown remaining, so removing that obstacle alone would not have made the cue eligible. Other skips: out-of-range 13, self-facing 1, unmapped animation 198.
+
+**Handoff:** the no-extra-F exchange provides a better automatic-result candidate than the mixed-input tests, but baseline timing remains unreliable. Keep this evidence alongside SP-T019's interleaving cases. Next implementation priorities remain precise input/request correlation and inspection of the exact head-effect LOS blocker, followed by one-variable timing trials. More unchanged generic recordings are not required to establish these repeated issues. No script, live-session state or timing setting was changed during this review.

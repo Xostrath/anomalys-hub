@@ -148,3 +148,8 @@ The Hunter X Enter anti-macro answerer (`HunterXEnterAutoCheck.lua`) is in both 
 ### Sparkling record-only mode (2026-11-17)
 
 The user temporarily requested recording instead of automatic parrying. Combat → Auto Parry // RECORD ONLY → Record Attacks now observes attacks and hypothetical WOULD_PARRY decisions without generating input. Diagnostics v3 explicitly separates proposals from observed manual/game actions and never credits counters to the recorder. Existing Recorders Save/Copy and output paths remain. See [Sparkling SP-T012](docs/games/sparkling.md) for validation and current handoff; do not restore active input without a new user request.
+
+
+### Sparkling active timing test (2026-11-17)
+
+The user explicitly superseded record-only mode and requested active auto parry with continuous diagnostics and opponent-parry handling. Combat page v6 / diagnostics v4 starts OFF on reload, uses the shared five-combo trial catalog, timing-offset/hold controls, bounded cooldown rechecks, and a narrow Z-vanish-dummy LOS exclusion. Opponent counter attribution remains heuristic and requires recent local attack, geometry and a paired short local cooldown. See [SP-T017 in the Sparkling handoff](docs/games/sparkling.md) for trial values, validation and next steps. Preserve concurrent chats’ updates when publishing or installing.

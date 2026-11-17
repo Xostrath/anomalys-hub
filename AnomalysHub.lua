@@ -323,7 +323,8 @@ local function makePage(name)
 		ScrollBarThickness = 4, ScrollBarImageColor3 = colors.Accent,
 	}, content)
 	create("UIPadding", {PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12)}, page)
-	if env.__AnomalyDetectedProfile=="HunterXEnter" and (name=="Auto" or name=="Settings" or name=="Recorders")then
+	-- Shared presentation: adapters add controls, not a different layout/theme.
+	if name=="Auto" or name=="Settings" or name=="Recorders" then
 		page.AutomaticCanvasSize=Enum.AutomaticSize.None
 		panelLayouts[page]={Cards={},Busy=false,Serial=0}
 		connect(page:GetPropertyChangedSignal("AbsoluteSize"),function()arrangePanels(page)end)
@@ -610,6 +611,13 @@ fitColumn(valueBox(espCard, "ESP range", 0, 0, 180, state.EspDistance, function(
 	box.Text = tostring(math.floor(state.EspDistance))
 	saveConfig()
 end), 1, 86)
+
+-- Game adapters populate this card themselves. Unknown games get the same
+-- standard player-overlay controls rather than the old bare toggle card.
+if env.__AnomalyDetectedProfile ~= "HunterXEnter" and env.__AnomalyDetectedProfile ~= "BeyondNen" then
+	espCard.Size = UDim2.new(1, 0, 0, 240)
+	optionGrid(espCard, {{"Name","Player name"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"}}, state.EspSettings, 136)
+end
 
 local function restoreCollisions()
  for part, canCollide in pairs(state.Collision) do

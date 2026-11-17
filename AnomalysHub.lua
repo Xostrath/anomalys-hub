@@ -1669,6 +1669,7 @@ local player, ui = Players.LocalPlayer, controller.UI
 local modes = {
 	{Id="nen", Name="Nen", Page="Auto", Help="Choose a skill below. Manually activate it, let the shared bar drain, turn it off, and record a full refill."},
 	{Id="shop", Name="Food Shop", Page="Recorders", Help="Stand beside a food merchant, open their shop and buy one Bread or Onigiri normally. Wait for your inventory and money to update, then Stop + Save."},
+	{Id="hunger_flow", Name="Hunger Flow", Page="Recorders", Help="Idle 10s, run 10s, stop and eat one Bread normally, wait 10s, then Stop + Save. Records stamina requests, food use, hunger and saturation without changing them."},
 }
 for _,mode in ipairs(modes)do mode.Page="Recorders"end
 local nenChoices={"Nen","Ten","Ren","Zetsu","In","Gyo","Shu","Ken","Ko","En"}
@@ -1703,7 +1704,7 @@ local function log(c, message)
 	c.Bytes += #line + 1; table.insert(c.Lines, line)
 end
 local function foodInventory(c, value)
-	if c.Mode.Id~="shop"then return end
+	if c.Mode.Id~="shop" and c.Mode.Id~="hunger_flow"then return end
 	local seen, count, limited={},0,false
 	local function food(v)return type(v)=="string" and (v:lower():find("bread",1,true) or v:lower():find("onigiri",1,true))end
 	local function scan(v,path,depth)
@@ -1833,7 +1834,14 @@ local function syncRemotes(c)
 	local function add(folder, names)
 		for _, name in ipairs(names) do table.insert(paths, folder .. "." .. name) end
 	end
-	if c.Mode.Id == "shop" then
+	if c.Mode.Id == "hunger_flow" then
+		table.insert(paths,"PhysicsRemote")
+		add("InventoryRemotes",{"InventoryAction","InventoryUpdated","GetInventory"})
+		-- A baseline is only clean with the hub's own stamina/food features off; record their state.
+		local context="staminaHoldSelected="..tostring(env.__AnomalyHunterStaminaEnabled==true).." staminaHoldRunning="..tostring(type(env.__AnomalyStaminaNoDrainTest)=="table")
+			.." foodPurchasePending="..tostring(type(env.__AnomalyHunterFoodPurchase)=="table" and env.__AnomalyHunterFoodPurchase.Pending~=nil)
+		if c.Context~=context then c.Context=context;log(c,"CONTEXT "..context) end
+	elseif c.Mode.Id == "shop" then
 		add("RemoteEvents",{"BuyBread","BuyOnigiri"})
 		add("InventoryRemotes",{"GetInventory","InventoryUpdated"})
 	elseif c.Mode.Id == "nen" then

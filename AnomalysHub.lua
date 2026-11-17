@@ -2298,8 +2298,8 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Experimental: two observed attack animations; F input, never remote replay.
--- Combat page v4: independent PvP/PvE checks, player ownership detection, range and skip options.
+-- Record-only diagnostics: observe attacks and hypothetical decisions; never generate input.
+-- Combat page v5: recording only; PvP/PvE and existing gates annotate hypothetical decisions.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -2310,18 +2310,15 @@ local run=game:GetService("RunService")
 local rs=game:GetService("ReplicatedStorage")
 local http=game:GetService("HttpService")
 local stats=game:GetService("Stats")
-local okInput,vim=pcall(game.GetService,game,"VirtualInputManager")
-if not okInput then vim=nil end
 local ui=controller.UI
 -- Client observations, not server parry-window measurements. Timing unchanged.
 local attacks={['84394230178792']=.04,['95937874840716']=0}
-local enabled,closed,held=false,false,false
-local releaseAt,nextPulse,nextScan,cooldownUntil=0,0,0,0
-local heldAt,heldAttempt,nextReleaseRetry=0,0,0
+local enabled,closed=false,false
+local proposedHoldUntil,nextPulse,nextScan,cooldownUntil=0,0,0,0
 local watched,pending,seen={},{},setmetatable({},{__mode="k"})
 local ownCharacter=player.Character
-local attempts,confirmed=0,0
-local session,stopProbe,sendingAttempt
+local proposals,observedCounters=0,0
+local session,stopProbe
 local rootPath="AnomalyHub/universal/"
 local latestPath=rootPath.."sparkling_auto_parry_latest.txt"
 local diagnosticStatus,button
@@ -2352,7 +2349,7 @@ local function sample(value)
  return tostring(value):sub(1,240)
 end
 local function log(event,detail)
- if not session or (not session.Open and event~="F_UP")then return end
+ if not session or not session.Open then return end
  session.Counts[event]=(session.Counts[event] or 0)+1
  local line=string.format("%.4f %s %s",os.clock()-session.Started,event,detail or "")
  if #line>2048 then line=line:sub(1,2016).." <line limit>"end
@@ -2366,19 +2363,19 @@ local function sortedCounts(counts)
 end
 local function report(reason)
  if not session then return nil end
- return "SPARKLING AUTO PARRY DIAGNOSTICS v2\n"
+ return "SPARKLING AUTO PARRY DIAGNOSTICS v3 // RECORD ONLY\n"
   .."session="..session.Id.." place="..game.PlaceId.." universe="..game.GameId.." unix="..session.Unix.." localClock="..session.Started
   .."\nHISTORY="..session.Path
-  .."\nCoverage: auto-parry decisions, nearby Workspace.Live animation starts, local combat input events, incoming CooldownNT/Effects, health and sampled local state."
-  .."\nOutgoing Action observation reuses the combat recorder's hooks when available (see COVERAGE). Direct/namecall paths may duplicate a call. OUT/RETURN and F_DOWN are not server acceptance. Input events may include synthesized F."
-  .."\nSELF_COUNTER lists all attempts in the preceding 1s; attacker is not established. Multiple candidates are ambiguous. Health changes are observations, not verdicts."
+  .."\nCoverage: observed attacks and hypothetical parry decisions, nearby Workspace.Live animation starts, local combat input events, incoming CooldownNT/Effects, health and sampled local state."
+  .."\nThis module generates no input or remote calls. Outgoing Action observations come from gameplay/other scripts via shared hooks (see COVERAGE). Direct/namecall paths may duplicate a call. OUT/RETURN is not server acceptance."
+  .."\nWOULD_PARRY is hypothetical, never an actual attempt. SELF_COUNTER/SELF_HEALTH list nearby proposals for comparison only; no outcome is attributed to this recorder."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s; save=5s."
-  .."\nConfig: range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." skipTyping="..tostring(settings.SkipTyping).." attackerDot>=0.2 selfDot>=0 delay84394230178792=0.04 delay95937874840716=0 hold=0.12 pulseGap=0.3 cueExpiry=0.25"
+  .."\nConfig: mode=record_only generatedInputs=0 range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." skipTyping="..tostring(settings.SkipTyping).." attackerDot>=0.2 selfDot>=0 delay84394230178792=0.04 delay95937874840716=0 simulatedHold=0.12 simulatedPulseGap=0.3 cueExpiry=0.25"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
-  ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d singleCandidateEvents=%d ambiguousEvents=%d noCandidateEvents=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,confirmed,session.Single,session.Ambiguous,session.Unmatched,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
+  ..string.format("\nTOTAL proposedParries=%d generatedInputs=0 selfCounterEvents=%d damageEvents=%d elapsed=%.3f droppedLines=%d",proposals,observedCounters,session.Damage,(session.Ended or os.clock())-session.Started,session.Dropped)
   .."\nEVENT_TOTALS "..sortedCounts(session.Counts).."\nSKIP_TOTALS "..sortedCounts(session.Skips)
   ..(session.Dropped>0 and "\nCAPTURE LIMIT REACHED: missing event detail must not be treated as absence." or "")
 end
@@ -2487,23 +2484,12 @@ end
 
 -- Combat page in the Hunter X Enter section style: an "Auto Parry" section of keybindable rows, then "Don't Parry If".
 local page=ui.Pages.Combat or ui.Pages.Auto
-local parrySection=ui.Section(page,"Auto Parry",238,true)
+local parrySection=ui.Section(page,"Auto Parry // RECORD ONLY",238,true)
 parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,180),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Experimental: two recorded melee attacks only; no heavy attacks, projectiles or other styles. Never enables itself after reload. Diagnostics save/copy in Recorders."},card)
-local function release(reason)
- if not held then return true end
- local now=os.clock()
- if now<nextReleaseRetry then return false end
- local ok,err=pcall(function()vim:SendKeyEvent(false,Enum.KeyCode.F,false,game)end)
- log("F_UP",string.format("attempt=%d ok=%s heldFor=%.4f lateBy=%.4f reason=%s error=%s",heldAttempt,tostring(ok),now-heldAt,math.max(0,now-releaseAt),reason or "deadline",ok and "none"or sample(err)))
- if ok then held=false else nextReleaseRetry=now+.1 end
- -- Persist failed-release recovery even after a session has stopped.
- if session and not session.Open then save(session.StopReason)end
- return ok
-end
+ Text="Off. Record only: observes attacks and would-be parry decisions. No automatic inputs. Save/copy logs in Recorders."},card)
 local function clearWatch(reason)
  for _,entry in pairs(watched)do
   entry.Connection:Disconnect()
@@ -2515,12 +2501,11 @@ end
 local function stop(reason)
  local active=session and session.Open
  enabled=false;clearWatch(reason)
- local released=release("stop")
  if stopProbe then stopProbe();stopProbe=nil end
- if button then button.Text="Auto Parry: OFF"end
- status.Text=reason..(released and ""or " F release failed; press and release F manually.")
+ if button then button.Text="Record Attacks: OFF"end
+ status.Text=reason.." Record-only mode; no automatic input was sent."
  if active then
-  log("STOP","reason="..sample(reason).." released="..tostring(released))
+  log("STOP","reason="..sample(reason).." mode=record_only generatedInputs=0")
   session.StopReason=reason;session.Ended=os.clock();session.Open=false;save(reason)
  end
 end
@@ -2633,25 +2618,23 @@ local function stateSample()
  session.State=current
 end
 local function start()
- if not vim then status.Text="Virtual input unavailable.";return end
  if controller.IsSparklingRecording and controller.IsSparklingRecording()then status.Text="Stop + Save the manual combat recording before enabling Auto Parry.";return end
- if not release("before_start")then status.Text="Release F manually before enabling.";return end
  local id=tostring(os.time()).."_"..http:GenerateGUID(false)
  session={Open=true,Id=id,Path=rootPath.."sparkling_auto_parry_"..id..".txt",Unix=os.time(),Started=os.clock(),
   Lines={},Bytes=0,Dropped=0,Counts={},Skips={},Actors=setmetatable({},{__mode="k"}),ActorSerial=0,CueSerial=0,Recent={},
-  Single=0,Ambiguous=0,Unmatched=0,Damage=0,State={},NextState=0,NextClock=0,NextSave=os.clock()+5,Gate=nil}
- attempts=0;confirmed=0
- enabled=true;ownCharacter=player.Character;nextScan=0;nextPulse=0
+  Damage=0,State={},NextState=0,NextClock=0,NextSave=os.clock()+5,Gate=nil}
+ proposals=0;observedCounters=0
+ enabled=true;ownCharacter=player.Character;nextScan=0;nextPulse=0;proposedHoldUntil=0
  seen=setmetatable({},{__mode="k"})
- button.Text="Auto Parry: ON"
- log("START","remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
+ button.Text="Record Attacks: ON"
+ log("START","mode=record_only generatedInputs=0 remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
  local coverage="outgoing hooks unavailable"
  if controller.BeginSparklingParryObservation then
   local ok,disconnect,description=pcall(controller.BeginSparklingParryObservation,guarded("ActionProbe",function(remote,direction,args,started,id,result,path)
    if not session or not session.Open or started<session.Started then return end
    log("ACTION","direction="..sample(direction).." call="..id.." requestStart="..string.format("%.4f",started-session.Started)
     .." path="..sample(path).." action="..sample(args[1]).." value="..sample(args[2]).." extra3="..sample(args[3]).." argc="..tostring(args.n or #args)
-    .." duringAttempt="..tostring(sendingAttempt or (held and heldAttempt)or "none").." returned="..tostring(result~=nil))
+    .." generatedByThisModule=false returned="..tostring(result~=nil))
   end))
   if ok then stopProbe=disconnect;coverage=description or coverage else log("LOGGER_ERROR","probe="..sample(disconnect))end
  end
@@ -2682,8 +2665,8 @@ local function setting(id)
   log("SETTING",id.."="..tostring(settings[id]))
  end
 end
--- start/stop keep writing "Auto Parry: ON/OFF", which the checkbox reads.
-button=optionRow(card,0,"Enabled","Enable Auto Parry",function()return enabled end,toggleParry)
+-- The Enabled binding now starts/stops recording only.
+button=optionRow(card,0,"Enabled","Record Attacks",function()return enabled end,toggleParry)
 local rangeLabel=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,36),Size=UDim2.new(1,-28,0,14),BackgroundTransparency=1,Font=Enum.Font.Gotham,
  TextSize=11,TextColor3=ui.Colors.Text,TextXAlignment=Enum.TextXAlignment.Left,Text=""},card)
 local track=ui.Create("TextButton",{Position=UDim2.fromOffset(14,56),Size=UDim2.new(1,-28,0,8),BackgroundColor3=ui.Colors.Surface,BorderSizePixel=0,
@@ -2719,7 +2702,7 @@ end)
 optionRow(card,74,"PvE","PVE (NPCs)",function()return settings.PvE end,setting("PvE"))
 optionRow(card,104,"PvP","PVP (Players)",function()return settings.PvP end,setting("PvP"))
 targetsLabel=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,140),Size=UDim2.new(1,-28,0,32),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
- TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Enable Auto Parry to detect nearby players and NPCs."},card)
+ TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Start Record Attacks to detect nearby players and NPCs."},card)
 
 local skipSection=ui.Section(page,"Don't Parry If",96,true)
 skipSection.Frame.LayoutOrder=2
@@ -2737,45 +2720,42 @@ controller.Connect(input.InputBegan,function(object,processed)
   return
  end
  if processed or input:GetFocusedTextBox()then return end
- -- Our own F pulse must never flip a row bound to F.
- if object.KeyCode==Enum.KeyCode.F and (held or sendingAttempt)then return end
  for id,row in pairs(rows)do
   if settings.Binds[id]==object.KeyCode.Name then row.Toggle()end
  end
 end)
 
-local logCard=ui.Card(ui.Pages.Recorders,"SPARKLING PARRY DIAGNOSTICS","Starts with Auto Parry. Stop Auto Parry to finalize the session; logs save automatically.",224)
+local logCard=ui.Card(ui.Pages.Recorders,"SPARKLING PARRY DIAGNOSTICS // RECORD ONLY","Start Record Attacks in Combat. Stop it to finalize. No automatic inputs; logs save automatically.",224)
 for _,child in ipairs(logCard:GetChildren())do
  if child:IsA("TextLabel") and child.Position.Y.Offset==31 then child.Size=UDim2.new(1,-28,0,54)end
 end
 diagnosticStatus=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,142),Size=UDim2.new(1,-28,0,68),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Ready. Records accepted/skipped cues, timing, F press/release, state, damage and self-counter events."},logCard)
+ Text="Ready. Records attack cues, hypothetical decisions, observed inputs, state, damage and self-counter events."},logCard)
 ui.FitColumn(ui.Button(logCard,"Save Log",0,0,180,function()
- if not session then diagnosticStatus.Text="Enable Auto Parry to begin a diagnostic session.";return end
+ if not session then diagnosticStatus.Text="Start Record Attacks to begin a diagnostic session.";return end
  save()
 end,ui.Colors.AccentSoft),0,96)
 ui.FitColumn(ui.Button(logCard,"Copy Log",0,0,180,function()
  local text=report()
- if not text then diagnosticStatus.Text="No session yet. Enable Auto Parry first.";return end
+ if not text then diagnosticStatus.Text="No session yet. Start Record Attacks first.";return end
  local ok=type(setclipboard)=="function" and pcall(setclipboard,text)
  diagnosticStatus.Text=ok and "Current log copied." or "Clipboard unavailable. Use Save Log."
 end,ui.Colors.AccentSoft),1,96)
 
 local function update(dt)
  local now=os.clock()
- if held and (now>=releaseAt or not enabled)then release("deadline_or_disabled")end
  if not enabled or closed then return end
  if dt>.1 then log("FRAME_GAP","dt="..dt)end
  if player.Character~=ownCharacter or not roots(ownCharacter)then stop("Character changed or died. Enable again when ready.");return end
- -- With "Don't Parry If Typing" off, cues still fire while a text box has focus (the F then lands in that box).
+ -- Skip options affect hypothetical decisions only; recording never injects input.
  local gate=(settings.SkipTyping and input:GetFocusedTextBox()) and "text_entry" or (guiService.MenuIsOpen and "menu" or "ready")
  if session.Gate~=gate then session.Gate=gate;log("GATE",gate)end
  if now>=session.NextState then session.NextState=now+.5;stateSample()end
  if now>=session.NextClock then session.NextClock=now+5;clockSample()end
  if now>=session.NextSave then session.NextSave=now+5;save("RUNNING")end
  if gate~="ready" then
-  release(gate)
+  proposedHoldUntil=0
   for _,cue in ipairs(pending)do skip(gate,"cue="..cue.Serial.." stage=queue")end
   table.clear(pending);return
  end
@@ -2787,29 +2767,23 @@ local function update(dt)
    local valid,geometryReason,geometry=threat(cue.Model)
    local allowed,targetReason=targetAllowed(cue.Model)
    local manualF=input:IsKeyDown(Enum.KeyCode.F)
-   local detail=string.format("cue=%d actor=%s age=%.4f scheduledLate=%.4f held=%s pulseRemaining=%.4f counterRemaining=%.4f inputF=%s %s %s",
-    cue.Serial,actor(cue.Model),now-cue.SeenAt,now-cue.At,tostring(held),math.max(0,nextPulse-now),math.max(0,cooldownUntil-now),tostring(manualF),trackData(cue.Track),geometry).." targetType="..targetKind(cue.Model)
+   local detail=string.format("cue=%d actor=%s age=%.4f scheduledLate=%.4f simulatedHold=%s simulatedPulseRemaining=%.4f counterRemaining=%.4f inputF=%s %s %s",
+    cue.Serial,actor(cue.Model),now-cue.SeenAt,now-cue.At,tostring(now<proposedHoldUntil),math.max(0,nextPulse-now),math.max(0,cooldownUntil-now),tostring(manualF),trackData(cue.Track),geometry).." targetType="..targetKind(cue.Model)
    -- "Knocked" is Character.Ragdolled (observed in captures as a boolean attribute); hypothesis until a knocked test confirms it.
    local knocked=settings.SkipKnocked and ownCharacter:GetAttribute("Ragdolled")==true
    local offScreen=settings.SkipOffScreen and not onScreen(cue.Model)
-   local reason=not allowed and targetReason or now>cue.Expires and "expired" or held and "already_held" or now<nextPulse and "pulse_cooldown"
+   local reason=not allowed and targetReason or now>cue.Expires and "expired" or now<proposedHoldUntil and "simulated_hold" or now<nextPulse and "simulated_pulse_cooldown"
     or now<cooldownUntil and "counter_cooldown" or manualF and "f_already_down" or not cue.Track.IsPlaying and "track_stopped"
     or knocked and "self_knocked" or offScreen and "off_screen" or not valid and geometryReason
    if reason then skip(reason,"stage=execute "..detail)else
-    log("CUE_ACCEPTED",detail)
-    sendingAttempt=attempts+1
-    local ok,err=pcall(function()vim:SendKeyEvent(true,Enum.KeyCode.F,false,game)end)
-    sendingAttempt=nil
-    if not ok then log("F_DOWN_FAILED","cue="..cue.Serial.." error="..sample(err));stop("F input failed.");return end
-    held=true;heldAt=now;releaseAt=now+.12;nextPulse=now+.3;nextReleaseRetry=0
-    attempts+=1;heldAttempt=attempts
-    table.insert(session.Recent,{Id=attempts,At=now})
+    proposals+=1;proposedHoldUntil=now+.12;nextPulse=now+.3
+    table.insert(session.Recent,{Id=proposals,At=now})
     if #session.Recent>16 then table.remove(session.Recent,1)end
-    log("F_DOWN","attempt="..attempts.." cue="..cue.Serial.." apiReturned=true plannedHold=0.12 "..detail)
+    log("WOULD_PARRY","proposal="..proposals.." mode=record_only generatedInput=false "..detail)
    end
   end
  end
- status.Text=string.format("Experimental ON · %d attempts · %d self counter events\nDiagnostics active; outcomes may be ambiguous.",attempts,confirmed)
+ status.Text=string.format("RECORD ONLY · %d would-be parries · %d self counter events\nNo automatic input. Fight and parry manually.",proposals,observedCounters)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)
@@ -2832,9 +2806,8 @@ if effects and effects:IsA("RemoteEvent")then controller.Connect(effects.OnClien
  log("EFFECT","kind="..sample(kind).." actor="..modelId.." self="..tostring(model==player.Character).." message="..sample(message))
  if kind=="Weave" and model==player.Character and (message=="Counter Parry!" or message=="Perfect Counter!")then
   local count,list=candidates(os.clock())
-  confirmed+=1
-  if count==1 then session.Single+=1 elseif count>1 then session.Ambiguous+=1 else session.Unmatched+=1 end
-  log("SELF_COUNTER","message="..sample(message).." candidateCount="..count.." attempts=["..list.."] attribution="..(count==0 and "none" or count==1 and "temporal_only" or "ambiguous"))
+  observedCounters+=1
+  log("SELF_COUNTER","message="..sample(message).." recentProposalCount="..count.." proposals=["..list.."] attribution=none_record_only")
  end
 end))end
 local healthConnection
@@ -2848,7 +2821,7 @@ local function bindHealth(character)
   if not enabled or character~=ownCharacter then return end
   if delta<0 then session.Damage+=1 end
   local count,list=candidates(os.clock())
-  log("SELF_HEALTH",string.format("value=%.4f delta=%.4f candidateCount=%d attempts=[%s]",value,delta,count,list))
+  log("SELF_HEALTH",string.format("value=%.4f delta=%.4f recentProposalCount=%d proposals=[%s]",value,delta,count,list))
  end))
 end
 -- Recheck Humanoid at each enable, without waiting on a respawning character.

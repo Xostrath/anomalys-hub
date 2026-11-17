@@ -143,3 +143,8 @@ Hunter X Enter Auto Eat is now public. These remain private-only:
 - Nen Code Capture
 
 The Hunter X Enter anti-macro answerer (`HunterXEnterAutoCheck.lua`) is in both builds but is stripped from every public commit; see the commit workflow in the Hunter X Enter note.
+
+
+### Sparkling record-only mode (2026-11-17)
+
+The user temporarily requested recording instead of automatic parrying. Combat → Auto Parry // RECORD ONLY → Record Attacks now observes attacks and hypothetical WOULD_PARRY decisions without generating input. Diagnostics v3 explicitly separates proposals from observed manual/game actions and never credits counters to the recorder. Existing Recorders Save/Copy and output paths remain. See [Sparkling SP-T012](docs/games/sparkling.md) for validation and current handoff; do not restore active input without a new user request.

@@ -4,7 +4,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 
 ## Read first
 
-**Current update:** Combat page v4 adds independent PVP (Players) and PVE (NPCs) checks; see the current-targeting section at the end of this note. Earlier NPC-only references below are superseded for Sparkling.
+**Current mode: RECORD ONLY (Combat page v5 / diagnostics v3).** The user requested passive recording; no generated inputs. See the current-mode section at the end. Earlier active-parry instructions are historical and superseded.
 
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. User-supplied entry place: `120525873606470`.
 - Current objective: collect enough diagnostics to explain every automatic-defense attempt or skip before changing its timings.
@@ -26,7 +26,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
 | Auto parry | Two animation IDs, 8-stud range, facing and line-of-sight gates, brief F input | First v1 log reviewed; outcomes ambiguous | Reliable timing, coverage, and causality unverified |
 | NPC ESP v1 (SP-T010) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types: TRAINER (name ends in `Trainer`) or NPC | Implemented / untested live; both builds compile | Which NPCs exist, where they live, and whether they carry PowerLevel |
-| Combat page v4 (SP-T011; supersedes SP-T008 targeting) | **Combat → Auto Parry**: separate PVP (Players) and PVE (NPCs) checkboxes/keybinds, nearby counts, range slider and existing skip options. Ownership filters apply on observation and before input. PvP defaults OFF; settings persist | Implemented / untested live; 76 mocked assertions and public/private compilation passed | Live player detection, mapped animation coverage, and actual parry results |
+| Combat page v5 (SP-T012; supersedes active-input behavior) | **Combat → Auto Parry // RECORD ONLY → Record Attacks**. PvP/PvE, range and skip options annotate hypothetical decisions; no automatic input | 47 mocked assertions and source/public/private compilation passed; untested live | Verify a short manual fight recording after reload |
 | Parry diagnostics v2 | Decision/geometry/input/action/state/outcome logs with session histories | 47 mocked assertions and build compilation | Real executor hook coverage and live results |
 
 ## Sources and capture workflow
@@ -176,3 +176,24 @@ The user explicitly requested player detection and a PvP checkbox for Sparkling.
 Reference: Beyond Nen's player-ownership target filtering (see [Beyond Nen note](beyond-nen.md), `src/BeyondNenAutoParry.lua`) and the existing Sparkling checkbox/keybind/settings helpers. No Beyond Nen attack timings or remote semantics were transferred.
 
 Next check: reload, enable PVP (Players) and Auto Parry, verify nearby counts, then inspect mapped player cues and F release in the log. Toggle PvP off and confirm `pvp_off` skips. Unknown animations remain unmapped; enabling PvP does not add fighting styles.
+
+
+## Current mode — record only (Combat page v5, 2026-11-17)
+
+The user asked to stop automatic parrying and only record for now. This supersedes active-input behavior in v1–v4, including the v4 targeting instructions above. **Do not restore generated combat input until the user requests it.** Existing PvP/PvE selection and skip options now describe hypothetical decision eligibility.
+
+Use **Combat → Auto Parry // RECORD ONLY → Record Attacks**, fight/parry manually, then turn Record Attacks off to finalize. Save Log / Copy Log remain in Recorders. The recorder stays OFF on reload; PvP/PvE options, range, skip settings and keybinds retain their saved values. No mode setting or checkbox enables real parrying in this version.
+
+- The Sparkling parry module no longer obtains VirtualInputManager or contains SendKeyEvent calls, a generated key-down/key-up path, or a gameplay-remote send path. Shared hooks only observe and forward existing game calls.
+- An eligible known attack logs `WOULD_PARRY proposal=N generatedInput=false`. The 0.12-second hold and 0.3-second pulse spacing are simulated decision gates, explicitly named in reports; they do not hold a key. Unknown animations are still recorded and logged as unmapped.
+- `SELF_COUNTER` and `SELF_HEALTH` list recent hypothetical proposals for comparison. Attribution is `none_record_only`; counters are never credited to the recorder. Observed Action and INPUT events originate outside this module and are not proof of server acceptance.
+- Header: `SPARKLING AUTO PARRY DIAGNOSTICS v3 // RECORD ONLY`; Config declares `mode=record_only generatedInputs=0`. Totals distinguish `proposedParries`, observed self-counter/damage events, and `generatedInputs=0`. Old `F_DOWN/F_UP` events and actual-attempt success counters are not emitted.
+- Latest/history filenames, capture limits, five-second autosave, manual combat recorder exclusion, Save/Copy behavior, and stop lifecycle are unchanged. Reloading is required to replace an already-running older active version.
+
+### SP-T012 — passive recorder validation
+
+2026-11-17, Combat page v5 / diagnostics v3: 43 mocked behavioral assertions plus 4 reload/settings assertions passed. They cover eligible PvP proposals, zero key-down/up calls, manual input and outgoing Action observation, no counter attribution, simulated gates, PvP toggles, unmapped attacks, cooldown/manual-F/menu/typing gates, history/autosave/copy on disk failure, report caps, focus loss, teleport, death, unload and saved settings. The module starts without a virtual-input service. Source and public/private builds compile. **Implemented / untested live.** No live parry-performance claim is made.
+
+Reference: the passive observation principle in [Beyond Nen's recorder](beyond-nen.md) and existing Sparkling diagnostics/hooks. This change removes input generation rather than relying on a saved toggle to disable it.
+
+Next check: reload, start Record Attacks, perform a short manual fight and stop recording. Verify `mode=record_only`, hypothetical proposals and observed manual actions, and no generated input events. Read the saved report before changing attack mappings or restoring automation.

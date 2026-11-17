@@ -3224,7 +3224,7 @@ controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
 
 end)()
 ;(function()
--- Combat page v12: all five hits enabled; hit-3 +30 ms timing comparison with continuous diagnostics.
+-- Combat page v13 / diagnostics v6: baseline timings, event-time local state capture.
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -3239,15 +3239,16 @@ local stats=game:GetService("Stats")
 local okInput,vim=pcall(game.GetService,game,"VirtualInputManager")
 if not okInput then vim=nil end
 local ui=controller.UI
--- SP-T033: compare hit 3 at +30 ms after repeated damage-associated zero-delay attempts.
--- Client observations, not server parry-window measurements; other seeds are unchanged.
-local attacks={['114493250337466']=.04,['84394230178792']=.04,['95937874840716']=.03,['139487903747364']=0,['131649056441662']=.04}
+-- SP-T034: +30 ms hit-3 trial showed no improvement; restore its zero-delay baseline.
+-- Client observations, not server parry-window measurements; diagnose eligibility before further tuning.
+local attacks={['114493250337466']=.04,['84394230178792']=.04,['95937874840716']=0,['139487903747364']=0,['131649056441662']=.04}
 local enabled,closed=false,false
 local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local sendingAttempt
 local nextPulse,nextScan,cooldownUntil=0,0,0
 local lastLocalAttack=-math.huge
 local lastCounterNotice
+local lastDamageAt
 local opponentCandidates={}
 local watched,pending,seen={},{},setmetatable({},{__mode="k"})
 local ownCharacter=player.Character
@@ -3384,17 +3385,18 @@ local function sortedCounts(counts)
 end
 local function report(reason)
  if not session then return nil end
- return "SPARKLING AUTO PARRY DIAGNOSTICS v5 // ACTIVE TIMING TEST\n"
+ return "SPARKLING AUTO PARRY DIAGNOSTICS v6 // ACTIVE TIMING TEST\n"
   .."session="..session.Id.." place="..game.PlaceId.." universe="..game.GameId.." unix="..session.Unix.." localClock="..session.Started
   .."\nHISTORY="..session.Path
   .."\nCoverage: attack decisions, F API down/up results, nearby Workspace.Live animation starts, local combat input events, incoming CooldownNT/Effects, health and sampled local state."
   .."\nThis experiment sends F input, not gameplay remotes. Shared Action hooks only observe/forward. F_DOWN API success and OUT/RETURN are not server acceptance; direct/namecall paths may duplicate a call."
   .."\nSELF_COUNTER lists recent actual attempts; attacker and causation remain unknown. OTHER_COUNTER logs other recipients. POSSIBLE_PARRIED requires recent local attack + nearby facing opponent counter + a local Counter=0.5 notice within 0.2s; this is a heuristic, not confirmation."
   .."\nDEFEND_REQUEST pairs adjacent observed requests with recent F input/API pulses (200ms window). Early releases and intervening inputs are explicit; all attribution is temporal. Stop disconnects hooks, so post-stop request receipts may be unavailable."
+  .."\nSTATE_CONTEXT/STATE_POINT capture client-visible relevant local attributes/values after F API success and on damage. lastDamageAge is time since the previous observed damage in this session; unknown means no observation. Missing fields and snapshots do not prove server eligibility or absence of stun."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
-  .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s; save=5s."
-  .."\nConfig: mode=active_test scope=all_five timingTrial=hit3_plus30ms range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0.03,combo4:0,combo5:0.04 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
+  .."\nConfig: mode=active_test scope=all_five timingTrial=baseline_state_capture range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -3546,7 +3548,7 @@ parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. All five hits enabled. Hit 3: +30 ms timing trial. Diagnostics record while enabled."},card)
+ Text="Off. All five hits enabled. Baseline timing with event-state diagnostics v6."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -3690,7 +3692,7 @@ local function relevant(key)
  end
  return key=="ki" or key=="busy"
 end
-local function stateSample()
+local function stateSample(trigger,detail)
  local _,hum=roots(ownCharacter)
  if not hum then return end
  local current={Health=sample(hum.Health),MaxHealth=sample(hum.MaxHealth)}
@@ -3700,9 +3702,20 @@ local function stateSample()
  for _,child in ipairs(ownCharacter:GetChildren())do
   if child:IsA("ValueBase") and relevant(child.Name)then current["character."..child.Name]=sample(child.Value)end
  end
+ if trigger then
+  local keys={};for key in pairs(current)do table.insert(keys,key)end;table.sort(keys)
+  log("STATE_CONTEXT","trigger="..trigger.." "..(detail or "").." lastDamageAge="..(lastDamageAt and string.format("%.4f",os.clock()-lastDamageAt)or "unknown").." fields="..math.min(#keys,64).." omitted="..math.max(0,#keys-64))
+  for i=1,math.min(#keys,64)do local key=keys[i];log("STATE_POINT","field="..sample(key).." value="..current[key])end
+  return
+ end
  for key,value in pairs(current)do if session.State[key]~=value then log("STATE","field="..sample(key).." value="..value)end end
  for key in pairs(session.State)do if current[key]==nil then log("STATE_REMOVED","field="..sample(key))end end
  session.State=current
+end
+local function captureState(trigger,detail)
+ if not session or not session.Open then return end
+ local ok,err=pcall(stateSample,trigger,detail)
+ if not ok then log("STATE_CAPTURE_ERROR","trigger="..trigger.." error="..sample(err))end
 end
 local function start()
  if not vim then status.Text="Virtual input unavailable; active test cannot start.";return end
@@ -3712,11 +3725,11 @@ local function start()
  session={Open=true,Id=id,Path=rootPath.."sparkling_auto_parry_"..id..".txt",Unix=os.time(),Started=os.clock(),
   Lines={},Bytes=0,Dropped=0,Counts={},Skips={},Actors=setmetatable({},{__mode="k"}),ActorSerial=0,CueSerial=0,Recent={},Pulses={},InputSerial=0,DefendSerial=0,DefendCalls={},DefendCallOrder={},LosObjects=setmetatable({},{__mode="k"}),LosObjectCount=0,
   Damage=0,OtherCounters=0,PossibleParried=0,State={},NextState=0,NextClock=0,NextSave=os.clock()+5,Gate=nil}
- attempts=0;observedCounters=0;lastLocalAttack=-math.huge;lastCounterNotice=nil;table.clear(opponentCandidates)
+ attempts=0;observedCounters=0;lastDamageAt=nil;lastLocalAttack=-math.huge;lastCounterNotice=nil;table.clear(opponentCandidates)
  enabled=true;ownCharacter=player.Character;nextScan=0;nextPulse=0
  seen=setmetatable({},{__mode="k"})
  button.Text="Auto Parry: ON"
- log("START","mode=active_test scope=all_five timingTrial=hit3_plus30ms offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
+ log("START","mode=active_test scope=all_five timingTrial=baseline_state_capture offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
  local coverage="outgoing hooks unavailable"
  if controller.BeginSparklingParryObservation then
   local ok,disconnect,description=pcall(controller.BeginSparklingParryObservation,guarded("ActionProbe",function(remote,direction,args,started,id,result,path)
@@ -3890,7 +3903,7 @@ local function update(dt)
    if not reason and now<nextPulse then reason="pulse_cooldown"end
    table.remove(pending,i)
    if reason then skip(reason,"stage=execute "..detail)else
-    log("CUE_ACCEPTED","scope=all_five timingTrial=hit3_plus30ms offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
+    log("CUE_ACCEPTED","scope=all_five timingTrial=baseline_state_capture offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
     sendingAttempt=attempts+1;heldAttempt=sendingAttempt
     held=true;heldAt=now;releaseAt=now+settings.HoldMs/1000;nextPulse=now+.3;nextReleaseRetry=0
     table.insert(session.Pulses,{Id=heldAttempt,DownAt=now})
@@ -3902,10 +3915,11 @@ local function update(dt)
     table.insert(session.Recent,{Id=attempts,At=now})
     if #session.Recent>16 then table.remove(session.Recent,1)end
     log("F_DOWN","attempt="..attempts.." apiReturned=true holdMs="..settings.HoldMs.." "..detail)
+    captureState("after_input","attempt="..attempts.." cue="..cue.Serial)
    end
   end
  end
- status.Text=string.format("AUTO PARRY · Hit 3 +30 ms trial · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("AUTO PARRY · Diagnostics v6 · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)
@@ -3964,6 +3978,7 @@ local function bindHealth(character)
   if delta<0 then session.Damage+=1 end
   local count,list=candidates(os.clock())
   log("SELF_HEALTH",string.format("value=%.4f delta=%.4f recentAttemptCount=%d attempts=[%s]",value,delta,count,list))
+  if delta<0 then local damageAt=os.clock();captureState("damage","delta="..delta.." attempts=["..list.."]");lastDamageAt=damageAt end
  end))
 end
 -- Recheck Humanoid at each enable, without waiting on a respawning character.

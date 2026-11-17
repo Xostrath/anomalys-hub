@@ -189,3 +189,8 @@ Combat page v10 places separate Hit 3 / Hit 4 buttons above Enable Auto Parry, v
 ### Sparkling all-hit restoration (2026-11-17)
 
 At the user's request, Combat page v11 restores all five known combo hits, including hit 1, and removes the temporary single-hit selector. Legacy TestHit settings no longer restrict coverage. Diagnostics remain automatic while enabled; timing seeds and preferences are unchanged. See [SP-T030](docs/games/sparkling.md).
+
+
+### Sparkling event-state diagnostics v6 (2026-11-17)
+
+Combat page v13 restores baseline hit-3 timing after the +30 ms comparison showed no improvement. Automatic diagnostics now add STATE_CONTEXT/STATE_POINT snapshots after input and on damage, capped at 64 relevant client-visible fields per snapshot. Existing half-second deltas, report bounds and Recorders controls remain. Missing state is unknown; snapshots do not establish server acceptance. See [SP-T034](docs/games/sparkling.md).

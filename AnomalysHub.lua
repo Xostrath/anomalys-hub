@@ -267,7 +267,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v7\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v8\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
 	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1397,7 +1397,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v7",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v8",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1407,7 +1407,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v7 loaded; background training ready.")
+print("[Anomaly] Hunter X Enter adapter v8 loaded; stamina investigation available in Settings.")
 
 end)()
 ;(function()
@@ -2312,6 +2312,182 @@ controller.Connect(input.WindowFocused,function()focusChanged(true)end)
 controller.Connect(input.TextBoxFocused,function()stop("Text entry opened")end)
 controller.Connect(player.OnTeleport,function()stop("Teleport")end)
 controller.RegisterCleanup(function()stop("Unload");closed=true end)
+
+end)()
+;(function()
+-- Passive stamina investigation. No inputs, property writes, remote calls or code execution.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter" then return end
+local player=game:GetService("Players").LocalPlayer
+local run=game:GetService("RunService")
+local http=game:GetService("HttpService")
+local ui=controller.UI
+local active,closed=nil,false
+local rootPath="AnomalyHub/universal/hunter_stamina_trace"
+local card=ui.Card(ui.Pages.Settings,"STAMINA INVESTIGATION // v1","Compare the live stamina bar with local values and the current movement controller. Read-only; no infinite-stamina change.",218)
+card.LayoutOrder=35
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,118),Size=UDim2.new(1,-28,0,84),BackgroundTransparency=1,Font=Enum.Font.Gotham,
+	TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+	Text="Record running, resting and a few jumps. Captures up to 90 seconds and one scoped client script if readable."},card)
+local button,lastReport
+local function log(c,message)
+	if active~=c then return end
+	local line=string.format("%.4f %s",os.clock()-c.Started,tostring(message):sub(1,1500))
+	if #c.Lines>=12000 or c.Bytes+#line+1>2000000 then c.Limited=true;return end
+	c.Bytes+=#line+1;table.insert(c.Lines,line)
+end
+local function write(path,text)
+	if type(writefile)~="function" then return false end
+	if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal") end
+	return pcall(writefile,path,text)
+end
+local function save(c,reason)
+	c.Report="HUNTER X ENTER STAMINA INVESTIGATION v1 // READ ONLY\nplace="..game.PlaceId.." universe="..game.GameId
+		.."\nNo automatic inputs, property changes, remote calls, require or execution of captured source."
+		.."\nOnly the current character's Movement.MovementController is eligible for source reading/decompilation."
+		.."\nSource may be unavailable or inaccurately decompiled; client code does not establish server validation."
+		.."\n90s / 12000 lines / 2MB trace; at most one 2MB source; 5s source observation deadline. Late results discarded."
+		.."\nStats inspect up to 600 local-player/character objects per scan; incoming movement events only."
+		.."\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
+	lastReport=c.Report
+	local latest=write(rootPath.."_latest.txt",c.Report)
+	c.HistorySaved=write(c.Path..".txt",c.Report)
+	return latest or c.HistorySaved
+end
+local function stop(reason)
+	local c=active;if not c then return end
+	log(c,"STOP "..reason);active=nil
+	if c.RemoteConnection then c.RemoteConnection:Disconnect()end
+	local saved=save(c,reason)
+	button.Text="Record Stamina";button.BackgroundColor3=ui.Colors.AccentSoft
+	status.Text=saved and ("Saved: "..reason..". "..c.SourceStatus..(c.HistorySaved and " Session history kept." or " Latest file only."))
+		or "File saving failed. Use Copy Trace before reloading."
+end
+local function changed(c,key,value)
+	if c.Previous[key]~=value then c.Previous[key]=value;log(c,key.."="..value)end
+end
+local function text(value)
+	if type(value)=="string" then return string.format("%q",value:sub(1,160))end
+	if typeof(value)=="Instance" then return value.ClassName..":"..value:GetFullName()end
+	return tostring(value)
+end
+local function sample(c)
+	local character=c.Character
+	local bar=character:FindFirstChild("StaminaBar3D")
+	local container=bar and bar:FindFirstChild("Container")
+	local fill=container and container:FindFirstChild("Fill")
+	local label=container and container:FindFirstChild("PctLabel")
+	changed(c,"HUD.fillY",fill and fill:IsA("GuiObject") and tostring(fill.Size.Y.Scale)or "unavailable")
+	changed(c,"HUD.percent",label and label:IsA("TextLabel") and text(label.Text)or "unavailable")
+	for _,key in ipairs({"Running","IsClimbing","Meditating","PushUpsCooldown"})do changed(c,"Character@"..key,text(character:GetAttribute(key)))end
+	local h=character:FindFirstChildOfClass("Humanoid")
+	if h then changed(c,"Humanoid.state",tostring(h:GetState()));changed(c,"Humanoid.WalkSpeed",tostring(h.WalkSpeed));changed(c,"Humanoid.Health",tostring(h.Health))end
+end
+local function stats(c)
+	local current={}
+	local queue={{player,0},{c.Character,0}}
+	local index,count=1,0
+	while index<=#queue do
+		local pair=queue[index];index+=1;count+=1
+		local o,depth=pair[1],pair[2]
+		local excluded=o:IsA("PlayerGui")or o:IsA("PlayerScripts")or o:IsA("Backpack")or o:IsA("Tool")or o:IsA("LuaSourceContainer")
+		if not excluded then
+			local path=o:GetFullName()
+			for key,value in pairs(o:GetAttributes())do
+				if key:lower():find("stamina",1,true) then current["ATTR "..path.."@"..key]=text(value)end
+			end
+			if (o:IsA("NumberValue")or o:IsA("IntValue"))and o.Name:lower():find("stamina",1,true)then current["VALUE "..path]=text(o.Value)end
+			if depth<5 then
+				for _,child in ipairs(o:GetChildren())do
+					if #queue>=600 then if not c.ScanLimit then c.ScanLimit=true;log(c,"LIMIT 600 stat objects")end;break end
+					table.insert(queue,{child,depth+1})
+				end
+			end
+		end
+	end
+	for key,value in pairs(current)do changed(c,key,value)end
+	for key in pairs(c.StatKeys)do if current[key]==nil then changed(c,key,"removed")end end
+	c.StatKeys=current
+end
+local function source(c,scriptObject)
+	if not scriptObject or not (scriptObject:IsA("LocalScript")or scriptObject:IsA("ModuleScript"))then
+		c.SourceStatus="Movement controller source not found.";log(c,c.SourceStatus);return
+	end
+	log(c,"SOURCE_TARGET "..scriptObject:GetFullName())
+	c.SourceStatus="Movement source pending."
+	local resolved=false
+	local function finish(value,reason)
+		if resolved or active~=c then return end;resolved=true
+		if type(value)=="string" and #value>0 and #value<=2000000 and value:match("%S")
+			and not value:lower():find("failed to decompile",1,true) and not value:lower():find("decompilation failed",1,true)then
+			local path=c.Path.."_MovementController.lua"
+			if write(path,value)then c.SourceStatus="Movement source saved.";log(c,"SOURCE_SAVED bytes="..#value.." file="..path)
+			else c.SourceStatus="Movement source save failed.";log(c,c.SourceStatus)end
+		else
+			c.SourceStatus="Movement source unavailable: "..reason;log(c,c.SourceStatus)
+		end
+		save(c,"RECORDING")
+	end
+	task.delay(5,function()finish(nil,"read timed out; late results ignored")end)
+	task.spawn(function()
+		local ok,value=pcall(function()return scriptObject.Source end)
+		if ok and type(value)=="string" and value:match("%S")then finish(value,#value>2000000 and "source exceeds 2MB"or "source read");return end
+		if resolved or active~=c then return end
+		local reader=env.decompile or decompile
+		if type(reader)~="function"then finish(nil,"decompiler unavailable");return end
+		local readOk,result=pcall(reader,scriptObject)
+		if readOk and type(result)=="string"then finish(result,#result>2000000 and "source exceeds 2MB"or "empty/failed decompilation")
+		else finish(nil,"decompiler failed")end
+	end)
+end
+local function start()
+	if closed then return end
+	if active then stop("STOPPED");return end
+	if not player.Character then status.Text="Wait for your character.";return end
+	if controller.StopHunterTraining then controller.StopHunterTraining("Stamina trace started")end
+	if controller.StopHunterRecording then controller.StopHunterRecording("STAMINA_TRACE_STARTED")end
+	local ok,guid=pcall(http.GenerateGUID,http,false);if not ok then guid=tostring(os.clock())end
+	local c={Character=player.Character,Started=os.clock(),Lines={},Bytes=0,Previous={},StatKeys={},NextSample=0,NextStats=0,NextSave=os.clock()+5,
+		Path=rootPath.."_"..os.time().."_"..tostring(guid):gsub("[^%w%-]",""),SourceStatus="Movement source pending."}
+	active=c
+	local movement=c.Character:FindFirstChild("Movement")
+	local scriptObject=movement and movement:FindFirstChild("MovementController")
+	local event=scriptObject and scriptObject:FindFirstChild("Event")
+	if event and event:IsA("RemoteEvent")then
+		log(c,"WATCH_INCOMING "..event:GetFullName())
+		c.RemoteConnection=event.OnClientEvent:Connect(function(...)
+			if active~=c then return end
+			local parts={};for i=1,math.min(select('#',...),8)do table.insert(parts,text(select(i,...)))end
+			log(c,"MOVEMENT_IN "..table.concat(parts," | "))
+		end)
+	end
+	local prepared,err=pcall(function()sample(c);stats(c)end)
+	if not prepared then log(c,"ERROR "..tostring(err));stop("START_ERROR");return end
+	if not save(c,"RECORDING")then stop("SAVE_FAILED");return end
+	button.Text="Stop + Save";button.BackgroundColor3=ui.Colors.Danger
+	source(c,scriptObject)
+end
+button=ui.FitColumn(ui.Button(card,"Record Stamina",0,0,180,start,ui.Colors.AccentSoft),0,72)
+ui.FitColumn(ui.Button(card,"Copy Trace",0,0,180,function()
+	if active then save(active,"RECORDING")end
+	if lastReport and type(setclipboard)=="function"then pcall(setclipboard,lastReport)end
+end),1,72)
+controller.Connect(run.Heartbeat,function()
+	local c=active;if not c then return end
+	if player.Character~=c.Character then stop("CHARACTER_CHANGED");return end
+	local now=os.clock()
+	if c.Limited or now-c.Started>=90 then stop(c.Limited and "LIMIT_REACHED"or "COMPLETE");return end
+	local ok,err=pcall(function()
+		if now>=c.NextSample then c.NextSample=now+.05;sample(c)end
+		if now>=c.NextStats then c.NextStats=now+.5;stats(c)end
+	end)
+	if not ok then log(c,"ERROR "..tostring(err));stop("CAPTURE_ERROR");return end
+	if now>=c.NextSave then c.NextSave=now+5;if not save(c,"RECORDING")then stop("SAVE_FAILED");return end end
+	status.Text=string.format("Recording %.0fs / 90s. Run, rest to full, then jump a few times.\n%s",now-c.Started,c.SourceStatus)
+end)
+controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
+controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)
 
 end)()
 end

@@ -117,7 +117,7 @@ local state = {
 	SpectateTarget = nil,
 	EspEnabled = false,
 	EspDistance = 2500,
-	EspSettings = {Name = true, Level = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
+	EspSettings = {Name = true, Race = true, BattlePower = true, Level = true, Distance = true, Box = true, Health = true, Energy = true, Stamina = true},
 	NpcEspEnabled = false,
 	NpcEspDistance = 2500,
 	BeyondNenParryTargets = "Auto",
@@ -643,7 +643,7 @@ end), 1, 86)
 
 -- Game adapters populate this card themselves. Unknown games get the same
 -- standard player-overlay controls rather than the old bare toggle card.
-if env.__AnomalyDetectedProfile ~= "HunterXEnter" and env.__AnomalyDetectedProfile ~= "BeyondNen" then
+if env.__AnomalyDetectedProfile ~= "HunterXEnter" and env.__AnomalyDetectedProfile ~= "BeyondNen" and env.__AnomalyDetectedProfile ~= "Sparkling" then
 	espCard.Size = UDim2.new(1, 0, 0, 240)
 	optionGrid(espCard, {{"Name","Player name"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"}}, state.EspSettings, 136)
 end
@@ -1148,7 +1148,16 @@ local function updateEsp(target, localRoot)
 	local level = extra and tonumber(extra.Level)
 	local levelText = level and level == level and level >= 0 and level < math.huge and tostring(math.floor(level)) or "--"
 	if settings.Level and (not controller.EspKnownResourcesOnly or levelText ~= "--") then table.insert(lines, "LEVEL // " .. levelText) end
+	if controller.Profile == "Sparkling" then
+		if settings.Race then table.insert(lines, "RACE // " .. (extra and extra.Race or "Unavailable")) end
+		if settings.BattlePower then
+			local power = extra and extra.BattlePower
+			local text = type(power)=="number" and power==power and power>=0 and power<math.huge and string.format("%.2f",power) or "Unavailable"
+			table.insert(lines,"POWER LEVEL // "..text)
+		end
+	end
 	if settings.Distance then table.insert(lines, string.format("%d STUDS", math.floor(distance + 0.5))) end
+	entry.Gui.Size = UDim2.fromOffset(240, math.max(62, #lines * 14 + 8))
 	entry.InfoLabel.Text = table.concat(lines, "\n")
 	entry.InfoLabel.TextColor3 = controller.EspActorColor or colors.Text
 	entry.BoxStroke.Color = controller.EspActorColor or Color3.new(1,1,1)
@@ -1923,6 +1932,102 @@ end)
 controller.StopSparklingRecording=stop
 controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
 controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)
+
+end)()
+;(function()
+-- Sparkling: read explicit replicated identity fields; never infer from appearance.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local players=game:GetService("Players")
+local ui,state=controller.UI,controller.State
+controller.EspKnownResourcesOnly=true
+local function finite(value)
+ return type(value)=="number" and value==value and value>=0 and value<math.huge
+end
+local function explicitRace(target,character)
+ local found,conflict=nil,false
+ local function accept(value)
+  if type(value)~="string" or not value:match("%S") or #value>80 then return end
+  if found and found~=value then conflict=true else found=value end
+ end
+ local function read(object)
+  if not object then return end
+  accept(object:GetAttribute("Race"))
+  local value=object:FindFirstChild("Race")
+  if value and value:IsA("StringValue") then accept(value.Value) end
+ end
+ read(character);read(target)
+ -- No recursive search: preview rigs and other save slots are not live identity.
+ return not conflict and found or nil
+end
+function controller.ResolvePlayerEspData(target,character)
+ local power=character and character:FindFirstChild("PowerLevel")
+ local value=power and (power:IsA("NumberValue") or power:IsA("IntValue")) and power.Value or nil
+ return {Race=explicitRace(target,character),BattlePower=finite(value) and value or nil}
+end
+ui.PlayerEspCard.Size=UDim2.new(1,0,0,282)
+ui.OptionGrid(ui.PlayerEspCard,{{"Name","Player name"},{"Race","Race"},{"BattlePower","Power level"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"}},state.EspSettings,136)
+
+local card=ui.Card(ui.Pages.Recorders,"SPARKLING ESP DATA","Capture visible race and power fields to verify player labels. No requests are sent.",200)
+card.LayoutOrder=30
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,70),BackgroundTransparency=1,
+ Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Power uses live Character.PowerLevel. Race uses explicit Race strings only; missing or conflicting data stays unavailable."},card)
+local busy=false
+local function relevant(name)
+ name=name:lower()
+ return name:find("race",1,true) or name:find("species",1,true) or name:find("power",1,true)
+  or name:find("suppress",1,true) or name:find("transform",1,true) or name:find("form",1,true)
+end
+local function capture()
+ if busy or controller.IsUnloaded()then return end
+ busy=true
+ local ok,err=pcall(function()
+  local lines={"SPARKLING ESP DATA v1 // READ ONLY","place="..game.PlaceId.." universe="..game.GameId,
+   "No remote calls, module execution, decompilation, or mutations. Client visibility only.",
+   "PowerLevel semantics (base/effective/suppressed) are not confirmed. No race ID mapping is assumed."}
+  local count=0
+  local function log(s)if #lines<4000 then table.insert(lines,s)end end
+  for _,target in ipairs(players:GetPlayers())do
+   local char=target.Character
+   log("PLAYER "..target.Name.." character="..(char and char:GetFullName()or "unavailable"))
+   local resolved=controller.ResolvePlayerEspData(target,char)
+   log("RESOLVED race="..tostring(resolved.Race).." powerLevel="..tostring(resolved.BattlePower))
+   for _,root in ipairs({target,char})do
+    local queue={{root,0}};local index=1
+    while index<=#queue and index<=1000 do
+     local item=queue[index];index+=1
+     local object,depth=item[1],item[2]
+     if object:IsA("PlayerGui") or object:IsA("PlayerScripts") or object:IsA("Backpack") then continue end
+     if relevant(object.Name) and object:IsA("ValueBase")then
+      log("VALUE "..object:GetFullName().." ["..object.ClassName.."]="..tostring(object.Value):sub(1,160))
+     end
+     for key,value in pairs(object:GetAttributes())do
+      if relevant(key)then log("ATTRIBUTE "..object:GetFullName().."@"..key.." ["..typeof(value).."]="..tostring(value):sub(1,160))end
+     end
+     if depth<4 then
+      for _,child in ipairs(object:GetChildren())do
+       if #queue>=1000 then log("LIMIT root="..root:GetFullName().." 1000 objects");break end
+       table.insert(queue,{child,depth+1})
+      end
+     elseif #object:GetChildren()>0 then log("DEPTH_LIMIT "..object:GetFullName())end
+    end
+   end
+   count+=1
+  end
+  log("END players="..count)
+  local report=table.concat(lines,"\n")
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  local saved=type(writefile)=="function" and pcall(writefile,"AnomalyHub/universal/sparkling_esp_data_latest.txt",report)
+  if type(setclipboard)=="function"then pcall(setclipboard,report)end
+  status.Text=saved and ("Saved ESP sources for "..count.." players. Report is ready to inspect.") or "File save failed. Copied report if clipboard is available."
+ end)
+ busy=false
+ if not ok then status.Text="Capture failed: "..tostring(err):sub(1,160)end
+end
+local button=ui.Button(card,"Capture ESP Data",14,72,180,capture,ui.Colors.AccentSoft)
+button.Size=UDim2.new(1,-28,0,34)
 
 end)()
 if anomalyProfile == 'HunterXEnter' then

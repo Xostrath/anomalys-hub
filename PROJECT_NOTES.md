@@ -39,7 +39,7 @@ The build also includes the legacy Gohan profile. Inspect its existing routing b
 
 ### Sparkling evidence and scope
 
-The current capture is from the **tutorial world**, not the main world. It contains 95 remote entries, including Roblox infrastructure and duplicated client objects. Do not describe these as 95 unique game mechanics. Main-world paths still need a capture. Universe identity covers places within the same experience; it does not imply matching remote coverage in each place.
+Tutorial capture: 95 entries in place `101713836627444`. Main-world capture: 126 entries in place `110405289082842`, with profile Sparkling. Both contain Roblox infrastructure and duplicated client objects; counts are not unique mechanics. The main-world capture retains the watched combat paths and adds training/dance-related paths. Universe identity covers places within the same experience; it does not imply matching remote coverage in each place.
 
 Observed combat-related paths under `ReplicatedStorage.Requests` include `Action`, `AIWallSlam`, `WallSlam`, `Dashed`, `StopDash`, `Cooldown`, `CooldownNT`, `Effects`, `Flight`, `Beserk`, and `Oozaru`. These are the combat recorder's watched paths. Names alone do not establish arguments, behavior, permissions, or vulnerabilities.
 
@@ -95,3 +95,9 @@ Incoming CooldownNT payloads advertised Heavy=2 seconds and Grab=5 seconds. Defe
 The first capture included incoming Effects messages labelled Perfect Counter! (about 50.714 seconds) and Counter Parry! (about 65.849 seconds). PBlock, KiSlap, and CounterCooldown changes provide additional defense signals. These observations do not yet establish a reliable timing window for automatic defense.
 
 The recorder also observed health changes, animation starts/stops, Ki, Fatigue, PowerLevel, CombatTimer, and grab-related state. GUI discovery reached its 600-object bound in both sessions; actor discovery reached 1,000 objects, and one session reached the character-stat scan bound. No callback/capture errors or report-size limit were reported. Prioritize Workspace.Live and relevant HUD branches before treating missing actor or UI observations as absence. Raw captures and player identifiers remain local.
+
+## Sparkling player ESP sources
+
+`src/SparklingESP.lua` resolves each player independently from their current Character. The Power Level label reads only a finite, nonnegative direct Character.PowerLevel NumberValue/IntValue, observed in tutorial captures. It is not yet verified as base, effective, or suppressed battle power. Race accepts only explicit Race string attributes or direct Race StringValues on the Player/current Character; missing, numeric, or conflicting values show Unavailable. It does not infer race from appearance, search preview rigs/save slots, or substitute the local player's data for others.
+
+Race and Power Level have separate persisted ESP toggles. Recorders → Sparkling ESP Data → Capture ESP Data saves bounded field/source observations for current players to `AnomalyHub/universal/sparkling_esp_data_latest.txt`. No requests are sent. Source/build variants compile; live race availability and power semantics still require this capture.

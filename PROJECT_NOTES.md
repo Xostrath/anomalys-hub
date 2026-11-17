@@ -184,3 +184,8 @@ Sparkling has an **Auto** tab again, holding an Auto Training section with Auto 
 ### Sparkling hit-selector visibility (2026-11-17)
 
 Combat page v10 places separate Hit 3 / Hit 4 buttons above Enable Auto Parry, visibly marking the selected choice. This replaces the lower toggle the user could not find. Timing settings and stop/save-on-change behavior remain. See [SP-T028](docs/games/sparkling.md).
+
+
+### Sparkling all-hit restoration (2026-11-17)
+
+At the user's request, Combat page v11 restores all five known combo hits, including hit 1, and removes the temporary single-hit selector. Legacy TestHit settings no longer restrict coverage. Diagnostics remain automatic while enabled; timing seeds and preferences are unchanged. See [SP-T030](docs/games/sparkling.md).

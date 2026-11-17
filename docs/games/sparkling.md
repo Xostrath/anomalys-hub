@@ -4,12 +4,12 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 
 ## Read first
 
-**Current mode: SINGLE HIT TEST (Combat page v10 / diagnostics v5), selecting hit 3 or hit 4; first hit remains disabled.** The user explicitly requested active auto parry with recording and opponent-parry handling. This supersedes the temporary passive-only instruction; see SP-T021 for the latest correlation/LOS changes. Old mode instructions remain historical.
+**Current mode: ALL-HIT AUTO PARRY (Combat page v11 / diagnostics v5), including the first hit; temporary test restrictions removed at user request.** The user explicitly requested active auto parry with recording and opponent-parry handling. This supersedes the temporary passive-only instruction; see SP-T021 for the latest correlation/LOS changes. Old mode instructions remain historical.
 
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. User-supplied entry place: `120525873606470`.
 - Current objective: collect enough diagnostics to explain every automatic-defense attempt or skip before changing its timings.
-- Current defense: off-by-default isolated hit-3 / hit-4 trial. Nonselected known hits are recorded without F input. See SP-T025; existing seeds remain unchanged.
-- Latest implementation: **Combat page v10 / diagnostics v5**. Explicit Hit 3 / Hit 4 buttons above Enable, with SELECTED labels. 188 mocked assertions and source/both-build compilation passed. Hit-3/hit-4 filtering and stop/save-on-switch observed live; hit-4 baseline took damage on all four attempts (SP-T029).
+- Current defense: off-by-default all-five-combo auto parry with continuous diagnostics. Existing experimental seeds and timing limitations remain; see SP-T030.
+- Latest implementation: **Combat page v11 / diagnostics v5**. All-hit coverage restored; single-hit controls removed. 174 mocked assertions and source/both-build compilation passed; restoration awaits live validation (SP-T030).
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -24,9 +24,9 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Power ESP | Direct Character.PowerLevel numeric value; rounded whole numbers with commas | Numeric source observed; formatting compiled | Base, effective, or suppressed power? |
 | Ki ESP | Blue bar next to red health bar; requires known Ki and explicit positive MaxKi for fill | Ki observed; bar compiled | No verified MaxKi source; unknown max shows an empty track marked `?` |
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
-| Auto parry | Selectable isolated hit-3/hit-4 trial; other hits recorded without F input | Earlier timing evidence through SP-T024; selector implemented in SP-T025 | Selected-hit outcomes and broader timing reliability unverified |
+| Auto parry | All five known hits restored, including first hit; automatic diagnostics retained | Restored per user request, SP-T030 | Existing hit-3/hit-4 timing limitations remain; overall reliability unproven |
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v10 (SP-T028) | Explicit top-row Hit 3 / Hit 4 buttons; selected label; switch stops/saves and releases | 188 mocked assertions and compilation passed; both hit filters and switch observed live (SP-T029) | Compare hit-4 timing with one changed variable; input eligibility remains uncertain |
+| Combat page v11 (SP-T030) | Normal Auto Parry controls; no temporary single-hit filters | 174 mocked assertions and compilation passed; restoration untested live | Reload and verify all-hit coverage with ongoing diagnostics |
 | Parry diagnostics v5 | Recent API/input/request correlation; early releases and intervening input flags; bounded LOS object properties | Live: 25 release pairs and one unmatched cycle correctly separated (SP-T022) | Early-release/ambiguous-window branches remain mock-tested |
 
 ## Sources and capture workflow
@@ -850,3 +850,16 @@ All four attempts were also preceded by local damage approximately 0.40–0.42 s
 Against Thug6, attempt 1 at 7.6004 s has a sole-candidate self counter at 7.7316 s (~131 ms afterward, no input conflicts). Attempts 2 and 3 precede damage by 113.6 and 113.2 ms with no self counter. This remains mixed and must retain its target context separately from Shadow/Thug5.
 
 **Handoff:** both selected-hit filters and stop/save-on-switch are now observed live. The hit-4 zero-offset baseline has four repeated damage-associated outcomes; another unchanged generic baseline is unnecessary. A bounded next comparison can keep hit 4 selected and hold=120 while changing only offset to **+30 ms**. This deliberately tests a later press, not a claimed calibrated fix: the baseline requests precede damage by roughly 64–81 ms, leaving room for a small controlled shift in client scheduling. Server receipt order, hit-stun/eligibility and attacker attribution remain unknown. Keep the original seed at 0 and record the offset explicitly; do not update other combo seeds from this trial. The +30 ms comparison is proposed, **not applied** during this review.
+
+
+## SP-023 / SP-T030 — all-hit auto parry restored (2026-11-17)
+
+**User instruction:** add auto parry back. Combat page **v11 / diagnostics v5** restores automatic evaluation of all five known combo IDs, including the previously disabled first hit. This supersedes the temporary first-hit-disabled and single-hit-only experiments. Combat section is simply **Auto Parry**; the Hit 3 / Hit 4 test buttons and their filters are removed, and the original compact control layout is restored.
+
+Catalog: combo 1 (114493250337466)=0.04 s, combo 2 (84394230178792)=0.04 s, combo 3 (95937874840716)=0 s, combo 4 (139487903747364)=0 s, combo 5 (131649056441662)=0.04 s. These are retained experimental seeds, not newly calibrated timings. The proposed +30 ms hit-4 experiment was not applied. Installed saved offset=0 / hold=120 at preparation; those settings remain unchanged. Existing saved TestHit is ignored and omitted on subsequent normal saves, so a prior TestHit=4 cannot restrict restored coverage.
+
+Continuous diagnostics, request/input correlation, scoped head-effect/Z-vanish LOS exclusions, observed cooldown gates, range/facing checks, target ownership/PvP/PvE preferences, typing/menu pauses and release/stop behavior remain. Auto parry still starts OFF on reload; the user enables it. Reports identify scope=all_five in Config/START/CUE_ACCEPTED, while unknown animations remain unmapped. Removing the temporary restrictions does not resolve the recorded hit-3/hit-4 timing limitations; preserve their evidence in SP-T024–SP-T029.
+
+**Validation:** 174 mocked assertions passed: 47 logger/lifecycle, 42 active catalog/LOS/deferral/counter, 26 PvP/PvE, 6 settings/reload, 34 async correlation/LOS, and 19 restoration-specific checks. The latter load legacy TestHit=4 and verify every known hit generates an eligible input for both NPC and player ownership, test controls/filters are absent, old selection is omitted on save, scope is explicit and cleanup completes. Updated source and both staged builds compile. Restoration is not yet live-validated. Exact module replacement preserves concurrent changes in public/private builds.
+
+**Handoff:** reload and enable **Combat → Auto Parry**. All five known combos can now trigger under their existing gates, with logging automatic while enabled. Do not reintroduce single-hit restrictions without a new request; retain the recorder to evaluate real outcomes and unresolved timing issues.

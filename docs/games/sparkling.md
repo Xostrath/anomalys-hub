@@ -153,6 +153,21 @@ SP-T005 local-clock details: attempts at 2609.3927 (`84394230178792`), 2609.8081
 ## Change history
 
 - 2026-11-17 — **ID note:** ESP/Visuals entries use their own **SP-V###** series because two chats were numbering SP-T### in parallel and collided (SP-T011–T014). The renumbered entries are V001 (was T010), V002 (T011), V003 (T012), V004 (T013) and V005 (T014). Commit messages 9189a4c, de2c942, 115adaf and 0cd2f94 still cite the old numbers. GPT's SP-T011–T014 are unrelated parry entries.
+- 2026-11-17 — Visuals v2 (SP-V007). **Profile Scan reviewed** (main world; the user's own character plus 3 other players, keyword-only for others). The user notes some values are hidden in-game.
+  - **Replicated character data, readable for every player:**
+    - `@Karma`: a number (user −35; others 0/−5/−15); the menu shows only a label.
+    - `@Trait`: SaiyanHybrid / TriHuman / Traditional. Shown as Race Variant, a **hypothesis**.
+    - `LimitBreak` (NumberValue) and `@Limit` (0/1). Shown as Limit Break Progress, a **hypothesis**.
+    - `RacePotential` (1, 0.85). Shown as Latent Power, a **hypothesis**.
+    - `@Form` (current form).
+    - Also seen: `@EventWins`, `@TalentDraw`, `@Title`, `@Weaves`, `@SparPartner`, `@Prey`, `Focus`, `Posture`, `Wanted`, `GravityAugment`, `CurrentArea`, `TempStrength`.
+  - **The user's own UI only:**
+    - `PlayerGui.Inventory.PlayerStat.CharacterInfoHolder.CharacterInfo.infos`: "Personality: …", "Combat Style: …", "Karma: <label>", "Emotion: <label>" (rich text).
+    - `…PlayerStat.Stats.StatHolder.<Stat>.StatName/Amount`: Strength, Agility, CoreStr ("Body Strength"), Concentration, Reactions; `Stats.Points` "Stat Points: N".
+    - Hidden HUD counters `HUD.PlayerBody.KarmaCounter.Number` / `EmotionCounter.Number` ("[9%]", "[6%]", `visible=false`).
+    - Other players' personality, emotion and stats were not found replicated.
+  - **Not found:** CEXP, form mastery, relationships. ReplicatedStorage has a guide topic `NEWUI.KiMenu.GuideTopics["Mechanics - Battle Power & CombatEXP"]`, and `ReplicatedStorage.Trainers.<name>.Stats.Strength` / `PowerLevel` (trainer reference data).
+  - **Implemented / untested live:** the Visuals rows read the sources above; hypotheses show "(?)" and own-only fields show "Hidden (only shown for you)" for other players. A **Hidden Value Scan** button searches client memory tables (`getgc`, raw `next`), dumps the guide text for these mechanics and lists data-like remote names (never called). Output: `sparkling_hidden_scan_latest.txt`.
 - 2026-11-17 — Visuals tab v1 (SP-V006): new **Visuals** tab (`src/SparklingVisuals.lua`), plus **Recorders → Sparkling Profile Scan**.
   - Player dropdown at the top, defaulting to you and listing every player.
   - Profile rows: CEXP, Battle Power, Stats, Personality, Race, Race Variant, Form Mastery, Limit Break Progress, Karma, Latent Power, Emotion, Relationships.

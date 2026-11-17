@@ -2415,17 +2415,6 @@ local function commas(n)
  local text=tostring(math.floor(n+.5))
  return (text:reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,",""):gsub("^%-,","-"))
 end
--- A source is {Root="Character"|"Player", Path={child names...}, Attribute=name?}; the first one that resolves wins.
-local function read(target,source)
- local object=source.Root=="Player" and target or target.Character
- for _,name in ipairs(source.Path or {})do
-  object=object and object:FindFirstChild(name)
- end
- if not object then return nil end
- if source.Attribute then return object:GetAttribute(source.Attribute)end
- if object:IsA("ValueBase")then return object.Value end
- return nil
-end
 local function show(value)
  if value==nil then return nil end
  if finite(value)then return math.abs(value)>=1000 and commas(value) or (value%1==0 and tostring(value) or string.format("%.1f",value))end
@@ -2433,20 +2422,80 @@ local function show(value)
  if type(value)=="boolean" then return value and "Yes" or "No" end
  return nil
 end
--- Confirmed sources only. Everything with Sources={} still needs the Profile Scan.
+-- Your own stats menu (PlayerGui.Inventory.PlayerStat) and hidden HUD counters. These exist only for you.
+local function strip(text)return (tostring(text or ""):gsub("<[^>]*>",""))end
+local function infoLine(prefix)
+ local gui=localPlayer:FindFirstChildOfClass("PlayerGui")
+ local infos=gui and gui:FindFirstChild("Inventory")
+ for _,name in ipairs({"PlayerStat","CharacterInfoHolder","CharacterInfo","infos"})do infos=infos and infos:FindFirstChild(name)end
+ if not infos then return nil end
+ for _,child in ipairs(infos:GetChildren())do
+  if child:IsA("TextLabel")then
+   local value=strip(child.Text):match("^%s*"..prefix..":%s*(.-)%s*$")
+   if value and value~="" then return value end
+  end
+ end
+ return nil
+end
+local function hudCounter(name)
+ local gui=localPlayer:FindFirstChildOfClass("PlayerGui")
+ local object=gui and gui:FindFirstChild("HUD")
+ for _,part in ipairs({"PlayerBody",name,"Number"})do object=object and object:FindFirstChild(part)end
+ return object and object:IsA("TextLabel") and object.Text:match("(%-?[%d%.]+%%)") or nil
+end
+local function ownStats()
+ local gui=localPlayer:FindFirstChildOfClass("PlayerGui")
+ local holder=gui and gui:FindFirstChild("Inventory")
+ for _,name in ipairs({"PlayerStat","Stats","StatHolder"})do holder=holder and holder:FindFirstChild(name)end
+ if not holder then return nil end
+ local parts={}
+ for _,stat in ipairs(holder:GetChildren())do
+  local name,amount=stat:FindFirstChild("StatName"),stat:FindFirstChild("Amount")
+  if name and amount and name:IsA("TextLabel") and amount:IsA("TextLabel") and amount.Text:match("%d")then
+   table.insert(parts,strip(name.Text).." "..strip(amount.Text))
+  end
+ end
+ table.sort(parts)
+ local points=holder.Parent and holder.Parent:FindFirstChild("Points")
+ if points and points:IsA("TextLabel") and points.Text:match("%d")then table.insert(parts,strip(points.Text))end
+ return #parts>0 and table.concat(parts," · ") or nil
+end
+local function attr(target,name)return target.Character and target.Character:GetAttribute(name)end
+local function value(target,name)
+ local object=target.Character and target.Character:FindFirstChild(name)
+ return object and object:IsA("ValueBase") and object.Value or nil
+end
+local OWN_ONLY="Hidden (only shown for you)"
+-- Sources from the Profile Scan (2026-11-17). Character attributes/values replicate for every player; the stats menu is yours only.
+-- A field marked (?) is a likely mapping that still needs confirming.
 local FIELDS={
- {Label="Combat Experience (CEXP)",Sources={}},
- {Label="Battle Power",Sources={{Root="Character",Path={"PowerLevel"}}}},
- {Label="Stats",Sources={}},
- {Label="Personality",Sources={}},
- {Label="Race",Sources={{Root="Character",Attribute="Race"}}},
- {Label="Race Variant",Sources={}},
- {Label="Form Mastery",Sources={}},
- {Label="Limit Break Progress",Sources={}},
- {Label="Karma",Sources={}},
- {Label="Latent Power",Sources={}},
- {Label="Emotion",Sources={}},
- {Label="Relationships",Sources={}},
+ {Label="Combat Experience (CEXP)",Resolve=function()return nil end},
+ {Label="Battle Power",Resolve=function(target)return show(value(target,"PowerLevel"))end},
+ {Label="Stats",Resolve=function(target)if target~=localPlayer then return OWN_ONLY end;return ownStats() or "Open your stats menu once"end},
+ {Label="Personality",Resolve=function(target)if target~=localPlayer then return OWN_ONLY end;return infoLine("Personality") or "Open your stats menu once"end},
+ {Label="Race",Resolve=function(target)return show(attr(target,"Race"))end},
+ {Label="Race Variant",Resolve=function(target)local trait=show(attr(target,"Trait"));return trait and (trait.." (?)")end},
+ {Label="Form Mastery",Resolve=function()return nil end},
+ {Label="Limit Break Progress",Resolve=function(target)
+  local progress,limit=value(target,"LimitBreak"),attr(target,"Limit")
+  if not finite(progress) and not finite(limit) then return nil end
+  return (show(progress) or "?").." (Limit "..(show(limit) or "?")..") (?)"
+ end},
+ {Label="Karma",Resolve=function(target)
+  local number=show(attr(target,"Karma"))
+  if not number then return nil end
+  if target~=localPlayer then return number end
+  local label,percent=infoLine("Karma"),hudCounter("KarmaCounter")
+  return number..(label and (" · "..label) or "")..(percent and (" · "..percent) or "")
+ end},
+ {Label="Latent Power",Resolve=function(target)local potential=show(value(target,"RacePotential"));return potential and ("x"..potential.." RacePotential (?)")end},
+ {Label="Emotion",Resolve=function(target)
+  if target~=localPlayer then return OWN_ONLY end
+  local label,percent=infoLine("Emotion"),hudCounter("EmotionCounter")
+  if not label and not percent then return "Open your stats menu once" end
+  return (label or "?")..(percent and (" · "..percent) or "")
+ end},
+ {Label="Relationships",Resolve=function()return nil end},
 }
 
 -- Player picker: defaults to you; the list rebuilds as players join and leave.
@@ -2500,7 +2549,7 @@ for index,field in ipairs(FIELDS)do
 end
 ui.Create("TextLabel",{Position=UDim2.fromOffset(14,#FIELDS*ROW+4),Size=UDim2.new(1,-28,0,24),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=9,
  TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="\"Not found yet\" means the game's source for that field hasn't been located. Run Recorders -> Sparkling Profile Scan with your stats menu open."},profile.Body)
+ Text="(?) = likely source, not yet confirmed. \"Not found yet\" = still hidden; Recorders -> Sparkling Profile Scan -> Hidden Value Scan searches for it."},profile.Body)
 
 local elapsed=0
 controller.Connect(run.Heartbeat,function(dt)
@@ -2509,18 +2558,16 @@ controller.Connect(run.Heartbeat,function(dt)
  elapsed=0
  if not target or target.Parent~=players then target=localPlayer;refreshPicker()end
  for index,field in ipairs(FIELDS)do
-  local text
-  if #field.Sources==0 then text="Not found yet"
-  else
-   for _,source in ipairs(field.Sources)do
-    local ok,value=pcall(read,target,source)
-    text=ok and show(value) or nil
-    if text then break end
-   end
-   text=text or (target.Character and "Unavailable" or "No character")
+  local ok,text=pcall(field.Resolve,target)
+  text=ok and text or nil
+  local missing=text==nil
+  if missing then
+   -- CEXP, Form Mastery and Relationships have no source yet; the rest are just absent right now.
+   text=(field.Label:find("CEXP",1,true) or field.Label=="Form Mastery" or field.Label=="Relationships") and "Not found yet"
+    or (target.Character and "Unavailable" or "No character")
   end
   values[index].Text=text
-  values[index].TextColor3=(text=="Not found yet" or text=="Unavailable" or text=="No character") and colors.Muted or colors.Text
+  values[index].TextColor3=(missing or text==OWN_ONLY) and colors.Muted or colors.Text
  end
 end)
 
@@ -2532,7 +2579,7 @@ local function matches(text)
  for _,word in ipairs(KEYWORDS)do if text:find(word,1,true)then return word end end
  return nil
 end
-local card=ui.Card(ui.Pages.Recorders,"SPARKLING PROFILE SCAN","Finds where CEXP, stats, personality, karma and the other Visuals fields live. Open your in-game stats/profile menu first. No requests are sent.",200)
+local card=ui.Card(ui.Pages.Recorders,"SPARKLING PROFILE SCAN","Profile Scan: replicated data and your open stats menu. Hidden Value Scan: client memory tables, guide text and data remote names, for CEXP, form mastery and other hidden values. No requests are sent.",200)
 card.LayoutOrder=31
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,70),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
  TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Ready. Output: sparkling_profile_scan_latest.txt"},card)
@@ -2607,8 +2654,109 @@ local function scan()
  busy=false
  if not ok then status.Text="Scan failed: "..tostring(err):sub(1,160)end
 end
-local button=ui.Button(card,"Run Profile Scan",14,72,180,scan,colors.AccentSoft)
-button.Size=UDim2.new(1,-28,0,34)
+ui.FitColumn(ui.Button(card,"Run Profile Scan",0,0,180,scan,colors.AccentSoft),0,72)
+
+-- Hidden values (CEXP, form mastery, relationships...) aren't replicated as instances. This reads the client's own memory tables
+-- (getgc, raw next, no metamethods), the game's guide text for those mechanics, and lists data-like remote names without calling them.
+local HIDDEN={"cexp","combatexp","combat_exp","combatxp","mastery","latent","emotion","relation","friend","bond","affinity","personality",
+ "karma","limitbreak","potential","trait"}
+local function hiddenKey(key)
+ if type(key)~="string" then return nil end
+ key=key:lower()
+ for _,word in ipairs(HIDDEN)do if key:find(word,1,true)then return word end end
+ return nil
+end
+local function describe(object)
+ local parts,count={},0
+ for key,item in next,object do
+  count+=1
+  if count>16 then table.insert(parts,"...");break end
+  local kind=type(item)
+  local text=(kind=="string" and string.format("%q",item:sub(1,60))) or ((kind=="number" or kind=="boolean") and tostring(item)) or ("<"..typeof(item)..">")
+  table.insert(parts,tostring(key):sub(1,40).."="..text)
+ end
+ return "{"..table.concat(parts,", ").."}"
+end
+local function hiddenScan()
+ if busy or controller.IsUnloaded()then return end
+ busy=true;status.Text="Hidden value scan running (may take a few seconds)..."
+ local ok,err=pcall(function()
+  local lines={"SPARKLING HIDDEN VALUE SCAN v1 // READ ONLY","place="..game.PlaceId.." universe="..game.GameId,
+   "TABLE = a client memory table with a matching key (raw read, no metamethods). GUIDE = the game's guide text. REMOTE = name only, never called."}
+  local function log(s)if #lines<5000 then table.insert(lines,s)end end
+  local gc=getgc or env.getgc
+  if type(gc)~="function" then log("getgc unavailable in this executor")
+  else
+   local got,objects=pcall(gc,true)
+   if not got or type(objects)~="table" then log("getgc failed: "..tostring(objects))
+   else
+    local checked,found,signatures=0,0,{}
+    for _,object in ipairs(objects)do
+     if type(object)=="table" then
+      checked+=1
+      if checked%25000==0 then task.wait()end
+      if checked>400000 then log("LIMIT 400000 tables checked");break end
+      local hit
+      pcall(function()
+       local n=0
+       for key in next,object do
+        n+=1;if n>300 then break end
+        local word=hiddenKey(key)
+        if word then hit=tostring(key);break end
+       end
+      end)
+      if hit then
+       local okText,text=pcall(describe,object)
+       text=okText and text or "<unreadable>"
+       -- Many tables share a shape (one per NPC or item); log each shape once with a count.
+       local signature=hit.."|"..text:gsub("=[^,}]*","")
+       signatures[signature]=(signatures[signature] or 0)+1
+       if signatures[signature]==1 then
+        found+=1
+        if found<=600 then log("TABLE key="..hit.." "..text)end
+       end
+      end
+     end
+    end
+    log(string.format("TABLES checked=%d distinctMatches=%d",checked,found))
+    for signature,count in pairs(signatures)do if count>1 then log("REPEATED x"..count.." "..signature:sub(1,200))end end
+   end
+  end
+  local topics=rs:FindFirstChild("NEWUI")
+  topics=topics and topics:FindFirstChild("KiMenu")
+  topics=topics and topics:FindFirstChild("GuideTopics")
+  if topics then
+   for _,topic in ipairs(topics:GetChildren())do
+    local name=topic.Name:lower()
+    if name:find("exp",1,true) or name:find("power",1,true) or name:find("karma",1,true) or name:find("emotion",1,true) or name:find("mastery",1,true)
+     or name:find("limit",1,true) or name:find("potential",1,true) or name:find("latent",1,true) or name:find("relation",1,true) or name:find("personality",1,true) or name:find("form",1,true)then
+     log("GUIDE "..topic.Name)
+     for _,object in ipairs({topic,table.unpack(topic:GetDescendants())})do
+      for key,item in pairs(object:GetAttributes())do log("GUIDE_ATTR "..object.Name.."@"..key.."="..tostring(item):sub(1,400))end
+      if object:IsA("StringValue")then log("GUIDE_TEXT "..object.Name.."="..object.Value:sub(1,400))end
+      if (object:IsA("TextLabel") or object:IsA("TextButton")) and object.Text:match("%S")then log("GUIDE_TEXT "..object.Name.."="..object.Text:sub(1,400))end
+     end
+    end
+   end
+  else log("GUIDE topics folder not found")end
+  for _,object in ipairs(game:GetDescendants())do
+   if (object:IsA("RemoteFunction") or object:IsA("RemoteEvent")) then
+    local name=object.Name:lower()
+    if name:find("data",1,true) or name:find("profile",1,true) or name:find("stat",1,true) or name:find("relation",1,true) or name:find("karma",1,true)
+     or name:find("emotion",1,true) or name:find("mastery",1,true) or name:find("info",1,true) or name:find("inspect",1,true)then
+     log("REMOTE "..object.ClassName.." "..object:GetFullName())
+    end
+   end
+  end
+  log("END")
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  local saved=type(writefile)=="function" and pcall(writefile,"AnomalyHub/universal/sparkling_hidden_scan_latest.txt",table.concat(lines,"\n"))
+  status.Text=saved and ("Hidden scan saved: "..#lines.." lines in sparkling_hidden_scan_latest.txt.") or "Save failed."
+ end)
+ busy=false
+ if not ok then status.Text="Hidden scan failed: "..tostring(err):sub(1,160)end
+end
+ui.FitColumn(ui.Button(card,"Hidden Value Scan",0,0,180,hiddenScan,colors.AccentSoft),1,72)
 
 end)()
 ;(function()

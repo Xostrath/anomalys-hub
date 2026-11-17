@@ -2299,7 +2299,7 @@ if state.NpcEspEnabled then startWatching() end
 end)()
 ;(function()
 -- Experimental: two observed attack animations; F input, never remote replay.
--- Combat page v3 (2026-11-17): NPC attackers only (players are always skipped); keybindable Enable/PvE rows, range slider (4-50 studs, default 8), Don't Parry If Knocked/Off Screen/Typing.
+-- Combat page v4: independent PvP/PvE checks, player ownership detection, range and skip options.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -2328,7 +2328,7 @@ local diagnosticStatus,button
 local players=game:GetService("Players")
 -- Combat page options (user's reference layout, 2026-11-17). Auto Parry itself never turns on after a reload; only these options persist.
 local settingsPath=rootPath.."sparkling_combat_settings.json"
-local settings={Range=8,PvE=true,SkipKnocked=true,SkipOffScreen=false,SkipTyping=true,Binds={}}
+local settings={Range=8,PvE=true,PvP=false,SkipKnocked=true,SkipOffScreen=false,SkipTyping=true,Binds={}}
 if type(readfile)=="function" then
  local ok,saved=pcall(function()return http:JSONDecode(readfile(settingsPath))end)
  if ok and type(saved)=="table" then
@@ -2374,7 +2374,7 @@ local function report(reason)
   .."\nSELF_COUNTER lists all attempts in the preceding 1s; attacker is not established. Multiple candidates are ambiguous. Health changes are observations, not verdicts."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s; save=5s."
-  .."\nConfig: range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." players=never pve="..tostring(settings.PvE)
+  .."\nConfig: range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
   .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." skipTyping="..tostring(settings.SkipTyping).." attackerDot>=0.2 selfDot>=0 delay84394230178792=0.04 delay95937874840716=0 hold=0.12 pulseGap=0.3 cueExpiry=0.25"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
@@ -2397,11 +2397,33 @@ local function save(reason)
  end
  return latest and history
 end
+-- Preserve known player ownership across respawn/removal so an old character never becomes an NPC target.
+local knownPlayerCharacters=setmetatable({},{__mode="k"})
+local function targetOwner(model)
+ if not model or not model:IsA("Model")then return nil end
+ local owner=players:GetPlayerFromCharacter(model)
+ if owner then knownPlayerCharacters[model]=owner end
+ return owner or knownPlayerCharacters[model]
+end
+local function targetKind(model)
+ if not model or not model:IsA("Model")then return "Unknown"end
+ return targetOwner(model) and "Player" or "NPC"
+end
+local function targetAllowed(model)
+ if model==player.Character then return false,"self_target"end
+ local owner=targetOwner(model)
+ if owner then
+  if owner==player then return false,"self_target"end
+  if owner.Character~=model or owner.Parent~=players then return false,"stale_player_character"end
+  if not settings.PvP then return false,"pvp_off"end
+ elseif not settings.PvE then return false,"pve_off"end
+ return true
+end
 local function actor(model)
  if not session or not model then return "none"end
  if not session.Actors[model]then
   session.ActorSerial+=1;session.Actors[model]=session.ActorSerial
-  log("ACTOR","id="..session.ActorSerial.." self="..tostring(model==player.Character).." model="..sample(model))
+  log("ACTOR","id="..session.ActorSerial.." self="..tostring(model==player.Character).." targetType="..targetKind(model).." model="..sample(model))
  end
  return tostring(session.Actors[model])
 end
@@ -2465,10 +2487,10 @@ end
 
 -- Combat page in the Hunter X Enter section style: an "Auto Parry" section of keybindable rows, then "Don't Parry If".
 local page=ui.Pages.Combat or ui.Pages.Auto
-local parrySection=ui.Section(page,"Auto Parry",200,true)
+local parrySection=ui.Section(page,"Auto Parry",238,true)
 parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
-local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,142),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,180),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
  Text="Off. Experimental: two recorded melee attacks only; no heavy attacks, projectiles or other styles. Never enables itself after reload. Diagnostics save/copy in Recorders."},card)
 local function release(reason)
@@ -2511,7 +2533,7 @@ end
 local function observe(model,track)
  if not enabled then return end
  local now=os.clock()
- local detail="actor="..actor(model).." "..trackData(track)
+ local detail="actor="..actor(model).." targetType="..targetKind(model).." "..trackData(track)
  session.CueSerial+=1
  local serial=session.CueSerial
  detail="cue="..serial.." "..detail
@@ -2530,10 +2552,8 @@ local function observe(model,track)
  local id=track.Animation and track.Animation.AnimationId:match("%d+")
  local delay=id and attacks[id]
  if delay==nil then skip("unmapped_animation",detail);return end
- -- Workspace.Live holds players and NPCs (trainers) alike; a Player owning the model makes it a player.
- -- Scope: automated defense is for NPCs only; attacks from other players are never auto-parried.
- if players:GetPlayerFromCharacter(model)~=nil then skip("player_attacker",detail);return end
- if not settings.PvE then skip("pve_off",detail);return end
+ local allowed,targetReason=targetAllowed(model)
+ if not allowed then skip(targetReason,"stage=observe "..detail);return end
  local valid,reason,geometry=threat(model)
  if not valid then skip(reason,"stage=observe "..detail.." "..geometry);return end
  seen[track]=now
@@ -2541,15 +2561,29 @@ local function observe(model,track)
  table.insert(pending,{Model=model,Track=track,Id=id,Serial=serial,At=now+delay,SeenAt=now,Expires=now+.25})
  log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
 end
+local targetsLabel
 local function sync()
  local live=workspace:FindFirstChild("Live")
  local wanted={}
  if session.LivePresent~=(live~=nil)then session.LivePresent=live~=nil;log("COVERAGE","Workspace.Live="..tostring(live~=nil))end
- if live then
-  for _,model in ipairs(live:GetChildren())do
+ local pool,added={},{}
+ local function add(model)
+  if model and not added[model]then added[model]=true;table.insert(pool,model)end
+ end
+ for _,otherPlayer in ipairs(players:GetPlayers())do
+  local character=otherPlayer.Character
+  if character then knownPlayerCharacters[character]=otherPlayer;add(character)end
+ end
+ if live then for _,model in ipairs(live:GetChildren())do add(model)end end
+ local playerCount,npcCount=0,0
+ do
+  for _,model in ipairs(pool)do
    local root,hum=roots(model)
    local localRoot=roots(player.Character)
-   if model~=player.Character and root and localRoot and (root.Position-localRoot.Position).Magnitude<=math.max(30,settings.Range+10) then
+   local owner=targetOwner(model)
+   local currentActor=not owner or (owner.Parent==players and owner.Character==model)
+   if currentActor and model~=player.Character and model:IsDescendantOf(workspace) and root and localRoot and (root.Position-localRoot.Position).Magnitude<=math.max(30,settings.Range+10) then
+    if targetOwner(model)then playerCount+=1 else npcCount+=1 end
     local animator=hum:FindFirstChildOfClass("Animator")
     if animator then
      wanted[model]=true
@@ -2560,13 +2594,16 @@ local function sync()
      end
      if not watched[model]then
       watched[model]={Animator=animator,Tracks={},TrackCount=0,Connection=animator.AnimationPlayed:Connect(guarded("AnimationPlayed",function(track)observe(model,track)end))}
-      log("WATCH_ADD","actor="..actor(model).." distance="..(root.Position-localRoot.Position).Magnitude)
+      log("WATCH_ADD","actor="..actor(model).." targetType="..targetKind(model).." distance="..(root.Position-localRoot.Position).Magnitude)
       for _,track in ipairs(animator:GetPlayingAnimationTracks())do log("ANIM_EXISTING","actor="..actor(model).." "..trackData(track))end
      end
     end
    end
   end
  end
+ if targetsLabel then targetsLabel.Text=string.format("Nearby: %d players · %d NPCs (%.0f studs)",playerCount,npcCount,math.max(30,settings.Range+10))end
+ local counts=playerCount..":"..npcCount
+ if session.TargetCounts~=counts then session.TargetCounts=counts;log("TARGET_COUNTS","players="..playerCount.." npcs="..npcCount)end
  for model,entry in pairs(watched)do
   if not wanted[model]then
    entry.Connection:Disconnect();for _,connection in pairs(entry.Tracks)do connection:Disconnect()end
@@ -2680,8 +2717,9 @@ controller.Connect(input.InputEnded,function(io)
  end
 end)
 optionRow(card,74,"PvE","PVE (NPCs)",function()return settings.PvE end,setting("PvE"))
-ui.Create("TextLabel",{Position=UDim2.fromOffset(14,106),Size=UDim2.new(1,-28,0,30),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
- TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="NPC attacks only. Attacks from other players are never auto-parried."},card)
+optionRow(card,104,"PvP","PVP (Players)",function()return settings.PvP end,setting("PvP"))
+targetsLabel=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,140),Size=UDim2.new(1,-28,0,32),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Enable Auto Parry to detect nearby players and NPCs."},card)
 
 local skipSection=ui.Section(page,"Don't Parry If",96,true)
 skipSection.Frame.LayoutOrder=2
@@ -2747,13 +2785,14 @@ local function update(dt)
   if now>=cue.At then
    table.remove(pending,i)
    local valid,geometryReason,geometry=threat(cue.Model)
+   local allowed,targetReason=targetAllowed(cue.Model)
    local manualF=input:IsKeyDown(Enum.KeyCode.F)
    local detail=string.format("cue=%d actor=%s age=%.4f scheduledLate=%.4f held=%s pulseRemaining=%.4f counterRemaining=%.4f inputF=%s %s %s",
-    cue.Serial,actor(cue.Model),now-cue.SeenAt,now-cue.At,tostring(held),math.max(0,nextPulse-now),math.max(0,cooldownUntil-now),tostring(manualF),trackData(cue.Track),geometry)
+    cue.Serial,actor(cue.Model),now-cue.SeenAt,now-cue.At,tostring(held),math.max(0,nextPulse-now),math.max(0,cooldownUntil-now),tostring(manualF),trackData(cue.Track),geometry).." targetType="..targetKind(cue.Model)
    -- "Knocked" is Character.Ragdolled (observed in captures as a boolean attribute); hypothesis until a knocked test confirms it.
    local knocked=settings.SkipKnocked and ownCharacter:GetAttribute("Ragdolled")==true
    local offScreen=settings.SkipOffScreen and not onScreen(cue.Model)
-   local reason=now>cue.Expires and "expired" or held and "already_held" or now<nextPulse and "pulse_cooldown"
+   local reason=not allowed and targetReason or now>cue.Expires and "expired" or held and "already_held" or now<nextPulse and "pulse_cooldown"
     or now<cooldownUntil and "counter_cooldown" or manualF and "f_already_down" or not cue.Track.IsPlaying and "track_stopped"
     or knocked and "self_knocked" or offScreen and "off_screen" or not valid and geometryReason
    if reason then skip(reason,"stage=execute "..detail)else

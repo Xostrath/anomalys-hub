@@ -88,14 +88,14 @@ local stale = playerGui:FindFirstChild("AnomalyUniversal")
 if stale then stale:Destroy() end
 
 local colors = {
-	Background = Color3.fromRGB(40, 35, 50),
-	Surface = Color3.fromRGB(48, 40, 59),
-	Raised = Color3.fromRGB(62, 53, 77),
-	Stroke = Color3.fromRGB(90, 78, 107),
-	Text = Color3.fromRGB(250, 246, 255),
-	Muted = Color3.fromRGB(203, 191, 218),
-	Accent = Color3.fromRGB(218, 197, 255),
-	AccentSoft = Color3.fromRGB(103, 80, 127),
+	Background = Color3.fromRGB(14, 15, 18),
+	Surface = Color3.fromRGB(20, 21, 25),
+	Raised = Color3.fromRGB(24, 25, 30),
+	Stroke = Color3.fromRGB(43, 43, 51),
+	Text = Color3.fromRGB(238, 237, 244),
+	Muted = Color3.fromRGB(157, 155, 171),
+	Accent = Color3.fromRGB(195, 157, 255),
+	AccentSoft = Color3.fromRGB(67, 47, 92),
 	Success = Color3.fromRGB(134, 230, 173),
 	Danger = Color3.fromRGB(213, 78, 91),
 	Warning = Color3.fromRGB(255, 209, 133),
@@ -209,40 +209,44 @@ local shadow = create("Frame", {
 	Size = UDim2.fromOffset(780, 600), BackgroundColor3 = Color3.new(),
 	BackgroundTransparency = 0.42, BorderSizePixel = 0,
 }, gui)
-create("UICorner", {CornerRadius = UDim.new(0, 10)}, shadow)
+create("UICorner", {CornerRadius = UDim.new(0, 5)}, shadow)
 
 local window = create("Frame", {
 	Name = "Window", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 	Size = UDim2.fromOffset(780, 600), BackgroundColor3 = colors.Background,
 	BorderSizePixel = 0, ClipsDescendants = true, Active = true,
 }, gui)
-create("UICorner", {CornerRadius = UDim.new(0, 10)}, window)
-create("UIStroke", {Color = colors.AccentSoft, Thickness = 2, Transparency = 0.12}, window)
+create("UICorner", {CornerRadius = UDim.new(0, 5)}, window)
+create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0}, window)
 
 local sidebar = create("Frame", {
-	Name = "Sidebar", Size = UDim2.new(0, 168, 1, 0), BackgroundColor3 = colors.Surface,
+	Name = "Sidebar", Size = UDim2.new(0, 148, 1, 0), BackgroundColor3 = colors.Background,
 	BorderSizePixel = 0,
 }, window)
 create("Frame", {Position = UDim2.new(1, -1, 0, 0), Size = UDim2.new(0, 1, 1, 0), BackgroundColor3 = colors.Stroke, BorderSizePixel = 0}, sidebar)
+local brandIcon=create("TextLabel",{Position=UDim2.fromOffset(12,18),Size=UDim2.fromOffset(24,24),BackgroundColor3=colors.AccentSoft,
+	BorderSizePixel=0,Text="A",Font=Enum.Font.GothamBold,TextSize=16,TextColor3=colors.Accent},sidebar)
+create("UICorner",{CornerRadius=UDim.new(0,4)},brandIcon)
 create("TextLabel", {
-	Position = UDim2.fromOffset(18, 16), Size = UDim2.new(1, -36, 0, 22), BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBold, Text = "ANOMALY", TextColor3 = colors.Text, TextSize = 16,
+	Position = UDim2.fromOffset(44, 14), Size = UDim2.new(1, -52, 0, 22), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold, Text = "ANOMALY", TextColor3 = colors.Text, TextSize = 13,
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
 create("TextLabel", {
-	Position = UDim2.fromOffset(18, 39), Size = UDim2.new(1, -36, 0, 16), BackgroundTransparency = 1,
-	Font = Enum.Font.Code, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER" or "UNIVERSAL PROFILE", TextColor3 = colors.Accent, TextSize = 9,
+	Position = UDim2.fromOffset(44, 34), Size = UDim2.new(1, -48, 0, 14), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER" or "UNIVERSAL", TextColor3 = colors.Muted, TextSize = 8,
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
 
-local tabBar = create("Frame", {
-	Position = UDim2.fromOffset(10, 76), Size = UDim2.new(1, -20, 0, 300), BackgroundTransparency = 1,
+local tabBar = create("ScrollingFrame", {
+	Position = UDim2.fromOffset(8, 72), Size = UDim2.new(1, -16, 1, -140), BackgroundTransparency = 1,
+	BorderSizePixel=0,ScrollBarThickness=0,AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new(),
 }, sidebar)
-create("UIListLayout", {Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder}, tabBar)
+create("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, tabBar)
 
 create("TextLabel", {
 	Position = UDim2.new(0, 18, 1, -56), Size = UDim2.new(1, -36, 0, 14), BackgroundTransparency = 1,
-	Font = Enum.Font.Code, Text = "ACTIVE PILOT", TextColor3 = colors.Muted, TextSize = 8,
+	Font = Enum.Font.Gotham, Text = "RIGHT ALT  ·  SHOW / HIDE", TextColor3 = colors.Muted, TextSize = 8,
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
 create("TextLabel", {
@@ -252,29 +256,56 @@ create("TextLabel", {
 }, sidebar)
 
 local topBar = create("Frame", {
-	Position = UDim2.fromOffset(168, 0), Size = UDim2.new(1, -168, 0, 72),
+	Position = UDim2.fromOffset(148, 0), Size = UDim2.new(1, -148, 0, 58),
 	BackgroundColor3 = colors.Surface, BorderSizePixel = 0, Active = true,
 }, window)
 local titleLabel = create("TextLabel", {
-	Position = UDim2.fromOffset(18, 12), Size = UDim2.new(1, -220, 0, 22), BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBold, Text = "DASHBOARD", TextColor3 = colors.Text, TextSize = 15,
+	Position = UDim2.fromOffset(14, 9), Size = UDim2.new(1, -230, 0, 20), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold, Text = "DASHBOARD", TextColor3 = colors.Text, TextSize = 14,
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, topBar)
 local subtitleLabel = create("TextLabel", {
-	Position = UDim2.fromOffset(18, 37), Size = UDim2.new(1, -220, 0, 18), BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(14, 32), Size = UDim2.new(1, -230, 0, 16), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Game-neutral tools and live session information", TextColor3 = colors.Muted,
 	TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
 }, topBar)
 local profileLabel = create("TextLabel", {
-	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v12\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
-	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
+	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -76, 0, 20), Size = UDim2.fromOffset(146, 18),
+	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v13" or "UNIVERSAL // ACTIVE",
+	TextColor3 = colors.Accent, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
 local content = create("Frame", {
-	Position = UDim2.fromOffset(168, 72), Size = UDim2.new(1, -168, 1, -72), BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(148, 58), Size = UDim2.new(1, -148, 1, -58), BackgroundTransparency = 1,
 }, window)
-local pages, tabButtons = {}, {}
+local pages, tabButtons, tabMarks = {}, {}, {}
+local panelLayouts={}
+local function arrangePanels(page)
+	local layout=panelLayouts[page]
+	if not layout or layout.Busy then return end
+	layout.Busy=true
+	local width=math.max(1,page.AbsoluteSize.X-28)
+	local columns=width>=570 and 2 or 1
+	local gap=10
+	local panelWidth=(width-gap*(columns-1))/columns
+	table.sort(layout.Cards,function(a,b)
+		if a.Frame.LayoutOrder==b.Frame.LayoutOrder then return a.Order<b.Order end
+		return a.Frame.LayoutOrder<b.Frame.LayoutOrder
+	end)
+	local heights={0,0}
+	for index,item in ipairs(layout.Cards)do
+		local frame=item.Frame
+		if frame.Parent==page and frame.Visible then
+			local col=(index-1)%columns+1
+			local height=frame.Size.Y.Offset
+			frame.Position=UDim2.fromOffset((col-1)*(panelWidth+gap),heights[col])
+			frame.Size=UDim2.fromOffset(panelWidth,height)
+			heights[col]+=height+gap
+		end
+	end
+	page.CanvasSize=UDim2.fromOffset(0,math.max(heights[1],heights[2])+24)
+	layout.Busy=false
+end
 local pageMeta = {
 	Home = {"DASHBOARD", "Game-neutral tools and live session information"},
 	General = {"GENERAL", "Spectate players and control Noclip"},
@@ -290,8 +321,12 @@ local function makePage(name)
 		Visible = false, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
 		ScrollBarThickness = 4, ScrollBarImageColor3 = colors.Accent,
 	}, content)
-	create("UIPadding", {PaddingTop = UDim.new(0, 16), PaddingBottom = UDim.new(0, 16), PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 16)}, page)
-	create("UIListLayout", {Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder}, page)
+	create("UIPadding", {PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12)}, page)
+	if env.__AnomalyDetectedProfile=="HunterXEnter" and (name=="Auto" or name=="Settings")then
+		page.AutomaticCanvasSize=Enum.AutomaticSize.None
+		panelLayouts[page]={Cards={},Busy=false,Serial=0}
+		connect(page:GetPropertyChangedSignal("AbsoluteSize"),function()arrangePanels(page)end)
+	else create("UIListLayout", {Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder}, page)end
 	pages[name] = page
 	return page
 end
@@ -307,8 +342,10 @@ local function selectTab(name)
 		page.Visible = selected
 		local button = tabButtons[pageName]
 		if button then
-			button.BackgroundColor3 = selected and colors.Raised or colors.Surface
-			button.TextColor3 = selected and colors.Accent or colors.Muted
+			button.BackgroundColor3 = selected and colors.AccentSoft or colors.Background
+			button.BackgroundTransparency=selected and .35 or 0
+			button.TextColor3 = selected and colors.Text or colors.Muted
+			if tabMarks[pageName]then tabMarks[pageName].Visible=selected end
 		end
 	end
 	titleLabel.Text = pageMeta[name][1]
@@ -316,34 +353,47 @@ local function selectTab(name)
 	if name == "Servers" and state.RefreshServers then state.RefreshServers() end
 end
 
-local tabNames = {{"Home", "[D]  Dashboard"}, {"General", "[G]  General"}, {"ESP", "[E]  ESP"}, {"Servers", "[S]  Servers"}, {"Settings", "[=]  Settings"}}
-if pages.Auto then table.insert(tabNames, 4, {"Auto", "[A]  Auto"}) end
-if pages.Combat then table.insert(tabNames, 4, {"Combat", "[C]  Combat"}) end
-tabBar.Size = UDim2.new(1, -20, 0, #tabNames * 40)
+local tabNames = {{"Home", "Dashboard","MAIN","◈"}, {"General", "General",nil,"◉"}}
+if pages.Auto then table.insert(tabNames,{"Auto","Auto",nil,"↻"})end
+if pages.Combat then table.insert(tabNames,{"Combat","Combat",nil,"◇"})end
+table.insert(tabNames,{"ESP","Player & NPC ESP","VISION","◎"})
+table.insert(tabNames,{"Servers","Servers","UTILITIES","≡"})
+table.insert(tabNames,{"Settings","Settings",nil,"⚙"})
 for order, definition in ipairs(tabNames) do
 	local name, text = definition[1], definition[2]
+	if definition[3]then create("TextLabel",{LayoutOrder=order*2-1,Size=UDim2.new(1,0,0,23),BackgroundTransparency=1,
+		Text=definition[3],Font=Enum.Font.GothamSemibold,TextSize=8,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left},tabBar)end
 	local button = create("TextButton", {
-		Name = name, LayoutOrder = order, Size = UDim2.new(1, 0, 0, 36), AutoButtonColor = false,
-		BackgroundColor3 = colors.Surface, BorderSizePixel = 0, Font = Enum.Font.GothamSemibold,
+		Name = name, LayoutOrder = order*2, Size = UDim2.new(1, 0, 0, 34), AutoButtonColor = false,
+		BackgroundColor3 = colors.Background, BorderSizePixel = 0, Font = Enum.Font.GothamSemibold,
 		Text = text, TextColor3 = colors.Muted, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
 	}, tabBar)
-	create("UICorner", {CornerRadius = UDim.new(0, 5)}, button)
-	create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.4}, button)
-	create("UIPadding", {PaddingLeft = UDim.new(0, 13)}, button)
+	create("UICorner", {CornerRadius = UDim.new(0, 3)}, button)
+	create("UIPadding", {PaddingLeft = UDim.new(0, 28)}, button)
+	create("TextLabel",{Position=UDim2.fromOffset(-22,0),Size=UDim2.fromOffset(18,34),BackgroundTransparency=1,
+		Text=definition[4],Font=Enum.Font.GothamBold,TextSize=13,TextColor3=colors.Accent},button)
+	tabMarks[name]=create("Frame",{Position=UDim2.fromOffset(-28,6),Size=UDim2.fromOffset(2,22),BorderSizePixel=0,
+		BackgroundColor3=colors.Accent,Visible=false},button)
 	tabButtons[name] = button
 	connect(button.Activated, function() selectTab(name) end)
 end
+local settingsShortcut=create("TextButton",{Position=UDim2.new(1,-68,0,14),Size=UDim2.fromOffset(26,28),BackgroundTransparency=1,
+	Text="⚙",Font=Enum.Font.GothamBold,TextSize=16,TextColor3=colors.Muted},topBar)
+connect(settingsShortcut.Activated,function()selectTab("Settings")end)
+local hideShortcut=create("TextButton",{Position=UDim2.new(1,-36,0,14),Size=UDim2.fromOffset(26,28),BackgroundTransparency=1,
+	Text="×",Font=Enum.Font.GothamBold,TextSize=20,TextColor3=colors.Muted},topBar)
+connect(hideShortcut.Activated,function()state.Visible=false;gui.Enabled=false end)
 
 local function card(page, title, hint, height)
 	local frame = create("Frame", {
 		Size = UDim2.new(1, 0, 0, height), BackgroundColor3 = colors.Raised, BorderSizePixel = 0,
 	}, page)
-	create("UICorner", {CornerRadius = UDim.new(0, 9)}, frame)
-	create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.3}, frame)
-	create("Frame", {Position = UDim2.fromOffset(0, 10), Size = UDim2.fromOffset(3, 24), BackgroundColor3 = colors.Accent, BorderSizePixel = 0}, frame)
+	create("UICorner", {CornerRadius = UDim.new(0, 4)}, frame)
+	create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.5}, frame)
+	create("Frame", {Position = UDim2.fromOffset(12, 15), Size = UDim2.fromOffset(4, 4), BackgroundColor3 = colors.Accent, BorderSizePixel = 0}, frame)
 	create("TextLabel", {
-		Position = UDim2.fromOffset(14, 10), Size = UDim2.new(1, -28, 0, 18), BackgroundTransparency = 1,
-		Font = Enum.Font.GothamSemibold, Text = title, TextColor3 = colors.Text, TextSize = 12,
+		Position = UDim2.fromOffset(24, 9), Size = UDim2.new(1, -38, 0, 18), BackgroundTransparency = 1,
+		Font = Enum.Font.GothamSemibold, Text = title, TextColor3 = colors.Text, TextSize = 11,TextTruncate=Enum.TextTruncate.AtEnd,
 		TextXAlignment = Enum.TextXAlignment.Left,
 	}, frame)
 	if hint then
@@ -352,6 +402,12 @@ local function card(page, title, hint, height)
 			Font = Enum.Font.Gotham, Text = hint, TextColor3 = colors.Muted, TextSize = 9, TextWrapped = true,
 			TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
 		}, frame)
+	end
+	local layout=panelLayouts[page]
+	if layout then
+		layout.Serial+=1;table.insert(layout.Cards,{Frame=frame,Order=layout.Serial})
+		for _,property in ipairs({"Size","LayoutOrder","Visible","Parent"})do connect(frame:GetPropertyChangedSignal(property),function()arrangePanels(page)end)end
+		arrangePanels(page)
 	end
 	return frame
 end
@@ -362,8 +418,8 @@ local function button(parent, text, x, y, width, callback, color)
 		BackgroundColor3 = color or colors.Surface, BorderSizePixel = 0, Font = Enum.Font.GothamSemibold,
 		Text = text, TextColor3 = colors.Text, TextSize = 10,
 	}, parent)
-	create("UICorner", {CornerRadius = UDim.new(0, 7)}, object)
-	create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.35}, object)
+	create("UICorner", {CornerRadius = UDim.new(0, 3)}, object)
+	create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.55}, object)
 	if callback then connect(object.Activated, function() callback(object) end) end
 	return object
 end
@@ -371,10 +427,10 @@ end
 local function valueBox(parent, placeholder, x, y, width, initial, callback)
 	local box = create("TextBox", {
 		Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(width, 34), BackgroundColor3 = colors.Surface,
-		BorderSizePixel = 0, Font = Enum.Font.Code, Text = tostring(initial), PlaceholderText = placeholder,
+		BorderSizePixel = 0, Font = Enum.Font.Gotham, Text = tostring(initial), PlaceholderText = placeholder,
 		TextColor3 = colors.Text, PlaceholderColor3 = colors.Muted, TextSize = 10, ClearTextOnFocus = false,
 	}, parent)
-	create("UICorner", {CornerRadius = UDim.new(0, 7)}, box)
+	create("UICorner", {CornerRadius = UDim.new(0, 3)}, box)
 	create("UIStroke", {Color = colors.Stroke, Thickness = 1, Transparency = 0.35}, box)
 	connect(box.FocusLost, function() callback(box) end)
 	return box
@@ -678,9 +734,9 @@ connect(TeleportService.TeleportInitFailed,function(who,result,message)
 end)
 -- SERVER LIST LOGIC END
 
-local fingerprintCard = card(pages.Settings, "GAME ADAPTER DISCOVERY", "Exports client-visible remote names and paths so a new game can receive its own exact profile detector.", 148)
+local fingerprintCard = card(pages.Settings, "GAME ADAPTER DISCOVERY", "Capture the game details needed to add a new adapter.", 184)
 local fingerprintStatus = create("TextLabel", {
-	Position = UDim2.fromOffset(204, 75), Size = UDim2.new(1, -218, 0, 56), BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(14, 116), Size = UDim2.new(1, -28, 0, 56), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "Read-only: no remote is fired or invoked.", TextColor3 = colors.Muted,
 	TextSize = 9, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
 }, fingerprintCard)
@@ -711,15 +767,16 @@ local function captureRemoteFingerprint()
 	fingerprintStatus.TextColor3 = colors.Success
 	return report
 end
-button(fingerprintCard, "Capture Fingerprint", 14, 76, 180, function() captureRemoteFingerprint() end, colors.AccentSoft)
+local captureButton=button(fingerprintCard, "Capture Fingerprint", 14, 72, 180, function() captureRemoteFingerprint() end, colors.AccentSoft)
+captureButton.Size=UDim2.new(1,-28,0,34)
 
 local behaviorCard = card(pages.Settings, "SESSION CONTROLS", "Right Alt shows or hides the window. Reload fetches the current public build.", 172)
-local antiAfkToggle = button(behaviorCard, state.AntiAfk and "Anti-AFK: ON" or "Anti-AFK: OFF", 14, 72, 180, function(object)
+local antiAfkToggle = fitColumn(button(behaviorCard, state.AntiAfk and "Anti-AFK: ON" or "Anti-AFK: OFF", 14, 72, 180, function(object)
 	state.AntiAfk = not state.AntiAfk
 	object.Text = state.AntiAfk and "Anti-AFK: ON" or "Anti-AFK: OFF"
 	object.BackgroundColor3 = state.AntiAfk and colors.AccentSoft or colors.Surface
 	saveConfig()
-end, state.AntiAfk and colors.AccentSoft or colors.Surface)
+end, state.AntiAfk and colors.AccentSoft or colors.Surface),0,72)
 
 local controller = {Profile = tostring(env.__AnomalyDetectedProfile or "Universal"), Version = "1.0", CleanupCallbacks = {}}
 
@@ -819,16 +876,16 @@ function controller.Reload()
 end
 env.__AnomalyUniversalController = controller
 
-button(behaviorCard, "Reload Hub", 204, 72, 180, function(object)
+fitColumn(button(behaviorCard, "Reload Hub", 204, 72, 180, function(object)
 	object.Text = "Reloading..."
 	local ok = controller.Reload()
 	if not ok and not unloaded then object.Text = "Reload unavailable" end
-end, Color3.fromRGB(55, 145, 91))
-button(behaviorCard, "Unload", 14, 116, 180, function() unload() end, colors.Danger)
+end, Color3.fromRGB(55, 145, 91)),1,72)
+fitColumn(button(behaviorCard, "Unload", 14, 116, 180, function() unload() end, colors.Danger),0,116)
 create("TextLabel", {
-	Position = UDim2.fromOffset(204, 120), Size = UDim2.new(1, -218, 0, 26), BackgroundTransparency = 1,
+	Position = UDim2.new(.5,4,0,116), Size = UDim2.new(.5,-18,0,34), BackgroundTransparency = 1,
 	Font = Enum.Font.Code, Text = "Visibility key: Right Alt", TextColor3 = colors.Muted, TextSize = 9,
-	TextXAlignment = Enum.TextXAlignment.Left,
+	TextXAlignment = Enum.TextXAlignment.Left,TextWrapped=true,
 }, behaviorCard)
 
 local playerRowConnections = {}
@@ -1397,7 +1454,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v12",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v13",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1407,7 +1464,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v12 loaded; Nen recorder available in Auto.")
+print("[Anomaly] Hunter X Enter adapter v13 loaded; Nen recorder available in Auto.")
 
 end)()
 ;(function()

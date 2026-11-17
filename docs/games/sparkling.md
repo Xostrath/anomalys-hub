@@ -9,7 +9,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. User-supplied entry place: `120525873606470`.
 - Current objective: collect enough diagnostics to explain every automatic-defense attempt or skip before changing its timings.
 - Current defense: off-by-default active trial covering five shared combo animations, with PvP/PvE filters and continuous diagnostics. Reliable timing remains unproven (SP-T017–SP-T019).
-- Latest implementation: **Combat page v7 / diagnostics v5**. Source and both build variants compile; 155 mocked assertions passed. v5 correlation and scoped head-effect exclusion await live testing (SP-T021); prior live evidence remains in SP-T018–SP-T020.
+- Latest implementation: **Combat page v7 / diagnostics v5**. Source and both build variants compile; 155 mocked assertions passed. Ordinary delayed-release correlation and the scoped head-effect exclusion are verified in the v5 live capture (SP-T022); broader reliability remains unproven.
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -24,10 +24,10 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Power ESP | Direct Character.PowerLevel numeric value; rounded whole numbers with commas | Numeric source observed; formatting compiled | Base, effective, or suppressed power? |
 | Ki ESP | Blue bar next to red health bar; requires known Ki and explicit positive MaxKi for fill | Ki observed; bar compiled | No verified MaxKi source; unknown max shows an empty track marked `?` |
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
-| Auto parry | Five shared combo trials, configurable range/timing, facing/LOS gates and F input | Active v6 / diagnostics v4 reviewed through SP-T019 | Reliable timing and input/outcome attribution unverified |
+| Auto parry | Five shared combo trials, configurable range/timing, facing/LOS gates and F input | Active v7 / diagnostics v5 reviewed through SP-T022 | Reliable timing and input/outcome attribution unverified |
 | NPC ESP v1 (SP-T010) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-T012): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
-| Combat page v7 (SP-T021) | Five active combo trials; continuous diagnostics v5; narrow local head-effect LOS exclusion | 155 mocked assertions and compilation passed; v5 untested live | Verify exact excluded object and input/request correlation before timing changes |
-| Parry diagnostics v5 | Recent API/input/request correlation; early releases and intervening input flags; bounded LOS object properties | Implemented / simulated checks passed (SP-T021) | Validate asynchronous receipts and actual obstacle properties live |
+| Combat page v7 (SP-T021) | Five active combo trials; continuous diagnostics v5; narrow local head-effect LOS exclusion | 155 mocked assertions and compilation passed; live fixes verified in SP-T022 | Isolate combo-3 timing; retain other seeds and account for changed receipt latency |
+| Parry diagnostics v5 | Recent API/input/request correlation; early releases and intervening input flags; bounded LOS object properties | Live: 25 release pairs and one unmatched cycle correctly separated (SP-T022) | Early-release/ambiguous-window branches remain mock-tested |
 
 ## Sources and capture workflow
 
@@ -589,3 +589,36 @@ This is a scoped trial based on the repeated ray-hit paths in SP-T018–SP-T020.
 **155 mocked assertions passed:** 47 logger/lifecycle regressions, 42 active trial/catalog/LOS/deferral/opponent-counter checks, 26 player/NPC checks, 6 settings/reload checks, and 34 new asynchronous correlation/early-release/interleaving/scoped-LOS checks. New cases include delayed requests after API release, early release followed by a separate F cycle, duplicate OUT/RETURN, intervening down without a new request, repeated true, stale/orphan receipts, overlapping release windows, new-session reset, exact head-part matching, walls behind it, wrong names/parents/classes, changed character names and bounded LOS observations. Updated source and both staged public/private variants compile. These are simulated checks, **not live validation of v5**.
 
 Reload the installed hub to use v5, then enable Auto Parry (still off on reload). Preserve offset=0 / hold=120 for the first comparison; diagnostics continue automatically. Inspect new DEFEND_REQUEST/INPUT correlation and LOS_OBJECT plus ignoredCosmetics, then actual damage/counter observations. Do not adjust multiple timing variables or claim reliable defense merely because the obstruction no longer blocks. Source seeds, range/cooldown gates, hold settings, target filters and existing stop/release behavior are retained. The user controls live testing.
+
+
+## SP-015 / SP-T022 — v5 live correlation and head-effect validation (2026-11-17)
+
+**Evidence:** finalized diagnostics-v5 session starting Unix 1794950578, main-world place `110405289082842`, manually disabled at 71.881 s. Unchanged range 8, PvP/PvE enabled, offset 0 ms, hold 120 ms. Totals: 25 automatic attempts, 23 self-counter messages, no other-counter or possible-parried messages, 25 negative-health observations. All attempted targets were the nearby Thug5 NPC binding. Report ends held=false with zero dropped lines and no input/release/logger/error/frame-gap failures. No runtime changes during this review.
+
+### Fixes verified in this capture
+
+**Asynchronous request correlation:** all 25 automatic presses and releases have successful API calls and corresponding observed Defend true/false requests. All 25 release records carry `pairValid=true`, the correct `cycleAttempt`, `releaseState=after_api_up_request` and no intervening down. There is one additional observed F cycle at 23.5996–24.0815 s, outside the automatic attempts. v5 correctly assigns it `attempt=none` / `cycleAttempt=none`; the self counter at 23.7975 s likewise has zero automatic candidates. The report contains 52 DEFEND_REQUEST events: 50 automatic-correlated plus the two unmatched requests. Early-release and overlapping-window branches did not occur here and remain mock-validated only.
+
+**Local head-effect exclusion:** eight encountered objects match the exact local head-effect path; all are `Part`, CanCollide=false, CanQuery=true, Anchored=false, Size=(2,1,1). The ray can hit these non-collidable but queryable objects. All eight affected cues passed the narrow exclusion at observation and later generated automatic attempts (10, 11, 14, 15, 18, 19, 20, 21). Seven still required the exclusion at execution; attempt 14 had clear geometry by then. All eight were followed by a self-counter message. There were **zero line-of-sight skips** in this session. This verifies the intended live exclusion, not the broader claim that every Visuals object is safe to ignore; wall-behind-effect behavior remains mock-tested.
+
+### Outcomes by observed combo
+
+| Combo | Automatic attempts | Self-counter messages with that sole recent candidate |
+| --- | --- | --- |
+| 1 / `114493250337466` | 19 | 18 |
+| 2 / `84394230178792` | 3 | 3 |
+| 3 / `95937874840716` | 2 | 0 |
+| 4 / `139487903747364` | 0 | Not tested |
+| 5 / `131649056441662` | 1 | 1 |
+
+Thus **22 distinct automatic attempts** had a self-counter message with one recent candidate and `inputConflicts=[]`; the 23rd message belongs to the unmatched F cycle. The 22 automatic-associated receipts follow their candidate presses by approximately 132–201 ms. These are strong repeated client-side correlations, not a general 88% confirmed success rate or server-proven attacker identity. All were NPC trials; PvP performance is not established.
+
+Only two automatic attempts precede damage within 0.5 s, both combo 3: attempt 23 at 58.1138 s precedes damage by 115.2 ms, and attempt 25 at 67.7136 s by 114.5 ms. Both tracks were speed=1.15, phase=0.0192 s at execution, distance about 4.668 and 3.833 studs, with facing/LOS passing. Damage arrived while the API key was still held, and no self counter followed. This repeats the weak combo-3 result from the isolated v4 baseline; it does not identify whether its seed is early/late or the server's acceptance conditions. Attempt 13 (combo 1) also had no self-counter message, but its next damage was 1.614 s later, so absence alone is not a proven failed parry. Total damage includes hits between attempts and gated exchanges.
+
+### Conditions changed despite unchanged trial settings
+
+F_DOWN-log to Defend-true receipt shrank to **14.5–18.9 ms** (median 16.2), versus 42.3–60.5 ms in SP-T020. Actual API holds were 132.0–135.9 ms; adjacent true/false request spans were 115.4–120.5 ms (median 118.0). Release request receipt lag was 0.6–3.5 ms. Displayed ping samples were approximately 99.9–113.6 ms, lower than the preceding baseline's cited 144–153 ms samples. The changed input/request scheduling and network observations are confounders: the correlation code itself does not shorten the injected hold or change attack seeds. Do not attribute the entire outcome improvement to the head-effect fix or assume these conditions persist.
+
+Other rejections: observed Counter cooldown 8, out of range 7, self-facing 7, stopped track 1, unmapped animation 131. No DEFER event, other-counter pairing, or early observed release was exercised.
+
+**Current handoff:** v5 ordinary delayed-release correlation, unmatched-cycle separation and the scoped head-effect exclusion are verified live in this capture. Retain the current timings as the successful comparison baseline for combos 1/2/5. The next timing investigation should isolate combo 3, preserving the other seeds rather than moving the global offset based on this one run. Combo 4 and broader player/weapon coverage remain unvalidated. No additional generic log is needed to establish the two fixes; do not silently promote all automation to reliable based on this favorable session.

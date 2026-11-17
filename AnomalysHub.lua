@@ -2261,7 +2261,7 @@ end
 local function save(c,reason)
 	if type(writefile)~="function" then return end
 	if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal") end
-	local report="HUNTER X ENTER AUTO "..c.Mode.Name:upper().." v6\nRoblox-internal keyboard inputs; no OS keyboard input or remote calls.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
+	local report="HUNTER X ENTER AUTO "..c.Mode.Name:upper().." v7\nRoblox-internal keyboard inputs; no OS keyboard input or remote calls.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
 	pcall(writefile,"AnomalyHub/universal/hunter_auto_"..c.Mode.Id.."_test.txt",report)
 	pcall(writefile,c.Archive,report)
 end
@@ -2360,9 +2360,10 @@ local function installPrompts(c)
 			if c.LastId and a.id<=c.LastId then return end
 			local server=world:GetServerTimeNow()
 			if a.deadline<=server or a.deadline-server>30 then return end
-			c.LastId=a.id;c.Training=true;c.Pending={Id=a.id,Gauge=table.clone(a)}
-			note(c,"GAUGE id="..a.id.." center="..a.center.." period="..a.period)
-		elseif action=="GaugeResult" and c.Awaiting and c.Awaiting.Id==a then
+			c.LastId=a.id;c.Training=true;c.Pending={Id=a.id,Gauge=table.clone(a),Received=os.clock()}
+			note(c,"GAUGE id="..a.id.." center="..a.center.." period="..a.period.." startsIn="..string.format("%.3f",a.t0-server))
+		-- A result can arrive after a retry re-armed the gauge; it still settles that gauge, so no second tap follows.
+		elseif action=="GaugeResult" and ((c.Awaiting and c.Awaiting.Id==a) or (c.Pending and c.Pending.Id==a)) then
 			if b=="Perfect" or b=="Complete" then c.Confirmed+=1;c.Misses=0;if b=="Perfect"then c.Perfect+=1 end
 			else c.Misses+=1 end
 			note(c,"RESULT id="..tostring(a).." "..tostring(b));c.Awaiting=nil;c.Pending=nil
@@ -2467,6 +2468,14 @@ local function prompts(c,now)
 		return
 	end
 	local pending=c.Pending
+	-- A push-up tap normally gets its result within 0.15s. None after 0.6s means the press was ignored:
+	-- re-arm the same gauge once while it is still live and tap on its next pass.
+	local waiting=c.Awaiting
+	if waiting and waiting.Gauge and not waiting.Gauge.Retried and now>=waiting.Retry
+		and world:GetServerTimeNow()<waiting.Gauge.Gauge.deadline-.3 then
+		waiting.Gauge.Retried=true;c.Pending=waiting.Gauge;c.Awaiting=nil;pending=c.Pending
+		note(c,"GAUGE_RETRY id="..pending.Id)
+	end
 	if c.Awaiting and now>c.Awaiting.Expires then c.Misses+=1;c.Awaiting=nil;note(c,"NO_RESULT")end
 	if c.Misses>=3 then stop("Three inputs were not confirmed");return end
 	if not pending or c.Awaiting then return end
@@ -2484,8 +2493,9 @@ local function prompts(c,now)
 		local cycle=((server-gauge.t0)/gauge.period+gauge.phase)%1
 		local value=1-math.abs(2*cycle-1)
 		local tolerance=math.min(.025,gauge.width*.12)
-		if visible(trainingGui("strength")) and math.abs(value-gauge.center)<=tolerance then
-			c.Pending=nil;c.Awaiting={Id=pending.Id,Expires=now+3}
+		-- Taps within ~0.07s of the gauge appearing were ignored by the game (6 of 6 in the 23:03 report); wait until it is running.
+		if now-pending.Received>=.2 and server>=gauge.t0 and visible(trainingGui("strength")) and math.abs(value-gauge.center)<=tolerance then
+			c.Pending=nil;c.Awaiting={Id=pending.Id,Expires=now+3,Retry=now+.6,Gauge=pending}
 			note(c,"GAUGE_TAP id="..pending.Id.." position="..value);press(c,"Space",.06)
 		end
 	end
@@ -2526,7 +2536,7 @@ for index,mode in ipairs(modes)do
 		mode.Button.Position=UDim2.fromOffset(14,(index-1)*28)
 		mode.Status=trainingSection.Status
 	else
-	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v6",mode.Help,180);card.LayoutOrder=-50+index
+	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v7",mode.Help,180);card.LayoutOrder=-50+index
 	mode.Button=ui.FitColumn(ui.Button(card,"Auto "..mode.Name..": OFF",0,0,180,function()start(mode)end),0,72)
 	mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,52),BackgroundTransparency=1,Font=Enum.Font.Gotham,
 		TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
@@ -2785,10 +2795,10 @@ if type(selected)~="boolean"then
 end
 env.__AnomalyHunterStaminaEnabled=selected
 local closed,teleporting,nextAttempt=false,false,0
-local group=ui.Section and ui.Section(ui.Pages.General,"General",88,true)
+local group=ui.Section and ui.Section(ui.Pages.General,"General",28,true)
 local card=group and group.Body or ui.Card(ui.Pages.General,"GENERAL","Local stamina control",172)
-if group then group.Frame.LayoutOrder=-100 else card.LayoutOrder=-100 end
-local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,group and 34 or 116),Size=UDim2.new(1,-28,0,44),BackgroundTransparency=1,
+if group then group.Frame.LayoutOrder=-100;ui.GeneralSection=group else card.LayoutOrder=-100 end
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,group and 34 or 116),Size=UDim2.new(1,-28,0,44),BackgroundTransparency=1,Visible=group==nil,
  Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
  Text=selected and "Enabled. Waiting for your character…" or "Off. Stays enabled until unchecked; remembers your choice after reloads.",},card)
 local function runHold()
@@ -2942,6 +2952,374 @@ controller.RegisterCleanup(function()
  local active=env.__AnomalyStaminaNoDrainTest
  if type(active)=="table" and type(active.Stop)=="function"then active.Stop("HUB_UNLOAD")end
 end)
+
+end)()
+;(function()
+-- Confirmed in-game 2026-11-16 (v3). Plays fishing the normal way with the E key: cast, hook the bite, steer the reel zone.
+-- Sends key input only; every FishingRemote request is made by the game client itself.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter"then return end
+local player=game:GetService("Players").LocalPlayer
+local rs=game:GetService("ReplicatedStorage")
+local run=game:GetService("RunService")
+local input=game:GetService("UserInputService")
+local guiService=game:GetService("GuiService")
+local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
+local ui=controller.UI
+local group=ui.GeneralSection
+local card=group and group.Body or ui.Card(ui.Pages.General,"AUTO FISH // v3","Casts, hooks bites and plays the reel minigame with the E key. Equip your rod and face the water.",172)
+local top=group and group.Height or 72
+if group then group.SetHeight(top+28) end
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,44),BackgroundTransparency=1,Visible=group==nil,
+ Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Off. Equip your rod and face the water."},card)
+local state={Enabled=false,Closed=false,Lines={},Caught=0,Fails=0,CastFails=0,Held=false}
+local button
+local path="AnomalyHub/universal/hunter_auto_fish_latest.txt"
+-- Reel physics measured from a manual catch, in track heights per second squared. Slightly low on purpose so braking starts early.
+local FALL,LIFT=2.6,3.8
+local function save()
+ if type(writefile)~="function"then return false end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ return pcall(writefile,path,"HUNTER AUTO FISH v3 // plays the reel minigame with the E key\nKey input only. IN lines are server fishing events; ANIM lines are the character's fishing state.\n"
+  .."REEL lines (10Hz): zone/fish are centres as a fraction of the track (0 top, 1 bottom), v is zone speed, held is our key, down is the game's view of E.\n"..table.concat(state.Lines,"\n"))
+end
+local function log(message)
+ if #state.Lines>=3000 then table.remove(state.Lines,1)end
+ table.insert(state.Lines,string.format("%.3f %s",os.clock(),tostring(message):sub(1,300)))
+end
+local function describe(value)
+ if type(value)~="table"then return tostring(value)end
+ local parts,count={},0
+ for key,item in pairs(value)do count+=1;if count>8 then break end;table.insert(parts,tostring(key).."="..tostring(item))end
+ return "{"..table.concat(parts,",").."}"
+end
+-- force skips the cached state: a press left over from the hook tap must still be released.
+local function key(down,force)
+ if state.Held==down and not force then return true end
+ local ok=pcall(function()vim:SendKeyEvent(down,Enum.KeyCode.E,false,game)end)
+ if ok then state.Held=down;state.KeyAt=os.clock()end
+ return ok
+end
+local function living()
+ local char=player.Character
+ local h=char and char:FindFirstChildOfClass("Humanoid")
+ return char~=nil and char==state.Character and h~=nil and h.Health>0
+end
+local function stop(reason)
+ if not state.Enabled then return end
+ state.Enabled=false
+ for _=1,3 do if key(false,true)then break end end
+ if state.Connection then state.Connection:Disconnect();state.Connection=nil end
+ if button then button.Text="Auto Fish: OFF"end
+ status.Text=reason.." Caught this session: "..state.Caught.."."
+ warn("[Anomaly auto fish] "..reason.." Caught: "..state.Caught)
+ log("STOP "..reason.." caught="..state.Caught);save()
+end
+local function toggle()
+ if state.Closed or controller.IsUnloaded()then return end
+ if state.Enabled then stop("Off.");return end
+ state.Character=player.Character
+ if not vim then warn("[Anomaly auto fish] Key input is unavailable here.");return end
+ if not living()then warn("[Anomaly auto fish] Wait until your character is alive.");return end
+ if state.Character:GetAttribute("FishingRodEquipped")~=true then
+  status.Text="Equip your fishing rod first.";warn("[Anomaly auto fish] Equip your fishing rod first.");return
+ end
+ if controller.StopHunterTraining then controller.StopHunterTraining("Auto Fish started")end
+ local events=rs:FindFirstChild("RemoteEvents")
+ local remote=events and events:FindFirstChild("FishingRemote")
+ if remote and remote:IsA("RemoteEvent")then
+  state.Connection=remote.OnClientEvent:Connect(function(kind,a,b)
+   if not state.Enabled then return end
+   log("IN "..describe(kind).." "..describe(a).." "..describe(b))
+   if kind=="Caught"then state.Caught+=1;state.Fails=0;status.Text="Caught "..describe(a)..". Total: "..state.Caught.."."
+   elseif kind=="Reset"then state.Fails+=1 end
+  end)
+ end
+ state.Lines={}
+ state.Enabled=true;state.Fails=0;state.CastFails=0;state.Anim=nil;state.AnimSince=os.clock();state.CastUntil=nil;state.CastCheck=nil;state.TapAt=nil;state.TapUntil=nil;state.BiteStamp=nil
+ key(false,true)
+ button.Text="Auto Fish: ON";status.Text="On."
+ log("START")
+end
+button=group and ui.Checkbox(card,"Auto Fish","Auto Fish: OFF",toggle) or ui.Button(card,"Auto Fish: OFF",14,72,180,toggle)
+if group then button.Position=UDim2.fromOffset(14,top)end
+local function reelParts()
+ local pg=player:FindFirstChildOfClass("PlayerGui")
+ local gui=pg and pg:FindFirstChild("FishingUI")
+ local reel=gui and gui:FindFirstChild("Reel")
+ local track=reel and reel:FindFirstChild("Track")
+ local zone,fish=track and track:FindFirstChild("Zone"),track and track:FindFirstChild("Fish")
+ if zone and fish and zone:IsA("GuiObject") and fish:IsA("GuiObject") and track:IsA("GuiObject") and track.AbsoluteSize.Y>0 then
+  local progress=reel:FindFirstChild("Progress")
+  return track,zone,fish,progress and progress:FindFirstChild("Fill")
+ end
+ return nil
+end
+local function steer(now)
+ local track,zone,fish,fill=reelParts()
+ if not track then return end
+ local height=track.AbsoluteSize.Y
+ local z=(zone.AbsolutePosition.Y+zone.AbsoluteSize.Y/2-track.AbsolutePosition.Y)/height
+ local f=(fish.AbsolutePosition.Y+fish.AbsoluteSize.Y/2-track.AbsolutePosition.Y)/height
+ local dt=state.ReelT and now-state.ReelT or 0
+ if dt>0 then
+  state.VZ=state.VZ*.5+(z-state.ReelZ)/dt*.5
+  state.VF=state.VF*.5+(f-state.ReelF)/dt*.5
+ end
+ state.ReelT,state.ReelZ,state.ReelF=now,z,f
+ -- Coast to a stop: moving up, releasing brakes at FALL; moving down, holding brakes at LIFT.
+ -- Hold while the zone would come to rest below the fish's position a moment from now.
+ local target=f+state.VF*.1
+ local v=state.VZ
+ local rest=v<0 and z-v*v/(2*FALL) or z+v*v/(2*LIFT)
+ local want=rest>target
+ -- At least 50ms per press or release keeps the key from chattering every frame.
+ if want~=state.Held and now-(state.KeyAt or 0)>=.05 then key(want)end
+ if now>=(state.NextReelLog or 0)then
+  state.NextReelLog=now+.1
+  local down=false;pcall(function()down=input:IsKeyDown(Enum.KeyCode.E)end)
+  log(string.format("REEL zone=%.3f fish=%.3f v=%.2f held=%d down=%d progress=%s",z,f,v,state.Held and 1 or 0,down and 1 or 0,
+   fill and fill:IsA("GuiObject") and string.format("%.3f",fill.Size.Y.Scale) or "?"))
+ end
+end
+controller.Connect(run.Heartbeat,function()
+ if state.Closed or not state.Enabled then return end
+ local now=os.clock()
+ if not living()then stop("Character unavailable or dead.");return end
+ if state.Character:GetAttribute("FishingRodEquipped")~=true then stop("Fishing rod unequipped.");return end
+ if state.Fails>=5 then stop("Five fish in a row were lost; stopped.");return end
+ if state.CastFails>=4 then stop("Four casts in a row did not start; stopped.");return end
+ -- Chat or the Roblox menu would receive the key instead: release and wait.
+ if input:GetFocusedTextBox() or guiService.MenuIsOpen then key(false);state.CastUntil=nil;state.TapUntil=nil;return end
+ local anim=state.Character:GetAttribute("FishAnim")
+ if anim~=state.Anim then
+  state.Anim=anim;state.AnimSince=now;log("ANIM "..tostring(anim))
+  -- Every state change starts from a released key; the reel needs a fresh press, not the hook tap still held.
+  if anim~="charge"then key(false,true);state.CastUntil=nil end
+  state.TapAt=nil;state.TapUntil=nil
+  if anim=="reel"then state.SteerAt=now+.12;state.ReelT=nil;state.VZ=0;state.VF=0 end
+  if anim=="charge"then state.CastFails=0 end
+  save()
+ end
+ if anim=="reel"then
+  if now>=(state.SteerAt or 0)then steer(now)end
+  return
+ end
+ if anim=="bite"then
+  local stamp=state.Character:GetAttribute("FishAnimT")
+  if stamp~=state.BiteStamp then state.BiteStamp=stamp;key(false,true);state.TapAt=now+.3+math.random()*.25;state.TapUntil=nil end
+ end
+ if state.TapAt and now>=state.TapAt then state.TapAt=nil;state.TapUntil=now+.12;if not key(true,true)then stop("Key input failed.")end;return end
+ if state.TapUntil then if now>=state.TapUntil then state.TapUntil=nil;key(false,true)end;return end
+ if state.CastUntil then
+  -- No charge within 0.6s means the press was ignored (cooldown after a catch or loss): let go and retry later.
+  if anim~="charge" and now-state.CastStart>=.6 then
+   state.CastUntil=nil;key(false,true);state.CastFails+=1;state.NextCast=now+2;log("CAST_IGNORED fails="..state.CastFails);return
+  end
+  if now>=state.CastUntil then state.CastUntil=nil;key(false,true);state.CastCheck=now+6 end
+  return
+ end
+ if anim=="wait" or anim=="bite" or anim=="cast"then state.CastCheck=nil;return end
+ if state.CastCheck then
+  if now<state.CastCheck then return end
+  state.CastCheck=nil;state.CastFails+=1;log("CAST_UNCONFIRMED fails="..state.CastFails)
+ end
+ -- Idle (nothing out, or the last fish was landed or lost): cast again after a pause. 1.5s was too soon after a loss.
+ if now-state.AnimSince>=2.5 and now>=(state.NextCast or 0) then
+  state.NextCast=now+4
+  key(false,true)
+  if not key(true,true)then stop("Key input failed.");return end
+  state.CastStart=now;state.CastUntil=now+.9+math.random()*.2
+  log("CAST hold="..string.format("%.2f",state.CastUntil-now))
+ end
+end)
+controller.Connect(player.OnTeleport,function()stop("Teleporting.")end)
+controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
+
+end)()
+;(function()
+-- Confirmed in-game 2026-11-16. Withholds PhysicsRemote ConsumeStamina (running, push-ups, jumps, climbing, swimming).
+-- Each of those requests adds a hunger surcharge on the server; the once-per-second idle drain is unaffected.
+-- Push-up and Stamina stats were still observed rising during push-ups with this on.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter"then return end
+local rs=game:GetService("ReplicatedStorage")
+local ui=controller.UI
+local group=ui.GeneralSection
+local card=group and group.Body or ui.Card(ui.Pages.General,"REDUCED HUNGER // v1","Stops the hunger cost of running and push-ups. Stamina stat does not train while on.",120)
+local top=group and group.Height or 72
+if group then group.SetHeight(top+28) end
+local preference="AnomalyHub/universal/hunter_reduced_hunger_enabled.txt"
+local selected=false
+if type(readfile)=="function"then local ok,value=pcall(readfile,preference);selected=ok and value=="true" end
+local closed,button=false,nil
+-- Shares the run test's forwarding hook: it survives hub reloads and only reads probe.Filter and probe.Remote.
+local probe=env.__AnomalyHunterStaminaWithhold
+if type(probe)~="table"then probe={};env.__AnomalyHunterStaminaWithhold=probe end
+local function installHook()
+ if probe.Installed then return true end
+ local hook,method=env.hookmetamethod or hookmetamethod,env.getnamecallmethod or getnamecallmethod
+ if type(hook)~="function" or type(method)~="function"then return false end
+ local wrap=env.newcclosure or newcclosure or function(f)return f end
+ local original
+ local ok=pcall(function()
+  original=hook(game,"__namecall",wrap(function(self,...)
+   local filter=probe.Filter
+   if not filter or self~=probe.Remote then return original(self,...)end
+   local valid,call=pcall(method)
+   if not valid or call~="FireServer" or (...)~="ConsumeStamina"then return original(self,...)end
+   local decided,withhold=pcall(filter,select(2,...))
+   if decided and withhold then return end
+   return original(self,...)
+  end))
+ end)
+ probe.Installed=ok
+ return ok
+end
+local function filter()return selected and not closed end
+local function remember()
+ if type(writefile)~="function"then return end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ pcall(writefile,preference,tostring(selected))
+end
+local function release()
+ if probe.Filter==filter then probe.Filter=nil;probe.Remote=nil end
+ probe.ReducedHunger=nil
+end
+local function apply()
+ if not selected then release();return true end
+ -- A filter left by an earlier load of this module (reload without unload) is replaced, not treated as the run test.
+ if probe.Filter and probe.Filter~=filter and probe.Filter~=probe.ReducedHunger then warn("[Anomaly hunger] The hunger run test is using the hook; try again after it finishes.");return false end
+ local remote=rs:FindFirstChild("PhysicsRemote")
+ if not remote or not remote:IsA("RemoteEvent")then warn("[Anomaly hunger] PhysicsRemote was not found; nothing changed.");return false end
+ if not installHook()then warn("[Anomaly hunger] Volt does not expose the required hook functions here; nothing changed.");return false end
+ probe.Remote=remote;probe.Filter=filter;probe.ReducedHunger=filter
+ return true
+end
+local function refresh()button.Text=selected and "Reduced Hunger: ON" or "Reduced Hunger: OFF"end
+local function toggle()
+ if closed then return end
+ selected=not selected
+ if not apply()then selected=false end
+ remember();refresh()
+end
+button=group and ui.Checkbox(card,"Reduced Hunger","Reduced Hunger: OFF",toggle) or ui.Button(card,"Reduced Hunger: OFF",14,72,180,toggle)
+if group then button.Position=UDim2.fromOffset(14,top)end
+if selected and not apply()then selected=false end
+refresh()
+controller.RegisterCleanup(function()closed=true;release()end)
+
+end)()
+;(function()
+-- Confirmed in-game 2026-11-16 (167s hold, Player.Nen kept rising). Keeps the client aura pool full while the basic "Nen" training skill is active.
+-- Same method as Infinite Stamina: NenClient's getCurrentNen has one upvalue, the live pool. No remote hooks or calls.
+-- Training only: other techniques (Ren, En, Gyo, Ko...) drain normally.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter"then return end
+local player=game:GetService("Players").LocalPlayer
+local run=game:GetService("RunService")
+local ui=controller.UI
+local group=ui.GeneralSection
+local card=group and group.Body or ui.Card(ui.Pages.General,"INFINITE NEN // v1","Keeps aura full while training the basic Nen skill.",120)
+local top=group and group.Height or 72
+if group then group.SetHeight(top+28) end
+local preference="AnomalyHub/universal/hunter_infinite_nen_enabled.txt"
+local path="AnomalyHub/universal/hunter_infinite_nen_latest.txt"
+local selected=false
+if type(readfile)=="function"then local ok,value=pcall(readfile,preference);selected=ok and value=="true" end
+local d=debug or {}
+local readUpvalues=d.getupvalues or env.getupvalues
+local writeUpvalue=d.setupvalue or env.setupvalue
+local closed,button=false,nil
+local state={Lines={},Getter=nil,NextCheck=0,NextLog=0,NextSave=0,Holding=false,Writes=0}
+local function finite(n)return type(n)=="number" and n==n and math.abs(n)<math.huge end
+local function log(message)
+ if #state.Lines>=800 then table.remove(state.Lines,1)end
+ table.insert(state.Lines,string.format("%.3f %s",os.clock(),tostring(message):sub(1,300)))
+end
+local function save()
+ if type(writefile)~="function"then return false end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ return pcall(writefile,path,"HUNTER INFINITE NEN v1 // holds the client aura pool while ActiveNenSkill=Nen\n"
+  .."Proof is Player.Nen still rising after the bar would normally empty (~50s), not a full bar.\n"..table.concat(state.Lines,"\n"))
+end
+local function system()
+ local globals=type(_G)=="table" and _G or {}
+ local nen=globals.NenSystem
+ if type(nen)~="table"then
+  local runtime=env.getrenv or getrenv
+  if type(runtime)=="function"then
+   local ok,value=pcall(runtime)
+   if ok and type(value)=="table" and type(value._G)=="table"then nen=value._G.NenSystem end
+  end
+ end
+ if type(nen)~="table" or type(nen.getCurrentNen)~="function" or type(nen.getMaxNen)~="function"then return nil end
+ return nen
+end
+-- Accepts getCurrentNen only when it matches the captured shape: exactly one upvalue equal to the current pool.
+local function resolve()
+ local nen=system()
+ if not nen then return nil,"NenSystem is not exposed yet."end
+ if type(readUpvalues)~="function" or type(writeUpvalue)~="function"then return nil,"Volt does not expose the required upvalue functions here."end
+ local getter=nen.getCurrentNen
+ local ok,current,maximum=pcall(function()return getter(),nen.getMaxNen()end)
+ if not ok or not finite(current) or not finite(maximum) or maximum<=0 then return nil,"Invalid live aura values; nothing changed."end
+ local got,ups=pcall(readUpvalues,getter)
+ local count=0
+ if got and type(ups)=="table"then for _ in pairs(ups)do count+=1 end end
+ if not got or count~=1 or ups[1]~=current then return nil,"getCurrentNen does not match the captured version; nothing changed."end
+ return nen
+end
+local function refresh()button.Text=selected and "Infinite Nen: ON" or "Infinite Nen: OFF"end
+local function toggle()
+ if closed then return end
+ selected=not selected
+ if selected then
+  local nen,reason=resolve()
+  if not nen then warn("[Anomaly nen] "..reason);log("UNAVAILABLE "..reason);save();selected=false end
+  if nen then state.Lines={};log("START nen="..tostring(player:GetAttribute("Nen")));save()end
+ else log("STOP disabled writes="..state.Writes.." nen="..tostring(player:GetAttribute("Nen")));save()end
+ state.Holding=false
+ if type(writefile)=="function"then
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  pcall(writefile,preference,tostring(selected))
+ end
+ refresh()
+end
+button=group and ui.Checkbox(card,"Infinite Nen","Infinite Nen: OFF",toggle) or ui.Button(card,"Infinite Nen: OFF",14,72,180,toggle)
+if group then button.Position=UDim2.fromOffset(14,top)end
+refresh()
+controller.Connect(run.Heartbeat,function()
+ if closed or not selected then return end
+ local now=os.clock()
+ local training=player:GetAttribute("ActiveNenSkill")=="Nen"
+ if training~=state.Holding then state.Holding=training;log((training and "HOLD" or "RELEASE").." nen="..tostring(player:GetAttribute("Nen")))end
+ if now>=state.NextLog then
+  state.NextLog=now+5
+  log("SAMPLE skill="..tostring(player:GetAttribute("ActiveNenSkill")).." nen="..tostring(player:GetAttribute("Nen")).." writes="..state.Writes)
+ end
+ if now>=state.NextSave then state.NextSave=now+10;save()end
+ if not training then return end
+ -- NenClient lives in PlayerScripts and survives respawns; re-check its functions once a second anyway.
+ if not state.Getter or now>=state.NextCheck then
+  state.NextCheck=now+1
+  local nen,reason=resolve()
+  if not nen then state.Getter=nil;if state.Reason~=reason then state.Reason=reason;log("UNAVAILABLE "..reason)end;return end
+  state.Reason=nil;state.Getter=nen.getCurrentNen;state.Max=nen.getMaxNen
+ end
+ local ok,err=pcall(function()
+  local cap=state.Max()
+  if not finite(cap) or cap<=0 then error("invalid maximum")end
+  if state.Getter()<cap then writeUpvalue(state.Getter,1,cap);state.Writes+=1 end
+ end)
+ if not ok then log("ERROR "..tostring(err));state.Getter=nil end
+end)
+controller.Connect(player.OnTeleport,function()if selected then log("TELEPORT");save()end end)
+controller.RegisterCleanup(function()closed=true;if selected then log("UNLOAD writes="..state.Writes);save()end end)
 
 end)()
 ;(function()

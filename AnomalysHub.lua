@@ -1670,7 +1670,14 @@ local modes = {
 	{Id="nen", Name="Nen", Page="Auto", Help="Choose a skill below. Manually activate it, let the shared bar drain, turn it off, and record a full refill."},
 	{Id="shop", Name="Food Shop", Page="Recorders", Help="Stand beside a food merchant, open their shop and buy one Bread or Onigiri normally. Wait for your inventory and money to update, then Stop + Save."},
 	{Id="hunger_flow", Name="Hunger Flow", Page="Recorders", Help="Idle 10s, run 10s, stop and eat one Bread normally, wait 10s, then Stop + Save. Records stamina requests, food use, hunger and saturation without changing them."},
+	{Id="fishing", Name="Fishing", Page="Recorders", Help="Equip your rod first, then press Record and fish normally: cast, wait for the bite and finish the catch. Do three full catches, then Stop + Save."},
 }
+local fishWords={"fish","bait","reel","bobber","lure","catch"}
+local function fishy(name)
+	local key=name:lower()
+	for _,word in ipairs(fishWords)do if key:find(word,1,true)then return true end end
+	return false
+end
 for _,mode in ipairs(modes)do mode.Page="Recorders"end
 local nenChoices={"Nen","Ten","Ren","Zetsu","In","Gyo","Shu","Ken","Ko","En"}
 local selectedNen="Nen"
@@ -1742,7 +1749,7 @@ local function save(c, reason)
 		.. "\nOUT precedes forwarding; RETURN follows completion. No RETURN may mean an error, pending call, or stopped recording. Hook paths may duplicate a call; call IDs distinguish observations."
 		.. "\nAnimation, health and attribute observations are not confirmed success verdicts. Server receipt time is not captured."
 		.. "\nLimits: 120s, 16000 lines/4MB, 20Hz motion/UI, 6 nearby loaded actors within 100 studs, 16 tracks each."
-		.. (c.NenSelection and "\nNen GUI refresh 1s/2000 objects/depth 16, including character billboards." or "\nGUI tree refresh 1s/600 objects.")
+		.. (c.DetailedUI and "\nPriority GUI refresh 1s/2000 objects/depth 16, including character billboards." or "\nGUI tree refresh 1s/600 objects.")
 		.. " Actor discovery 1s/1000 objects/depth 3, numeric stat scan 1s/400 objects. Limits are reported."
 		.. "\n" .. table.concat(c.Lines, "\n") .. "\nSTATUS=" .. reason .. (c.Limited and "\nREPORT LIMIT REACHED" or "")
 	c.Mode.Report = c.Report
@@ -1755,7 +1762,7 @@ end
 local function relevant(name)
 	local key = name:lower()
 	for _,skill in ipairs(nenChoices)do if key==skill:lower()then return true end end
-	if key:find("aura",1,true) or key:find("mastery",1,true)then return true end
+	if key:find("aura",1,true) or key:find("mastery",1,true) or fishy(key)then return true end
 	for _, word in ipairs({"money", "cash", "jenni", "currency", "bread", "onigiri", "inventory", "block", "parr", "perfect", "stun", "attack", "combat", "posture", "health", "stamina", "energy", "hunger", "saturation", "meditat", "strength", "speed", "climb", "pushup", "training", "sprint", "running", "nen", "weight", "busy", "cooldown"}) do
 		if key:find(word, 1, true) then return true end
 	end
@@ -1860,6 +1867,24 @@ local function syncRemotes(c)
 	local movementController = movement and movement:FindFirstChild("MovementController")
 	local event = movementController and movementController:FindFirstChild("Event")
 	if c.Mode.Id~="shop" and event and event:IsA("RemoteEvent") then targets[event] = event:GetFullName() end
+	if c.Mode.Id=="fishing" then
+		-- Fishing remote names are not known yet: watch remotes named after fishing, plus any inside a held or stored tool.
+		if not c.FishRemotes then
+			c.FishRemotes={}
+			local found=0
+			if walk(rs,6000,8,function(object)
+				if found<24 and (object:IsA("RemoteEvent") or object:IsA("RemoteFunction")) and fishy(object:GetFullName())then found+=1;table.insert(c.FishRemotes,object)end
+			end) then limit(c,"fishremotes","Fishing remote discovery reached 6000 objects/depth 8") end
+			if found>=24 then limit(c,"fishremotecount","24 fishing-named remotes") end
+		end
+		for _,object in ipairs(c.FishRemotes)do if object:IsDescendantOf(game)then targets[object]=object:GetFullName()end end
+		local toolRemotes=0
+		for _,holder in ipairs({player.Character,player:FindFirstChildOfClass("Backpack")})do
+			if holder then walk(holder,400,5,function(object)
+				if toolRemotes<16 and (object:IsA("RemoteEvent") or object:IsA("RemoteFunction")) and object:FindFirstAncestorWhichIsA("Tool")then toolRemotes+=1;targets[object]=object:GetFullName()end
+			end)end
+		end
+	end
 	probe.Targets = targets
 	for object, connection in pairs(c.RemoteConnections) do
 		if not targets[object] then connection:Disconnect(); c.RemoteConnections[object] = nil end
@@ -1971,25 +1996,30 @@ end
 local function refreshUI(c)
 	c.GuiObjects={}
 	local pg=player:FindFirstChildOfClass("PlayerGui")
-	if c.Mode.Id=="nen" then
-		-- Prioritize named Nen screens, then the HUD and character billboards.
+	if c.Mode.Id=="nen" or c.Mode.Id=="fishing" then
+		-- Prioritize named Nen (or fishing) screens, then the HUD and character billboards.
 		-- One shared budget prevents large inventories from hiding the relevant bar.
 		local roots=pg and pg:GetChildren() or {}
 		if player.Character then table.insert(roots,1,player.Character)end
+		local fishing=c.Mode.Id=="fishing"
 		table.sort(roots,function(a,b)
-			local function priority(o)local n=o.Name:lower();return (n:find("nen",1,true) or n:find("aura",1,true)) and 0 or o==player.Character and 1 or n:find("hud",1,true) and 2 or 3 end
+			local function priority(o)
+				local n=o.Name:lower()
+				if fishing then return (fishy(n) or n:find("minigame",1,true)) and 0 or o==player.Character and 1 or n:find("hud",1,true) and 2 or 3 end
+				return (n:find("nen",1,true) or n:find("aura",1,true)) and 0 or o==player.Character and 1 or n:find("hud",1,true) and 2 or 3
+			end
 			return priority(a)<priority(b)
 		end)
 		local remaining=2000
 		for _,root in ipairs(roots)do
-			if remaining<=0 then limit(c,"gui","Nen GUI discovery reached 2000 objects");break end
+			if remaining<=0 then limit(c,"gui","Priority GUI discovery reached 2000 objects");break end
 			local used=0
 			local limited=walk(root,remaining,16,function(object)
 				used+=1;if excluded(object)then return false end
 				if object:IsA("GuiObject") or object:IsA("LayerCollector")then table.insert(c.GuiObjects,object)end
 			end)
 			remaining-=used
-			if limited then limit(c,"gui","Nen GUI discovery reached its object/depth limit")end
+			if limited then limit(c,"gui","Priority GUI discovery reached its object/depth limit")end
 		end
 		return
 	end
@@ -2012,14 +2042,14 @@ local function snapshotUI(c)
 	for _, object in ipairs(c.GuiObjects) do
 		if object.Parent and visible(object) then
 			local path=object:GetFullName()
-			if c.NenSelection then
+			if c.DetailedUI then
 				c.GuiIds=c.GuiIds or {};c.GuiSerial=c.GuiSerial or 0
 				if not c.GuiIds[object]then c.GuiSerial+=1;c.GuiIds[object]=c.GuiSerial end
 				path..="#"..c.GuiIds[object]
 			end
 			local detail=object.ClassName
 			if object:IsA("GuiObject") then detail..=" pos="..tostring(object.AbsolutePosition).." size="..tostring(object.AbsoluteSize).." rotation="..object.Rotation end
-			if c.NenSelection and object:IsA("GuiObject")then detail..=" relativeSize="..tostring(object.Size).." relativePosition="..tostring(object.Position)end
+			if c.DetailedUI and object:IsA("GuiObject")then detail..=" relativeSize="..tostring(object.Size).." relativePosition="..tostring(object.Position)end
 			if object:IsA("TextLabel") or object:IsA("TextButton") then detail..=" text="..sample(object.Text) end
 			if object:IsA("ImageLabel") or object:IsA("ImageButton") then detail..=" image="..sample(object.Image) end
 			current[path]=detail
@@ -2070,6 +2100,13 @@ local function start(mode)
 		Archive=basePath..mode.Id.."_"..os.time().."_"..tostring(nonce):gsub("[^%w_%-]","")..".txt"}
 	active=c
 	if mode.Id=="nen"then c.NenSelection=selectedNen;log(c,"SELECTED_NEN "..selectedNen);if mode.CloseDropdown then mode.CloseDropdown()end end
+	c.DetailedUI=mode.Id=="nen" or mode.Id=="fishing"
+	if mode.Id=="fishing" and c.Character then
+		local function tool(label,object)if object:IsA("Tool")then log(c,label.." "..object.Name)end end
+		for _,child in ipairs(c.Character:GetChildren())do tool("TOOL_HELD",child)end
+		connect(c,c.Character.ChildAdded,function(child)tool("TOOL_EQUIPPED",child)end)
+		connect(c,c.Character.ChildRemoved,function(child)tool("TOOL_UNEQUIPPED",child)end)
+	end
 	probe.Callback=function(remote,direction,args,started,id,result,path)
 		if active~=c or started<c.Started then return end
 		log(c,"REMOTE "..direction.." "..tostring(path).." call="..tostring(id).." requestStart="..string.format("%.4f",started-c.Started).." args="..sample(args)..(result and (" result="..sample(result)) or ""))

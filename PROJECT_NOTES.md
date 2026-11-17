@@ -113,3 +113,5 @@ Auto → Auto Parry is an off-by-default experiment scoped to these two animatio
 ### Ki bar correction
 
 The user wants Ki as a bar beside health, not an identity-text line. Sparkling now uses the shared blue energy bar adjacent to the red health bar, controlled by Ki bar and also shown for Self ESP. The numeric KI identity line was removed. Fill requires finite Character.Ki and a positive explicit Character.MaxKi (numeric value or attribute); conflicting maxima are unavailable. If Ki is known but its maximum is not, show an unfilled track marked ? rather than a fabricated percentage. No maximum Ki source is present in the reviewed combat captures; Capture ESP Data is still required to establish the live source/semantics.
+
+Power Level labels use rounded whole numbers with comma thousands separators (for example, 12,345), with no decimal suffix. The underlying value is unchanged.

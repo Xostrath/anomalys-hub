@@ -1159,7 +1159,7 @@ local function updateEsp(target, localRoot)
 		if settings.Race then table.insert(lines, "RACE // " .. (extra and extra.Race or "Unavailable")) end
 		if settings.BattlePower then
 			local power = extra and extra.BattlePower
-			local text = type(power)=="number" and power==power and power>=0 and power<math.huge and string.format("%.2f",power) or "Unavailable"
+			local text = type(power)=="number" and power==power and power>=0 and power<math.huge and (string.format("%.0f",power):reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,","")) or "Unavailable"
 			table.insert(lines,"POWER LEVEL // "..text)
 		end
 	end

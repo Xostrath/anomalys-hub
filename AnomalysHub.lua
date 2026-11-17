@@ -44,6 +44,8 @@ local function anomalyHasHunterXEnterFingerprint()
 end
 
 local anomalyProfile=anomalyHasHunterXEnterFingerprint() and 'HunterXEnter' or ((anomalyHasGohanFingerprint() or game.PlaceId==89366025586253) and 'Gohan' or (anomalyHasBeyondNenFingerprint() and 'BeyondNen' or 'Universal'))
+-- Universe identity also covers tutorial-to-main-world teleports.
+if game.GameId == 10771972206 then anomalyProfile = 'Sparkling' end
 local anomalyEnvironment=(getgenv and getgenv()) or shared
 anomalyEnvironment.__AnomalyDetectedProfile=anomalyProfile
 if anomalyProfile == 'BeyondNen' then
@@ -261,7 +263,7 @@ create("TextLabel", {
 }, sidebar)
 create("TextLabel", {
 	Position = UDim2.fromOffset(44, 34), Size = UDim2.new(1, -48, 0, 14), BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER" or "UNIVERSAL", TextColor3 = colors.Muted, TextSize = 8,
+	Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER" or (env.__AnomalyDetectedProfile == "Sparkling" and "SPARKLING" or "UNIVERSAL"), TextColor3 = colors.Muted, TextSize = 8,
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
 
@@ -298,7 +300,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -76, 0, 20), Size = UDim2.fromOffset(146, 18),
-	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v19" or "UNIVERSAL // ACTIVE",
+	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v19" or (env.__AnomalyDetectedProfile == "Sparkling" and "SPARKLING // ACTIVE" or "UNIVERSAL // ACTIVE"),
 	TextColor3 = colors.Accent, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 

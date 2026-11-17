@@ -267,7 +267,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v11\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v12\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
 	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1397,7 +1397,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v11",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v12",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1407,7 +1407,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v11 loaded; direct stamina reading enabled.")
+print("[Anomaly] Hunter X Enter adapter v12 loaded; Nen recorder available in Auto.")
 
 end)()
 ;(function()
@@ -1574,7 +1574,15 @@ local modes = {
 	{Id="climb", Name="Climb", Page="Auto", Help="Approach a wall, climb, release, and repeat. Include a rest so stamina recovery is captured."},
 	{Id="strength", Name="Strength", Page="Auto", Help="Start push-ups manually, complete 5–10 prompts, then stop. Include the start and exit controls."},
 	{Id="speed", Name="Speed", Page="Auto", Help="Walk, start running, turn, stop, and rest. Repeat using your usual sprint controls."},
+	{Id="nen", Name="Nen", Page="Auto", Help="Choose a skill below. Manually activate it, let the shared bar drain, turn it off, and record a full refill."},
 }
+local nenChoices={"Nen","Ten","Ren","Zetsu","In","Gyo","Shu","Ken","Ko","En"}
+local selectedNen="Nen"
+local nenPreference="AnomalyHub/universal/hunter_nen_selection.txt"
+if type(readfile)=="function"then
+	local ok,value=pcall(readfile,nenPreference)
+	if ok then for _,name in ipairs(nenChoices)do if value==name then selectedNen=name end end end
+end
 local active, closed, serial = nil, false, 0
 local basePath = "AnomalyHub/universal/hunter_x_enter_"
 local function sample(value, depth, seen)
@@ -1615,10 +1623,12 @@ end
 local function save(c, reason)
 	c.Report = "HUNTER X ENTER " .. c.Mode.Name:upper() .. " RECORDER // PASSIVE v1\nplace=" .. game.PlaceId .. " universe=" .. game.GameId
 		.. "\nHistory=" .. c.Archive .. "\nNo inputs sent, remotes fired/invoked/replayed, or scripts decompiled. Text-entry and chat excluded."
+		.. (c.NenSelection and ("\nSelected Nen skill="..c.NenSelection.." (user label, not proof of active/unlocked skill). Shared-bar capture; no automatic activation.") or "")
 		.. "\nRemote calls are forwarded first; requestStart is their original observation time. Hook paths may duplicate a call."
 		.. "\nAnimation, health and attribute observations are not confirmed success verdicts. Server receipt time is not captured."
 		.. "\nLimits: 120s, 16000 lines/4MB, 20Hz motion/UI, 6 nearby loaded actors within 100 studs, 16 tracks each."
-		.. "\nGUI tree refresh 1s/600 objects, actor discovery 1s/1000 objects/depth 3, numeric stat scan 1s/400 objects. Limits are reported."
+		.. (c.NenSelection and "\nNen GUI refresh 1s/2000 objects/depth 16, including character billboards." or "\nGUI tree refresh 1s/600 objects.")
+		.. " Actor discovery 1s/1000 objects/depth 3, numeric stat scan 1s/400 objects. Limits are reported."
 		.. "\n" .. table.concat(c.Lines, "\n") .. "\nSTATUS=" .. reason .. (c.Limited and "\nREPORT LIMIT REACHED" or "")
 	c.Mode.Report = c.Report
 	if type(writefile) ~= "function" then return false end
@@ -1629,6 +1639,8 @@ local function save(c, reason)
 end
 local function relevant(name)
 	local key = name:lower()
+	for _,skill in ipairs(nenChoices)do if key==skill:lower()then return true end end
+	if key:find("aura",1,true) or key:find("mastery",1,true)then return true end
 	for _, word in ipairs({"block", "parr", "perfect", "stun", "attack", "combat", "posture", "health", "stamina", "energy", "hunger", "saturation", "meditat", "strength", "speed", "climb", "pushup", "training", "sprint", "running", "nen", "weight", "busy", "cooldown"}) do
 		if key:find(word, 1, true) then return true end
 	end
@@ -1701,6 +1713,9 @@ local function syncRemotes(c)
 	end
 	if c.Mode.Id == "meditation" then add("RemoteEvents", {"Meditate","MeditationKey","MeditationReady","MeditationSync","MeditationUI"})
 	elseif c.Mode.Id == "strength" then add("RemoteEvents", {"Pushup","PushupKey","PushupSync","PushupUI","WeightEquipResult"})
+	elseif c.Mode.Id == "nen" then
+		table.insert(paths,"NenSkillsRemote");table.insert(paths,"NenTypeXP")
+		add("RemoteEvents",{"NenToggle","ZetsuDetect","ZetsuTransparency"})
 	elseif c.Mode.Id == "block" then
 		add("Assets.Remotes", {"Combat","ClientFX","Replicate","KnockbackClient","EvasiveDash"})
 	end
@@ -1825,6 +1840,28 @@ end
 local function refreshUI(c)
 	c.GuiObjects={}
 	local pg=player:FindFirstChildOfClass("PlayerGui")
+	if c.Mode.Id=="nen" then
+		-- Prioritize named Nen screens, then the HUD and character billboards.
+		-- One shared budget prevents large inventories from hiding the relevant bar.
+		local roots=pg and pg:GetChildren() or {}
+		if player.Character then table.insert(roots,1,player.Character)end
+		table.sort(roots,function(a,b)
+			local function priority(o)local n=o.Name:lower();return (n:find("nen",1,true) or n:find("aura",1,true)) and 0 or o==player.Character and 1 or n:find("hud",1,true) and 2 or 3 end
+			return priority(a)<priority(b)
+		end)
+		local remaining=2000
+		for _,root in ipairs(roots)do
+			if remaining<=0 then limit(c,"gui","Nen GUI discovery reached 2000 objects");break end
+			local used=0
+			local limited=walk(root,remaining,16,function(object)
+				used+=1;if excluded(object)then return false end
+				if object:IsA("GuiObject") or object:IsA("LayerCollector")then table.insert(c.GuiObjects,object)end
+			end)
+			remaining-=used
+			if limited then limit(c,"gui","Nen GUI discovery reached its object/depth limit")end
+		end
+		return
+	end
 	if pg and walk(pg,600,12,function(object)
 		if excluded(object) then return false end
 		if object:IsA("GuiObject") or object:IsA("LayerCollector") then table.insert(c.GuiObjects,object) end
@@ -1844,8 +1881,14 @@ local function snapshotUI(c)
 	for _, object in ipairs(c.GuiObjects) do
 		if object.Parent and visible(object) then
 			local path=object:GetFullName()
+			if c.NenSelection then
+				c.GuiIds=c.GuiIds or {};c.GuiSerial=c.GuiSerial or 0
+				if not c.GuiIds[object]then c.GuiSerial+=1;c.GuiIds[object]=c.GuiSerial end
+				path..="#"..c.GuiIds[object]
+			end
 			local detail=object.ClassName
 			if object:IsA("GuiObject") then detail..=" pos="..tostring(object.AbsolutePosition).." size="..tostring(object.AbsoluteSize).." rotation="..object.Rotation end
+			if c.NenSelection and object:IsA("GuiObject")then detail..=" relativeSize="..tostring(object.Size).." relativePosition="..tostring(object.Position)end
 			if object:IsA("TextLabel") or object:IsA("TextButton") then detail..=" text="..sample(object.Text) end
 			if object:IsA("ImageLabel") or object:IsA("ImageButton") then detail..=" image="..sample(object.Image) end
 			current[path]=detail
@@ -1894,6 +1937,7 @@ local function start(mode)
 		Limits={},LastUI={},LastStats={},GuiObjects={},NextSync=0,NextFrame=0,NextSave=0,NextClock=0,
 		Archive=basePath..mode.Id.."_"..os.time().."_"..tostring(nonce):gsub("[^%w_%-]","")..".txt"}
 	active=c
+	if mode.Id=="nen"then c.NenSelection=selectedNen;log(c,"SELECTED_NEN "..selectedNen);if mode.CloseDropdown then mode.CloseDropdown()end end
 	probe.Callback=function(remote,direction,args,started)
 		if active~=c or started<c.Started then return end
 		log(c,"REMOTE "..direction.." "..tostring(probe.Targets[remote]).." requestStart="..string.format("%.4f",started-c.Started).." args="..sample(args))
@@ -1915,16 +1959,47 @@ local function start(mode)
 	c.NextSave=os.clock()+5
 end
 for index,mode in ipairs(modes) do
-	local card=ui.Card(ui.Pages[mode.Page],mode.Name:upper().." RECORDER // v1",mode.Help,224)
+	local isNen=mode.Id=="nen"
+	local card=ui.Card(ui.Pages[mode.Page],isNen and "AUTO NEN // RECORDER v1" or (mode.Name:upper().." RECORDER // v1"),mode.Help,isNen and 226 or 180)
 	card.LayoutOrder=index*10
-	mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,118),Size=UDim2.new(1,-28,0,92),BackgroundTransparency=1,
+	mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,isNen and 162 or 118),Size=UDim2.new(1,-28,0,50),BackgroundTransparency=1,
 		Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left,TextColor3=ui.Colors.Muted,
 		Text="Ready. Records manual play only, up to 2 minutes. One activity at a time."},card)
-	mode.Button=ui.FitColumn(ui.Button(card,"Record "..mode.Name,0,0,180,function()start(mode)end,ui.Colors.AccentSoft),0,72)
-	ui.FitColumn(ui.Button(card,"Copy Recording",0,0,180,function()
+	mode.Button=ui.FitColumn(ui.Button(card,"Record "..mode.Name,0,0,180,function()start(mode)end,ui.Colors.AccentSoft),0,isNen and 116 or 72)
+	local copy=ui.FitColumn(ui.Button(card,"Copy Recording",0,0,180,function()
 		if active and active.Mode==mode then save(active,"RECORDING") end
 		if mode.Report and type(setclipboard)=="function" then pcall(setclipboard,mode.Report) end
-	end),1,72)
+	end),1,isNen and 116 or 72)
+	if isNen then
+		local expanded=false
+		local list=ui.Create("Frame",{Position=UDim2.fromOffset(0,112),Size=UDim2.new(1,0,0,206),BackgroundTransparency=1,Visible=false},card)
+		local picker
+		local function show(open)
+			expanded=open;list.Visible=open
+			local offset=open and 210 or 0
+			card.Size=UDim2.new(1,0,0,226+offset)
+			ui.FitColumn(mode.Button,0,116+offset);ui.FitColumn(copy,1,116+offset)
+			mode.Status.Position=UDim2.fromOffset(14,162+offset)
+			picker.Text="Training: "..selectedNen..(open and " ^" or " v")
+		end
+		picker=ui.Button(card,"Training: "..selectedNen.." v",14,72,180,function()
+			if active and active.Mode==mode then mode.Status.Text="Stop + Save before changing the recorded skill.";return end
+			show(not expanded)
+		end)
+		picker.Size=UDim2.new(1,-28,0,34)
+		for choiceIndex,name in ipairs(nenChoices)do
+			ui.FitColumn(ui.Button(list,name,0,0,180,function()
+				if active and active.Mode==mode then return end
+				selectedNen=name;show(false)
+				mode.Status.Text="Ready to record "..name..". Selection does not activate or unlock it."
+				if type(writefile)=="function"then
+					if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+					pcall(writefile,nenPreference,name)
+				end
+			end),(choiceIndex-1)%2,math.floor((choiceIndex-1)/2)*42)
+		end
+		mode.CloseDropdown=function()show(false)end
+	end
 end
 controller.Connect(Run.Heartbeat,function()
 	local c=active; if not c then return end
@@ -1946,8 +2021,8 @@ controller.Connect(Run.Heartbeat,function()
 	end)
 	if not ok then log(c,"ERROR "..tostring(err));stop("CAPTURE_ERROR");return end
 	if now>=c.NextSave then c.NextSave=now+5;if not save(c,"RECORDING") then stop("SAVE_FAILED");return end end
-	c.Mode.Status.Text=string.format("Recording %.0fs / 120s · %d lines%s\n%s\n%s",now-c.Started,#c.Lines,
-		c.Mode.Id=="block" and (" · nearby actors: "..tostring(c.Nearby)) or "",c.Mode.Help,c.Coverage or "")
+	c.Mode.Status.Text=string.format("Recording %.0fs / 120s · %d lines%s\n%s",now-c.Started,#c.Lines,
+		c.Mode.Id=="block" and (" · nearby actors: "..tostring(c.Nearby)) or c.NenSelection and (" · "..c.NenSelection) or "",c.Coverage or "")
 end)
 controller.StopHunterRecording=stop
 controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
@@ -1985,6 +2060,13 @@ function controller.ReadHunterStamina()
 	if not character then return nil end
 	-- Captured module exports these read-only functions; never require or modify it.
 	local system=type(_G)=="table" and _G.StaminaSystem
+	if type(system)~="table" then
+		local runtime=env.getrenv or getrenv
+		if type(runtime)=="function"then
+			local ok,globals=pcall(runtime)
+			if ok and type(globals)=="table" and type(globals._G)=="table"then system=globals._G.StaminaSystem end
+		end
+	end
 	if type(system)=="table" and type(system.GetStamina)=="function" and type(system.GetMaxStamina)=="function" then
 		local ok,current,maximum=pcall(function()return system.GetStamina(),system.GetMaxStamina()end)
 		if ok and finite(current) and finite(maximum) and maximum>0 and current>=0 and current<=maximum then
@@ -2251,9 +2333,9 @@ local function start(mode)
 	note(c,"START mode="..mode.Id);save(c,"RUNNING")
 end
 for index,mode in ipairs(modes)do
-	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v5",mode.Help,218);card.LayoutOrder=-50+index
+	local card=ui.Card(ui.Pages.Auto,"AUTO "..mode.Name:upper().." // v5",mode.Help,180);card.LayoutOrder=-50+index
 	mode.Button=ui.FitColumn(ui.Button(card,"Auto "..mode.Name..": OFF",0,0,180,function()start(mode)end),0,72)
-	mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,88),BackgroundTransparency=1,Font=Enum.Font.Gotham,
+	mode.Status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,52),BackgroundTransparency=1,Font=Enum.Font.Gotham,
 		TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
 		Text=mode.Id=="meditation" and "Off. One training macro at a time."
 			or mode.Id=="strength" and "Off. Rest only after the game ends push-ups; restart at 90% stamina."

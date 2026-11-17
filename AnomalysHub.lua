@@ -271,7 +271,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -76, 0, 20), Size = UDim2.fromOffset(146, 18),
-	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v16" or "UNIVERSAL // ACTIVE",
+	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v17" or "UNIVERSAL // ACTIVE",
 	TextColor3 = colors.Accent, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -389,6 +389,7 @@ connect(hideShortcut.Activated,function()state.Visible=false;gui.Enabled=false e
 
 local function card(page, title, hint, height)
 	local frame = create("Frame", {
+		Visible = not (type(title)=="string" and title:match("^AUTO ANTI%-MACRO //")),
 		Size = UDim2.new(1, 0, 0, height), BackgroundColor3 = colors.Raised, BorderSizePixel = 0,
 	}, page)
 	create("UICorner", {CornerRadius = UDim.new(0, 4)}, frame)
@@ -1493,7 +1494,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v16",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v17",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1503,7 +1504,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v16 loaded; Auto Buy Bread available.")
+print("[Anomaly] Hunter X Enter adapter v17 loaded; persistent Infinite Stamina and Shop Access capture available.")
 
 end)()
 ;(function()
@@ -2731,19 +2732,25 @@ local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="HunterXEnter" then return end
 local ui=controller.UI
+local preference="AnomalyHub/universal/hunter_stamina_enabled.txt"
+local selected=env.__AnomalyHunterStaminaEnabled
+if type(selected)~="boolean"then
+ selected=false
+ if type(readfile)=="function"then local ok,value=pcall(readfile,preference);selected=ok and value=="true" end
+end
+env.__AnomalyHunterStaminaEnabled=selected
+local closed,teleporting,nextAttempt=false,false,0
 local group=ui.Section and ui.Section(ui.Pages.General,"General",88,true)
 local card=group and group.Body or ui.Card(ui.Pages.General,"GENERAL","Local stamina control",172)
 if group then group.Frame.LayoutOrder=-100 else card.LayoutOrder=-100 end
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,group and 34 or 116),Size=UDim2.new(1,-28,0,44),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Uses the successful 30-second test; restores the starting value when disabled."},card)
+ Text=selected and "Enabled. Waiting for your character…" or "Off. Stays enabled until unchecked; remembers your choice after reloads.",},card)
 local function runHold()
--- Temporary client-only experiment. Does not hook or send remote requests.
+-- Continuous client stamina hold. Does not hook or send remote requests.
 local env=(getgenv and getgenv()) or shared
 if game.GameId~=9857379797 then warn("[Anomaly stamina] Hunter X Enter only.");return end
 if type(env.__AnomalyStaminaNoDrainTest)=="table" then
-	local previous=env.__AnomalyStaminaNoDrainTest
-	if type(previous.Stop)=="function" then previous.Stop("MANUAL_STOP")end
 	return
 end
 local player=game:GetService("Players").LocalPlayer
@@ -2763,7 +2770,7 @@ local readUpvalues=d.getupvalues or env.getupvalues
 local writeUpvalue=d.setupvalue or env.setupvalue
 local function finite(n)return type(n)=="number" and n==n and math.abs(n)<math.huge end
 local path="AnomalyHub/universal/hunter_stamina_hold_latest.txt"
-local lines={"HUNTER STAMINA HOLD v1","Client experiment only; no remote hooks or calls. Server acceptance is unknown."}
+local lines={"HUNTER STAMINA HOLD v2","Continuous while selected. No remote hooks or calls."}
 local function save()
 	if type(writefile)~="function" then return false end
 	if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
@@ -2772,10 +2779,9 @@ end
 local function notice(message)
 	status.Text=message
 	warn("[Anomaly stamina] "..message)
-	pcall(function()game:GetService("StarterGui"):SetCore("SendNotification",{Title="Anomaly stamina test",Text=message,Duration=12})end)
 end
 local function unavailable(message)
-	table.insert(lines,"UNAVAILABLE: "..message);save();notice(message)
+	table.insert(lines,"UNAVAILABLE: "..message);save();if status.Text~=message then notice(message)end
 end
 if not humanoid or humanoid.Health<=0 then unavailable("Wait for a living character.");return end
 if type(system)~="table" or type(system.GetStamina)~="function" or type(system.GetMaxStamina)~="function" then
@@ -2825,7 +2831,7 @@ function state.Stop(reason)
 	notice("Stamina hold ended: "..reason..(saved and ". Report saved." or ". Report could not be saved."))
 end
 log("START original="..original.." maximum="..maximum.." duration=until disabled")
-if not save()then unavailable("Cannot save the test report; nothing changed.");return end
+save()
 env.__AnomalyStaminaNoDrainTest=state
 -- Set Changed before calling: an executor failure may occur after a partial write.
 state.Changed=true
@@ -2853,20 +2859,41 @@ table.insert(state.Connections,game:GetService("RunService").Heartbeat:Connect(f
 		if getter()~=cap then error("write did not stick")end
 	end)
 	if not success then log("ERROR "..tostring(err));state.Stop("READ_OR_WRITE_FAILED");return end
-	if now>=nextSave then nextSave=now+5;if not save()then state.Stop("SAVE_FAILED")end end
+	if now>=nextSave then nextSave=now+5;save()end
 end))
 table.insert(state.Connections,player.OnTeleport:Connect(function()state.Stop("TELEPORT")end))
-notice("Stamina hold enabled. Disable it to restore the starting value.")
+notice("Infinite Stamina enabled. No time limit; resumes after respawning.")
 
 end
-local button=group and ui.Checkbox(card,"Infinite Stamina","Stamina Hold: OFF",function()runHold()end)
- or ui.Button(card,"Stamina Hold: OFF",14,72,180,function()runHold()end)
+local function toggle()
+ selected=not selected;env.__AnomalyHunterStaminaEnabled=selected
+ if type(writefile)=="function"then
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  pcall(writefile,preference,tostring(selected))
+ end
+ if selected then nextAttempt=os.clock()+2;runHold()
+ else
+  local active=env.__AnomalyStaminaNoDrainTest
+  if type(active)=="table" and type(active.Stop)=="function"then active.Stop("DISABLED")end
+  status.Text="Off. Starting stamina restored."
+ end
+end
+local button=group and ui.Checkbox(card,"Infinite Stamina","Stamina Hold: OFF",toggle)
+ or ui.Button(card,"Stamina Hold: OFF",14,72,180,toggle)
 controller.Connect(game:GetService("RunService").Heartbeat,function()
+ if closed then return end
  local running=type(env.__AnomalyStaminaNoDrainTest)=="table"
- local text=running and "Stamina Hold: ON" or "Stamina Hold: OFF"
- if button.Text~=text then button.Text=text;button.BackgroundColor3=running and ui.Colors.AccentSoft or ui.Colors.Surface end
+ if selected and not running and not teleporting and os.clock()>=nextAttempt then
+  nextAttempt=os.clock()+2;runHold()
+ end
+ local text=selected and "Stamina Hold: ON" or "Stamina Hold: OFF"
+ if button.Text~=text then button.Text=text;button.BackgroundColor3=selected and ui.Colors.AccentSoft or ui.Colors.Surface end
+end)
+controller.Connect(game:GetService("Players").LocalPlayer.OnTeleport,function(state)
+ teleporting=tostring(state)~="Enum.TeleportState.Failed"
 end)
 controller.RegisterCleanup(function()
+ closed=true
  local active=env.__AnomalyStaminaNoDrainTest
  if type(active)=="table" and type(active.Stop)=="function"then active.Stop("HUB_UNLOAD")end
 end)
@@ -3080,7 +3107,8 @@ controller.Connect(run.Heartbeat,function()
    state.Pending=nil;state.NextBuy=now+3
    status.Text="Bread: "..state.Stock.." / "..state.Target..". Purchase confirmed."
   elseif pending.Done and pending.Result~="ok" then
-   stop("Purchase failed: "..tostring(pending.Result):sub(1,100)..". No retry.")
+   stop(pending.Result=="invalid" and "Shop rejected this purchase. Nearby purchases worked; remote access is still under investigation."
+    or ("Purchase failed: "..tostring(pending.Result):sub(1,100)..". No retry."))
   elseif now-pending.Started>=10 then
    stop("Purchase not confirmed within 10 seconds. Check inventory before enabling again.")
   end
@@ -3115,6 +3143,122 @@ controller.RegisterCleanup(function()
  stop("Unloaded.");state.Closed=true
  if state.Connection then state.Connection:Disconnect();state.Connection=nil end
 end)
+
+end)()
+;(function()
+-- Passive food shop access investigation. Does not alter values, invoke remotes, or execute captured scripts.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="HunterXEnter" then return end
+local player=game:GetService("Players").LocalPlayer
+local rs=game:GetService("ReplicatedStorage")
+local run=game:GetService("RunService")
+local http=game:GetService("HttpService")
+local ui=controller.UI
+local card=ui.Card(ui.Pages.Recorders,"SHOP ACCESS INVESTIGATION // v1","Reads the food shop client code to identify its normal access requirements. Makes no purchases or changes.",180)
+card.LayoutOrder=80
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,52),BackgroundTransparency=1,
+	Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+	Text="Open the food shop normally, then capture its client code."},card)
+local active,button,closed=nil,nil,false
+local function write(path,value)
+	if type(writefile)~="function"then return false end
+	if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+	return pcall(writefile,path,value)
+end
+local function log(c,value)
+	if active~=c or #c.Lines>=1000 then return end
+	table.insert(c.Lines,string.format("%.3f %s",os.clock()-c.Started,tostring(value):sub(1,1200)))
+end
+local function save(c,reason)
+	local report="HUNTER SHOP ACCESS INVESTIGATION v1 // READ ONLY\nClient source cannot establish server authority.\nNo inputs, game requests, mutations, require, or execution of captured scripts.\n"..table.concat(c.Lines,"\n").."\nSTATUS="..reason
+	local latest=write("AnomalyHub/universal/hunter_shop_access_capture_latest.txt",report)
+	local history=write(c.Path..".txt",report)
+	return latest or history
+end
+local function stop(reason)
+	local c=active;if not c then return end
+	log(c,"STOP "..reason);active=nil
+	local saved=save(c,reason)
+	button.Text="Capture Shop Access";button.BackgroundColor3=ui.Colors.Surface
+	status.Text=saved and ("Saved: "..reason..". Client source results are listed in the report.") or "Saving failed."
+end
+local function sourceTargets(c)
+	local roots={}
+	for _,root in pairs({player:FindFirstChildOfClass("PlayerScripts"),rs:FindFirstChild("Modules"),player:FindFirstChildOfClass("PlayerGui")})do table.insert(roots,root)end
+	local queue={};for _,root in pairs(roots)do if root then table.insert(queue,{root,0})end end
+	local index,targets,limited=1,{},false
+	while index<=#queue and index<=2000 do
+		local pair=queue[index];index+=1
+		local object,depth=pair[1],pair[2]
+		local name=object.Name:lower()
+		if not name:find("admin",1,true)then
+			if (object:IsA("LocalScript") or object:IsA("ModuleScript")) and (object:GetFullName():lower():find("shop",1,true) or name:find("merchant",1,true) or name:find("bread",1,true) or name:find("onigiri",1,true))then
+				table.insert(targets,object);if #targets>=4 then log(c,"LIMIT maximum 4 matching client scripts");break end
+			end
+			if depth<10 then for _,child in ipairs(object:GetChildren())do
+				if #queue>=2000 then if not limited then log(c,"LIMIT discovery 2000 objects");limited=true end;break end
+				table.insert(queue,{child,depth+1})
+			end end
+		end
+	end
+	log(c,"SOURCE_TARGETS "..#targets.." scanned="..(index-1))
+	return targets
+end
+local function captureSource(c,object,index)
+	local path=object:GetFullName();log(c,"SOURCE_TARGET "..path)
+	local resolved=false
+	local function finish(value,reason)
+		if resolved or active~=c then return end;resolved=true
+		if type(value)=="string" and value:match("%S") and #value<=2000000
+			and not value:lower():find("failed to decompile",1,true) and not value:lower():find("decompilation failed",1,true)then
+			local file=c.Path.."_"..index.."_"..object.Name:gsub("[^%w_]","")..".lua"
+			log(c,write(file,value) and ("SOURCE_SAVED "..file.." bytes="..#value.." path="..path) or ("SOURCE_SAVE_FAILED "..path))
+		else log(c,"SOURCE_UNAVAILABLE "..path.." "..reason)end
+		save(c,"RECORDING")
+	end
+	task.delay(5,function()finish(nil,"5s deadline; late results ignored")end)
+	task.spawn(function()
+		local ok,value=pcall(function()return object.Source end)
+		if ok and type(value)=="string" and value:match("%S")then finish(value,"empty or larger than 2MB");return end
+		if resolved or active~=c then return end
+		local reader=env.decompile or decompile
+		if type(reader)~="function"then finish(nil,"decompiler unavailable");return end
+		local success,result=pcall(reader,object)
+		finish(success and result or nil,"unreadable, failed, empty or larger than 2MB")
+	end)
+end
+local function sample(c)
+	for _,key in ipairs({"Hunger","Saturation","HungerMult"})do
+		local value=tostring(player:GetAttribute(key))
+		if c.Previous[key]~=value then c.Previous[key]=value;log(c,"PLAYER@"..key.."="..value)end
+	end
+	local char=player.Character;local hum=char and char:FindFirstChildOfClass("Humanoid")
+	if hum and c.Health~=hum.Health then c.Health=hum.Health;log(c,"HEALTH="..hum.Health)end
+end
+button=ui.Button(card,"Capture Shop Access",14,72,180,function()
+	if closed then return end
+	if active then stop("STOPPED");return end
+	local ok,id=pcall(http.GenerateGUID,http,false);if not ok then id=tostring(os.clock())end
+	local c={Started=os.clock(),Previous={},Lines={},NextSave=0,NextSample=0,Character=player.Character,
+		Path="AnomalyHub/universal/hunter_shop_access_"..os.time().."_"..tostring(id):gsub("[^%w%-]","")}
+	active=c;sample(c)
+	if not save(c,"RECORDING")then stop("SAVE_FAILED");return end
+	button.Text="Stop + Save";button.BackgroundColor3=ui.Colors.AccentSoft
+	local success,targets=pcall(sourceTargets,c)
+	if success then for index,object in ipairs(targets)do captureSource(c,object,index)end else log(c,"DISCOVERY_FAILED "..tostring(targets))end
+end)
+controller.Connect(run.Heartbeat,function()
+	local c=active;if not c then return end
+	local now=os.clock()
+	if player.Character~=c.Character then stop("CHARACTER_CHANGED");return end
+	if now-c.Started>=15 then stop("COMPLETE");return end
+	if now>=c.NextSample then c.NextSample=now+.25;local ok=pcall(sample,c);if not ok then stop("SAMPLE_FAILED");return end end
+	if now>=c.NextSave then c.NextSave=now+5;if not save(c,"RECORDING")then stop("SAVE_FAILED");return end end
+	status.Text=string.format("Recording %.0fs / 15s. Reading shop access code.\nNo purchases or changes are made.",now-c.Started)
+end)
+controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
+controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)
 
 end)()
 ;(function()

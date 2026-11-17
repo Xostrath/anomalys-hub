@@ -5529,7 +5529,7 @@ end)
 end)()
 ;(function()
 -- v4 confirmed in-game 2026-11-16; v5 timing confirmed 2026-11-17; v6 legendary fight landed MasterOfTheSwamp 2026-11-17.
--- v7 re-aims the camera when a cast finds no water (the legend cinematic hands the camera back at a random angle) and holds casts during anti-macro checks. Casts and hooks with the E key, steers the reel zone to keep the fish on the line,
+-- v8 (2026-11-17) re-presses a legendary hold the game never registered (lost a Swamp Master to it). v7 re-aims the camera when a cast finds no water (the legend cinematic hands the camera back at a random angle) and holds casts during anti-macro checks. Casts and hooks with the E key, steers the reel zone to keep the fish on the line,
 -- then claims the catch the instant the server's minReel window opens -- the server only gates catches on elapsed time
 -- (minReel) plus the fish not having escaped, never on real reel progress, so this lands fish as fast as the server allows.
 -- Steering is still run so the fish can't drift off the line before minReel passes (some fish escape before their own minReel).
@@ -5544,7 +5544,7 @@ local guiService=game:GetService("GuiService")
 local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
 local ui=controller.UI
 local group=ui.GeneralSection
-local card=group and group.Body or ui.Card(ui.Pages.General,"AUTO FISH // v7","Casts, hooks bites and claims each catch the instant the server allows. Equip your rod and face the water.",172)
+local card=group and group.Body or ui.Card(ui.Pages.General,"AUTO FISH // v8","Casts, hooks bites and claims each catch the instant the server allows. Equip your rod and face the water.",172)
 local top=group and group.Height or 72
 if group then group.SetHeight(top+28) end
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,44),BackgroundTransparency=1,Visible=group==nil,
@@ -5555,7 +5555,7 @@ local button
 local path="AnomalyHub/universal/hunter_auto_fish_latest.txt"
 -- Reel physics measured from a manual catch, in track heights per second squared. Slightly low on purpose so braking starts early.
 local FALL,LIFT=2.6,3.8
-local HEADER="HUNTER AUTO FISH v7 // E-key cast and hook; claims normal catches once minReel passes; plays legendary fights\n"
+local HEADER="HUNTER AUTO FISH v8 // E-key cast and hook; claims normal catches once minReel passes; plays legendary fights\n"
  .."AIM lines re-point the camera after a cast found no water; ANTI_MACRO lines mark a check on screen (new casts wait for it).\nKey input only. IN lines are server fishing events; ANIM lines are the character's fishing state.\n"
  .."REEL lines (10Hz): zone/fish are centres as a fraction of the track (0 top, 1 bottom), v is zone speed, held is our key, down is the game's view of E.\n"
  .."LEGEND lines (10Hz): tension 0-1 (snaps after 0.7s at 1), source hud/sim, progress is the fight's % label, callout is the game's prompt.\n"
@@ -5662,7 +5662,7 @@ local function toggle()
    elseif kind=="LegendHooked"then
     -- Legendary (0.2%): the game runs its own tension fight and claims the catch itself once progress is full.
     -- Never send Catch here; a snapped line breaks the rod.
-    state.HookAt=nil;state.Legend=os.clock();state.LegendSim=.25;state.LegendT=nil
+    state.HookAt=nil;state.Legend=os.clock();state.LegendSim=.25;state.LegendT=nil;state.HoldStart=nil;state.Represses=0
     -- Its own file, seeded with the last 40 lines (the cast, bite and hook) for context.
     state.LegendFile="AnomalyHub/universal/hunter_auto_fish_legend_"..os.time()..".txt"
     state.LegendLines={}
@@ -5817,7 +5817,19 @@ local function legendStep(now)
  elseif mash and t<.75 then want=not state.Held
  elseif state.Held then want=t<.85
  else want=t<.5 end
- if want~=state.Held and (not want or now-(state.KeyAt or 0)>=.05)then key(want)end
+ -- A hold the fight never registered: both legendary logs show E held from the end of the intro with tension stuck at 0 while
+ -- the game asked to "REEL IN E". The game only counts a fresh press, so a hold that started too early does nothing.
+ -- The won fight recovered only because a MASH prompt made us re-tap; the lost one (2026-11-17) drained to 0% and escaped.
+ -- If tension hasn't risen 0.45s into a hold (outside a rush), let go; the line below presses again 50ms later.
+ if want and state.Held and not rush and state.HoldStart and now-state.HoldStart>=.45 and t<=(state.HoldTension or 0)+.03 then
+  key(false);state.HoldStart=nil;state.Represses=(state.Represses or 0)+1
+  log(string.format("LEGEND_REPRESS dead hold, tension=%.2f progress=%s count=%d",t,tostring(state.LegendProgress),state.Represses))
+  return
+ end
+ if want~=state.Held and (not want or now-(state.KeyAt or 0)>=.05)then
+  key(want)
+  if want then state.HoldStart=now;state.HoldTension=t end
+ end
  if now>=(state.NextReelLog or 0)then
   state.NextReelLog=now+.1
   log(string.format("LEGEND tension=%.2f src=%s held=%d progress=%s callout=%s",t,tension and "hud" or "sim",state.Held and 1 or 0,

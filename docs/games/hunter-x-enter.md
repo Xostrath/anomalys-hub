@@ -146,6 +146,7 @@ Infinite Nen writes the pool upvalue to max every frame while training. v1 held 
 | 2026-11-17 / HXE-T013 | Infinite Nen v1 with Ten | — | `skill=Ten writes=0` | Scope limitation, not breakage | v2 (HXE-005) |
 | 2026-11-17 / HXE-T014 | Auto Eat v1 | Eat below threshold, pause/resume autos | Paused Auto Nen + Auto Training, 11× Bread 9.99→97.99 (+8 each, ~0.5 s apart), resumed both | **Verified live** | — |
 | 2026-11-17 / HXE-T015 | Auto Nen v2 + Infinite Nen v2 | Train Ren with U | "Training Ren · aura 100%" sustained | **Verified live** (report) | Other skills: same path, not individually tested |
+| 2026-11-17 / HXE-T017 | Auto Fish v7, second legendary | Win the fight | **Lost:** `Reset legendlost` 10.5 s after the hook. E was held (`held=1`) from the end of the intro, but tension stayed 0 and the game kept calling "REEL IN E"; progress drained 15%→0%. Re-reading HXE-T010: the won fight had the **same dead hold** and was rescued only because a MASH callout made the hub re-tap | **Failure.** Cause from both logs: the game only counts a fresh E press; a hold that began too early is never registered | v8: if tension hasn't risen 0.45 s into a hold (outside a rush), release and re-press (`LEGEND_REPRESS` lines). **Untested live** |
 | 2026-11-17 / HXE-T016 | Speed rest 0%→100% | Run to empty, rest to full | — | **Implemented / untested live** | Check `STAMINA_REST` lines; a sprint lost at ≤15% counts as empty |
 
 ## References from other games

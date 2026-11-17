@@ -22,7 +22,28 @@ local function anomalyHasBeyondNenFingerprint()
 		and cast~=nil and cast:IsA('RemoteFunction') and affinityService~=nil and affinityService.Name=='NenService'
 		and castService~=nil and castService.Name=='SkillsService'
 end
-local anomalyProfile=(anomalyHasGohanFingerprint() or game.PlaceId==89366025586253) and 'Gohan' or (anomalyHasBeyondNenFingerprint() and 'BeyondNen' or 'Universal')
+-- Observed 2026-11-16 in place 76571518635501, universe 9857379797.
+-- Detection only: never invoke or fire the objects used as identifiers.
+local function anomalyHasHunterXEnterFingerprint()
+	if game.GameId ~= 9857379797 then return false end
+	local rs = game:GetService("ReplicatedStorage")
+	local function matches(path, className)
+		local node = rs
+		for _, name in ipairs(path) do
+			node = node:FindFirstChild(name)
+			if not node then return false end
+		end
+		return node:IsA(className)
+	end
+	return matches({"Assets", "Remotes", "Combat"}, "RemoteEvent")
+		and matches({"Assets", "Remotes", "Skills"}, "RemoteEvent")
+		and matches({"RemoteEvents", "FishingRemote"}, "RemoteEvent")
+		and matches({"RemoteEvents", "MeditationSync"}, "RemoteEvent")
+		and matches({"InventoryRemotes", "InventoryAction"}, "RemoteEvent")
+		and matches({"InventoryRemotes", "GetInventory"}, "RemoteFunction")
+end
+
+local anomalyProfile=anomalyHasHunterXEnterFingerprint() and 'HunterXEnter' or ((anomalyHasGohanFingerprint() or game.PlaceId==89366025586253) and 'Gohan' or (anomalyHasBeyondNenFingerprint() and 'BeyondNen' or 'Universal'))
 local anomalyEnvironment=(getgenv and getgenv()) or shared
 anomalyEnvironment.__AnomalyDetectedProfile=anomalyProfile
 if anomalyProfile == 'BeyondNen' then
@@ -210,7 +231,7 @@ create("TextLabel", {
 }, sidebar)
 create("TextLabel", {
 	Position = UDim2.fromOffset(18, 39), Size = UDim2.new(1, -36, 0, 16), BackgroundTransparency = 1,
-	Font = Enum.Font.Code, Text = "UNIVERSAL PROFILE", TextColor3 = colors.Accent, TextSize = 9,
+	Font = Enum.Font.Code, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER" or "UNIVERSAL PROFILE", TextColor3 = colors.Accent, TextSize = 9,
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, sidebar)
 
@@ -246,7 +267,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 15), Size = UDim2.fromOffset(190, 36),
-	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = "UNIVERSAL // ACTIVE\n" .. tostring(game.PlaceId),
+	BackgroundTransparency = 1, Font = Enum.Font.Code, Text = (env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v1\n" or "UNIVERSAL // ACTIVE\n") .. tostring(game.PlaceId),
 	TextColor3 = colors.Success, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1359,6 +1380,34 @@ end)
 note("READY v6"); save()
 
 end)()
+if anomalyProfile == 'HunterXEnter' then
+(function()
+-- Hunter X Enter adapter scaffold. Shared tools only until feature captures.
+local env = (getgenv and getgenv()) or shared
+local controller = env.__AnomalyUniversalController
+if type(controller) ~= "table" or controller.Profile ~= "HunterXEnter" then return end
+
+controller.AdapterStatus = "Fingerprint confirmed; shared tools active"
+controller.GameIdentity = {
+	UniverseId = 9857379797,
+	ObservedPlaceId = 76571518635501,
+	FingerprintVersion = 1,
+}
+local ui = controller.UI
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v1",
+	"Game detected. Shared tools are available; game-specific features are not mapped yet.", 116)
+card.LayoutOrder = -10
+ui.Create("TextLabel", {
+	Position = UDim2.fromOffset(14, 72), Size = UDim2.new(1, -28, 0, 28),
+	BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 11,
+	TextColor3 = ui.Colors.Muted, TextWrapped = true,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Text = "Captured systems: combat, fishing, meditation, inventory and quests.",
+}, card)
+print("[Anomaly] Hunter X Enter adapter v1 loaded; shared tools only.")
+
+end)()
+end
 if anomalyProfile == 'BeyondNen' then
 (function()
 -- Beyond Nen profile adapter

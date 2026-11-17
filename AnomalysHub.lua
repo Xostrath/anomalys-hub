@@ -1057,12 +1057,17 @@ local function getEspWorldMetrics(character, root)
 	return width, height, centerOffset, infoOffset
 end
 
+local function espEnabledFor(target)
+	if target == player then
+		return controller.Profile == "Sparkling" and state.EspSettings.SelfOutline == true
+	end
+	return state.EspEnabled == true
+end
 local function updateEsp(target, localRoot)
-	if target == player then return end
 	local character = target.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local root = character and (character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head"))
-	if not state.EspEnabled or not humanoid or not root or not root:IsA("BasePart") or humanoid.Health <= 0
+	if not espEnabledFor(target) or not humanoid or not root or not root:IsA("BasePart") or humanoid.Health <= 0
 		or not localRoot or not character:IsDescendantOf(workspace) then removeEsp(target); return end
 	local distance = (root.Position - localRoot.Position).Magnitude
 	if distance > state.EspDistance then removeEsp(target); return end
@@ -1117,7 +1122,7 @@ local function updateEsp(target, localRoot)
 		entry.Energy = makeResourceBar("Energy", 18, Color3.fromRGB(48, 145, 255))
 		entry.Stamina = makeResourceBar("Stamina", 27, Color3.fromRGB(255, 205, 75))
 		entry.HealthBinding = controller.BindEspHealth(entry.Health, humanoid, function()
-			return state.EspEnabled and state.EspSettings.Health and target.Character == character
+			return espEnabledFor(target) and state.EspSettings.Health and target.Character == character
 		end)
 		state.EspEntries[target] = entry
 	end
@@ -1975,24 +1980,7 @@ function controller.ResolvePlayerEspData(target,character)
  return {Race=explicitRace(target,character),BattlePower=finite(value) and value or nil,Ki=finite(kiValue) and kiValue or nil}
 end
 ui.PlayerEspCard.Size=UDim2.new(1,0,0,324)
-ui.OptionGrid(ui.PlayerEspCard,{{"Name","Player name"},{"Race","Race"},{"BattlePower","Power level"},{"Ki","Ki level"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"},{"SelfOutline","Self outline"}},state.EspSettings,136)
-local outline=Instance.new("Highlight")
-outline.Name="SparklingSelfOutline"
-outline.FillTransparency=1
-outline.OutlineTransparency=0
-outline.OutlineColor=ui.Colors.Accent
-outline.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
-outline.Enabled=false
-outline.Parent=ui.Gui
-local function refreshOutline()
- local char=players.LocalPlayer.Character
- local humanoid=char and char:FindFirstChildOfClass("Humanoid")
- outline.Adornee=char
- outline.Enabled=state.EspSettings.SelfOutline==true and humanoid~=nil and humanoid.Health>0
-end
-controller.Connect(game:GetService("RunService").Heartbeat,refreshOutline)
-controller.RegisterCleanup(function()outline:Destroy()end)
-
+ui.OptionGrid(ui.PlayerEspCard,{{"Name","Player name"},{"Race","Race"},{"BattlePower","Power level"},{"Ki","Ki level"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"},{"SelfOutline","Self ESP"}},state.EspSettings,136)
 local card=ui.Card(ui.Pages.Recorders,"SPARKLING ESP DATA","Capture visible race and power fields to verify player labels. No requests are sent.",200)
 card.LayoutOrder=30
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,70),BackgroundTransparency=1,

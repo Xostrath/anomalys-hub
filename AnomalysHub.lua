@@ -271,7 +271,7 @@ local subtitleLabel = create("TextLabel", {
 }, topBar)
 local profileLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -76, 0, 20), Size = UDim2.fromOffset(146, 18),
-	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v14" or "UNIVERSAL // ACTIVE",
+	BackgroundTransparency = 1, Font = Enum.Font.Gotham, Text = env.__AnomalyDetectedProfile == "HunterXEnter" and "HUNTER X ENTER // v15" or "UNIVERSAL // ACTIVE",
 	TextColor3 = colors.Accent, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right,
 }, topBar)
 
@@ -1493,7 +1493,7 @@ controller.GameIdentity = {
 	FingerprintVersion = 1,
 }
 local ui = controller.UI
-local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v14",
+local card = ui.Card(ui.Pages.Home, "HUNTER X ENTER // v15",
 	"Player/NPC ESP, training macros and manual-play recorders are ready.", 116)
 card.LayoutOrder = -10
 ui.Create("TextLabel", {
@@ -1503,7 +1503,7 @@ ui.Create("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Text = "Training supports background input and running against walls. Physical training watches stamina.",
 }, card)
-print("[Anomaly] Hunter X Enter adapter v14 loaded; Auto Nen and stamina hold available.")
+print("[Anomaly] Hunter X Enter adapter v15 loaded; Food Shop recorder available.")
 
 end)()
 ;(function()
@@ -1666,11 +1666,8 @@ local Http = game:GetService("HttpService")
 local rs = game:GetService("ReplicatedStorage")
 local player, ui = Players.LocalPlayer, controller.UI
 local modes = {
-	{Id="meditation", Name="Meditation", Page="Auto", Help="Start meditation manually, complete 5–10 prompts, then exit meditation before saving."},
-	{Id="climb", Name="Climb", Page="Auto", Help="Approach a wall, climb, release, and repeat. Include a rest so stamina recovery is captured."},
-	{Id="strength", Name="Strength", Page="Auto", Help="Start push-ups manually, complete 5–10 prompts, then stop. Include the start and exit controls."},
-	{Id="speed", Name="Speed", Page="Auto", Help="Walk, start running, turn, stop, and rest. Repeat using your usual sprint controls."},
 	{Id="nen", Name="Nen", Page="Auto", Help="Choose a skill below. Manually activate it, let the shared bar drain, turn it off, and record a full refill."},
+	{Id="shop", Name="Food Shop", Page="Recorders", Help="Stand beside a food merchant, open their shop and buy one Bread or Onigiri normally. Wait for your inventory and money to update, then Stop + Save."},
 }
 for _,mode in ipairs(modes)do mode.Page="Recorders"end
 local nenChoices={"Nen","Ten","Ren","Zetsu","In","Gyo","Shu","Ken","Ko","En"}
@@ -1704,6 +1701,25 @@ local function log(c, message)
 	if #c.Lines >= 16000 or c.Bytes + #line + 1 > 4000000 then c.Limited = true; return end
 	c.Bytes += #line + 1; table.insert(c.Lines, line)
 end
+local function foodInventory(c, value)
+	if c.Mode.Id~="shop"then return end
+	local seen, count, limited={},0,false
+	local function food(v)return type(v)=="string" and (v:lower():find("bread",1,true) or v:lower():find("onigiri",1,true))end
+	local function scan(v,path,depth)
+		if type(v)~="table" or seen[v]then return end
+		if depth>8 or count>=600 then limited=true;return end
+		seen[v]=true
+		local matches=false
+		for k,item in pairs(v)do
+			count+=1;if count>600 then limited=true;break end
+			if food(k) or food(item)then matches=true end
+			if type(item)=="table"then scan(item,path.."["..tostring(k).."]",depth+1)end
+		end
+		if matches then log(c,"FOOD_INVENTORY "..path.." "..sample(v))end
+	end
+	scan(value,"payload",0)
+	if limited then log(c,"LIMIT Food inventory scan reached 600 fields/depth 8")end
+end
 local function connect(c, signal, callback, bucket)
 	local connection = signal:Connect(function(...)
 		if active ~= c then return end
@@ -1721,7 +1737,7 @@ local function save(c, reason)
 	c.Report = "HUNTER X ENTER " .. c.Mode.Name:upper() .. " RECORDER // PASSIVE v1\nplace=" .. game.PlaceId .. " universe=" .. game.GameId
 		.. "\nHistory=" .. c.Archive .. "\nNo inputs sent, remotes fired/invoked/replayed, or scripts decompiled. Text-entry and chat excluded."
 		.. (c.NenSelection and ("\nSelected Nen skill="..c.NenSelection.." (user label, not proof of active/unlocked skill). Shared-bar capture; no automatic activation.") or "")
-		.. "\nRemote calls are forwarded first; requestStart is their original observation time. Hook paths may duplicate a call."
+		.. "\nOUT precedes forwarding; RETURN follows completion. No RETURN may mean an error, pending call, or stopped recording. Hook paths may duplicate a call; call IDs distinguish observations."
 		.. "\nAnimation, health and attribute observations are not confirmed success verdicts. Server receipt time is not captured."
 		.. "\nLimits: 120s, 16000 lines/4MB, 20Hz motion/UI, 6 nearby loaded actors within 100 studs, 16 tracks each."
 		.. (c.NenSelection and "\nNen GUI refresh 1s/2000 objects/depth 16, including character billboards." or "\nGUI tree refresh 1s/600 objects.")
@@ -1738,7 +1754,7 @@ local function relevant(name)
 	local key = name:lower()
 	for _,skill in ipairs(nenChoices)do if key==skill:lower()then return true end end
 	if key:find("aura",1,true) or key:find("mastery",1,true)then return true end
-	for _, word in ipairs({"block", "parr", "perfect", "stun", "attack", "combat", "posture", "health", "stamina", "energy", "hunger", "saturation", "meditat", "strength", "speed", "climb", "pushup", "training", "sprint", "running", "nen", "weight", "busy", "cooldown"}) do
+	for _, word in ipairs({"money", "cash", "jenni", "currency", "bread", "onigiri", "inventory", "block", "parr", "perfect", "stun", "attack", "combat", "posture", "health", "stamina", "energy", "hunger", "saturation", "meditat", "strength", "speed", "climb", "pushup", "training", "sprint", "running", "nen", "weight", "busy", "cooldown"}) do
 		if key:find(word, 1, true) then return true end
 	end
 	return false
@@ -1767,8 +1783,19 @@ local function walk(root, maxCount, maxDepth, visit)
 end
 
 -- Reuse forwarding hooks across hub reloads. Inactive hooks simply forward.
-local probe = env.__AnomalyHunterRecorderProbe
-if type(probe) ~= "table" then probe = {Targets={}, Coverage={}}; env.__AnomalyHunterRecorderProbe = probe end
+local probe = env.__AnomalyHunterRecorderProbeV2
+if type(probe) ~= "table" then probe = {Targets={}, Coverage={}, DirectMethods={}}; env.__AnomalyHunterRecorderProbeV2 = probe end
+local function forward(original, source, self, ...)
+	local callback, path = probe.Callback, probe.Targets[self]
+	if not callback or not path then return original(self, ...) end
+	probe.Serial=(probe.Serial or 0)+1
+	local id, started, args = probe.Serial, os.clock(), table.pack(...)
+	pcall(callback, self, "OUT "..source, args, started, id, nil, path)
+	-- The original runs exactly once, outside pcall: errors and yielding retain their behavior.
+	local result = table.pack(original(self, ...))
+	pcall(callback, self, "RETURN "..source, args, started, id, result, path)
+	return table.unpack(result, 1, result.n)
+end
 local function installHooks()
 	local wrap = env.newcclosure or newcclosure or function(f) return f end
 	local hook, method = env.hookmetamethod or hookmetamethod, env.getnamecallmethod or getnamecallmethod
@@ -1778,29 +1805,26 @@ local function installHooks()
 			original = hook(game, "__namecall", wrap(function(self, ...)
 				if not probe.Callback or not probe.Targets[self] then return original(self, ...) end
 				local valid, call = pcall(method)
-				if not valid or call ~= "FireServer" then return original(self, ...) end
-				local callback, started, args = probe.Callback, os.clock(), table.pack(...)
-				local result = table.pack(original(self, ...))
-				pcall(callback, self, "OUT namecall", args, started)
-				return table.unpack(result, 1, result.n)
+				if not valid or (call ~= "FireServer" and call ~= "InvokeServer") then return original(self, ...) end
+				return forward(original, "namecall "..call, self, ...)
 			end))
 		end)
-		if ok then probe.Namecall = true; table.insert(probe.Coverage, "namecall FireServer") end
+		if ok then probe.Namecall = true; table.insert(probe.Coverage, "namecall FireServer/InvokeServer") end
 	end
 	local hookFunction = env.hookfunction or hookfunction
-	local target = next(probe.Targets)
-	if not probe.Direct and target and type(hookFunction) == "function" then
+	for _, spec in ipairs({{"RemoteEvent","FireServer"},{"RemoteFunction","InvokeServer"}}) do
+	local target
+	for object in pairs(probe.Targets)do if object:IsA(spec[1])then target=object;break end end
+	local methodName=spec[2]
+	if not probe.DirectMethods[methodName] and target and type(hookFunction) == "function" then
 		local original
 		local ok = pcall(function()
-			original = hookFunction(target.FireServer, wrap(function(self, ...)
-				if not probe.Callback or not probe.Targets[self] then return original(self, ...) end
-				local callback, started, args = probe.Callback, os.clock(), table.pack(...)
-				local result = table.pack(original(self, ...))
-				pcall(callback, self, "OUT direct", args, started)
-				return table.unpack(result, 1, result.n)
+			original = hookFunction(target[methodName], wrap(function(self, ...)
+				return forward(original, "direct "..methodName, self, ...)
 			end))
 		end)
-		if ok then probe.Direct = true; table.insert(probe.Coverage, "direct FireServer") end
+		if ok then probe.DirectMethods[methodName] = true; table.insert(probe.Coverage, "direct "..methodName) end
+	end
 	end
 end
 local function syncRemotes(c)
@@ -1808,8 +1832,9 @@ local function syncRemotes(c)
 	local function add(folder, names)
 		for _, name in ipairs(names) do table.insert(paths, folder .. "." .. name) end
 	end
-	if c.Mode.Id == "meditation" then add("RemoteEvents", {"Meditate","MeditationKey","MeditationReady","MeditationSync","MeditationUI"})
-	elseif c.Mode.Id == "strength" then add("RemoteEvents", {"Pushup","PushupKey","PushupSync","PushupUI","WeightEquipResult"})
+	if c.Mode.Id == "shop" then
+		add("RemoteEvents",{"BuyBread","BuyOnigiri"})
+		add("InventoryRemotes",{"GetInventory","InventoryUpdated"})
 	elseif c.Mode.Id == "nen" then
 		table.insert(paths,"NenSkillsRemote");table.insert(paths,"NenTypeXP")
 		add("RemoteEvents",{"NenToggle","ZetsuDetect","ZetsuTransparency"})
@@ -1820,21 +1845,21 @@ local function syncRemotes(c)
 	for _, path in ipairs(paths) do
 		local object = rs
 		for name in path:gmatch("[^.]+") do object = object and object:FindFirstChild(name) end
-		if object and object:IsA("RemoteEvent") then targets[object] = "ReplicatedStorage." .. path end
+		if object and (object:IsA("RemoteEvent") or object:IsA("RemoteFunction")) then targets[object] = "ReplicatedStorage." .. path end
 	end
 	local movement = player.Character and player.Character:FindFirstChild("Movement")
 	local movementController = movement and movement:FindFirstChild("MovementController")
 	local event = movementController and movementController:FindFirstChild("Event")
-	if event and event:IsA("RemoteEvent") then targets[event] = event:GetFullName() end
+	if c.Mode.Id~="shop" and event and event:IsA("RemoteEvent") then targets[event] = event:GetFullName() end
 	probe.Targets = targets
 	for object, connection in pairs(c.RemoteConnections) do
 		if not targets[object] then connection:Disconnect(); c.RemoteConnections[object] = nil end
 	end
 	for object, name in pairs(targets) do
-		if not c.RemoteConnections[object] then
-			log(c, "WATCH " .. name)
+		if not c.Watched[object]then log(c, "WATCH " .. name);c.Watched[object]=true end
+		if object:IsA("RemoteEvent") and not c.RemoteConnections[object] then
 			c.RemoteConnections[object] = object.OnClientEvent:Connect(function(...)
-				if active == c then pcall(function(...) log(c, "REMOTE IN " .. name .. " args=" .. sample(table.pack(...))) end, ...) end
+				if active == c then pcall(function(...) local data=table.pack(...);log(c, "REMOTE IN " .. name .. " args=" .. sample(data));foodInventory(c,data) end, ...) end
 			end)
 		end
 	end
@@ -2032,13 +2057,14 @@ local function start(mode)
 	local ok,nonce=pcall(Http.GenerateGUID,Http,false)
 	if not ok then nonce=tostring(math.floor(os.clock()*1000000)).."_"..serial end
 	local c={Mode=mode,Started=os.clock(),Character=player.Character,Lines={},Bytes=0,Connections={},RemoteConnections={},Actors={},ActorId=0,TrackId=0,
-		Limits={},LastUI={},LastStats={},GuiObjects={},NextSync=0,NextFrame=0,NextSave=0,NextClock=0,
+		Limits={},Watched={},LastUI={},LastStats={},GuiObjects={},NextSync=0,NextFrame=0,NextSave=0,NextClock=0,
 		Archive=basePath..mode.Id.."_"..os.time().."_"..tostring(nonce):gsub("[^%w_%-]","")..".txt"}
 	active=c
 	if mode.Id=="nen"then c.NenSelection=selectedNen;log(c,"SELECTED_NEN "..selectedNen);if mode.CloseDropdown then mode.CloseDropdown()end end
-	probe.Callback=function(remote,direction,args,started)
+	probe.Callback=function(remote,direction,args,started,id,result,path)
 		if active~=c or started<c.Started then return end
-		log(c,"REMOTE "..direction.." "..tostring(probe.Targets[remote]).." requestStart="..string.format("%.4f",started-c.Started).." args="..sample(args))
+		log(c,"REMOTE "..direction.." "..tostring(path).." call="..tostring(id).." requestStart="..string.format("%.4f",started-c.Started).." args="..sample(args)..(result and (" result="..sample(result)) or ""))
+		if result then foodInventory(c,result)end
 	end
 	local function input(direction,value,processed)
 		if Input:GetFocusedTextBox() then return end

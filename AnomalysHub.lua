@@ -125,7 +125,7 @@ local state = {
 	NpcEspSettings = {Name = true, Distance = true, Box = true,
 		Quest = true, Enemy = true, Boss = true, Other = true,
 		-- Sparkling NPC ESP fields and kinds.
-		Health = true, Power = true, Trainer = true, Npc = true},
+		Health = true, Power = true, Npc = true},
 	Noclip = false,
 	AntiAfk = true,
 	EspEntries = {},
@@ -2085,8 +2085,8 @@ end)()
 ;(function()
 -- Sparkling NPC ESP. Reads loaded NPC models; sends no game requests.
 -- Structure reused from BeyondNenNpcESP.lua (watch Workspace once, then update tracked rigs only).
--- Sparkling has no NPC catalog yet: names come from the model, "...Trainer" models are labelled TRAINER
--- (observed in Workspace.Live, 2026-11-17), everything else is a plain NPC. No hostility is assumed.
+-- Sparkling has no NPC catalog. Regular (non-combat) NPCs have MaxHealth 100 or 999; anything else is an enemy (user, 2026-11-17).
+-- MaxHealth, not Health, so a damaged regular NPC keeps its type.
 local env = (getgenv and getgenv()) or shared
 local controller = env.__AnomalyUniversalController
 if type(controller) ~= "table" or controller.Profile ~= "Sparkling" then return end
@@ -2101,14 +2101,15 @@ local addedConnection, removingConnection
 local watching, stopped = false, false
 
 local roles = {
-	Trainer = {Label = "TRAINER", Color = Color3.fromRGB(134, 230, 173)},
 	Npc = {Label = "NPC", Color = Color3.fromRGB(130, 202, 255)},
+	Enemy = {Label = "ENEMY", Color = Color3.fromRGB(255, 115, 120)},
 }
 local function finite(value)
 	return type(value) == "number" and value == value and value >= 0 and value < math.huge
 end
-local function classify(model)
-	return model.Name:match("Trainer$") and "Trainer" or "Npc"
+local function classify(humanoid)
+	local maximum = humanoid.MaxHealth
+	return (maximum == 100 or maximum == 999) and "Npc" or "Enemy"
 end
 local function displayName(model, humanoid)
 	for _, key in ipairs({"DisplayName", "NPCName"}) do
@@ -2220,7 +2221,7 @@ local function updateNpc(model, localRoot, characters)
 		return
 	end
 	local humanoid = model:FindFirstChildOfClass("Humanoid")
-	local kind = classify(model)
+	local kind = humanoid and classify(humanoid)
 	local settings = state.NpcEspSettings
 	if not localRoot or not humanoid or humanoid.Health <= 0 or isPlayerCharacter(model, characters) or settings[kind] == false then
 		removeEntry(model)
@@ -2254,7 +2255,7 @@ local function updateNpc(model, localRoot, characters)
 	entry.Stroke.Enabled = settings.Box == true
 end
 
-local npcCard = ui.Card(ui.Pages.ESP, "NPC ESP", "Names, health, power level, distance and outlines for NPCs. Trainers are labelled; other NPCs are not classified yet.", 340)
+local npcCard = ui.Card(ui.Pages.ESP, "NPC ESP", "Names, health, power level, distance and outlines for NPCs. Regular NPCs (100 or 999 max health) and enemies are toggled separately.", 340)
 npcCard.LayoutOrder = 20
 ui.Create("TextLabel", {Position = UDim2.new(0.5, 4, 0, 62), Size = UDim2.new(0.5, -18, 0, 16), BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham, Text = "MAX DISTANCE (STUDS)", TextColor3 = colors.Muted, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left}, npcCard)
@@ -2274,7 +2275,7 @@ end), 1, 86)
 ui.OptionGrid(npcCard, {{"Name", "Name / type"}, {"Health", "Health"}, {"Power", "Power level"}, {"Distance", "Distance"}, {"Box", "Body box"}}, state.NpcEspSettings, 136)
 ui.Create("TextLabel", {Position = UDim2.fromOffset(14, 268), Size = UDim2.new(1, -28, 0, 16), BackgroundTransparency = 1,
 	Font = Enum.Font.GothamSemibold, Text = "NPC TYPES", TextColor3 = colors.Accent, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left}, npcCard)
-ui.OptionGrid(npcCard, {{"Trainer", "Trainers"}, {"Npc", "Other NPCs"}}, state.NpcEspSettings, 292)
+ui.OptionGrid(npcCard, {{"Npc", "Regular NPCs"}, {"Enemy", "Enemy NPCs"}}, state.NpcEspSettings, 292)
 
 local elapsed = 0
 controller.Connect(RunService.Heartbeat, function(delta)

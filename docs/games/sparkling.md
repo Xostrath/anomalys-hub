@@ -25,7 +25,7 @@ Last reviewed: 2026-11-17. This is the initial consolidated handoff from the ava
 | Ki ESP | Blue bar next to red health bar; requires known Ki and explicit positive MaxKi for fill | Ki observed; bar compiled | No verified MaxKi source; unknown max shows an empty track marked `?` |
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
 | Auto parry | Two animation IDs, 8-stud range, facing and line-of-sight gates, brief F input | First v1 log reviewed; outcomes ambiguous | Reliable timing, coverage, and causality unverified |
-| NPC ESP v1 (SP-T010) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types: TRAINER (name ends in `Trainer`) or NPC | Implemented / untested live; both builds compile | Which NPCs exist, where they live, and whether they carry PowerLevel |
+| NPC ESP v1 (SP-T010) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v2, SP-T011): **NPC** = Humanoid.MaxHealth 100 or 999, **ENEMY** = any other MaxHealth; each type has its own toggle | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
 | Combat page v5 (SP-T012; supersedes active-input behavior) | **Combat → Auto Parry // RECORD ONLY → Record Attacks**. PvP/PvE, range and skip options annotate hypothetical decisions; no automatic input | 47 mocked assertions and source/public/private compilation passed; untested live | Verify a short manual fight recording after reload |
 | Parry diagnostics v2 | Decision/geometry/input/action/state/outcome logs with session histories | 47 mocked assertions and build compilation | Real executor hook coverage and live results |
 
@@ -152,6 +152,7 @@ SP-T005 local-clock details: attempts at 2609.3927 (`84394230178792`), 2609.8081
 
 ## Change history
 
+- 2026-11-17 — NPC ESP v2 (SP-T011): regular vs enemy split by MaxHealth. **User-supplied rule:** regular NPCs have 100 or 999 max health, enemies don't. Replaces v1's name-based TRAINER label (superseded). Shared setting key `Trainer` removed; `Enemy` (already a shared key) toggles enemies, `Npc` toggles regular NPCs.
 - 2026-11-17 — NPC ESP v1 (SP-T010): new `src/SparklingNpcESP.lua` card on the ESP tab, wired in `tools/build_public.ps1` after `SparklingESP.lua`.
 
 - 2026-11-17 — Combat page v3 (SP-T008): Auto Parry moved from Auto to a new Combat tab in Hunter X Enter section style. Adds a range slider, PVE row, keybinds and the Don't Parry If options; player attackers are excluded. Diagnostics v2 format unchanged apart from the new SKIP reasons and Config fields.

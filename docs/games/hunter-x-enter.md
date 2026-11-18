@@ -24,6 +24,7 @@ Last reviewed: 2026-11-17. Scope: full feature history from 2026-11-16 onward (t
 | Auto Anti-Macro (answers the game's check) | `src/HunterXEnterAutoCheck.lua` | Observed success (colour question) | HXE-T012. **Stripped from every public commit** |
 | Check alert | `src/HunterXEnterCheckAlert.lua` | Working | Banner + notification when a check appears |
 | Perfect Block recorder | `src/HunterXEnterRecorders.lua` | Six local perfect-block outcomes across two captures, including two isolated key cycles; timing/eligibility unresolved | HXE-011/012; latest capture hit its line cap at 94.884 s; passive only |
+| Player ESP stamina/Nen bars + ESP Bar Data capture | `src/HunterXEnterESP.lua` | Implemented / untested live; other players' bars may be client-only | HXE-T018 |
 | Recorders (training, hunger flow, fishing) | `src/HunterXEnterRecorders.lua` | Working capture tools | Passive; send no requests |
 | Nen Code Capture | `src/HunterNenSourceCapture.lua` | Private diagnostic | Dumps client Nen/fishing scripts for reading |
 | Hunger Run Test | `src/HunterHungerRunTest.lua` | Private diagnostic | HXE-T001 |
@@ -149,6 +150,7 @@ Infinite Nen writes the pool upvalue to max every frame while training. v1 held 
 | 2026-11-17 / HXE-T015 | Auto Nen v2 + Infinite Nen v2 | Train Ren with U | "Training Ren · aura 100%" sustained | **Verified live** (report) | Other skills: same path, not individually tested |
 | 2026-11-17 / HXE-T017 | Auto Fish v7, second legendary | Win the fight | **Lost:** `Reset legendlost` 10.5 s after the hook. E was held (`held=1`) from the end of the intro, but tension stayed 0 and the game kept calling "REEL IN E"; progress drained 15%→0%. Re-reading HXE-T010: the won fight had the **same dead hold** and was rescued only because a MASH callout made the hub re-tap | **Failure.** Cause from both logs: the game only counts a fresh E press; a hold that began too early is never registered | v8: if tension hasn't risen 0.45 s into a hold (outside a rush), release and re-press (`LEGEND_REPRESS` lines). **Untested live** |
 | 2026-11-17 / HXE-T016 | Speed rest 0%→100% | Run to empty, rest to full | — | **Implemented / untested live** | Check `STAMINA_REST` lines; a sprint lost at ≤15% counts as empty |
+| 2026-11-17 / HXE-T018 | Player ESP stamina + Nen bars | Other players show yellow stamina / blue Nen bars | — | **Implemented / untested live.** Source: NenClient builds `NenBar3D` on the client for its own character only, so other players' Nen bars are **probably not visible** to us; `StaminaBar3D`'s origin is unknown | Resolver reads `Character.StaminaBar3D` / `NenBar3D` `Container.Fill` Y scale (fallback: `Stamina`/`MaxStamina`, `Aura`/`MaxAura` attributes); bars stay hidden when absent. Run **Capture ESP Bar Data** (Recorders) near players → `hunter_esp_bar_data_latest.txt` to see what other characters carry. `Player@Nen` is the trained stat, never a bar |
 
 ## References from other games
 

@@ -4051,8 +4051,70 @@ local create = ui.Create
 local playerColor, npcColor = Color3.fromRGB(255,255,255), Color3.fromRGB(255,150,50)
 controller.EspActorColor = playerColor
 controller.EspKnownResourcesOnly = true
-ui.PlayerEspCard.Size = UDim2.new(1,0,0,240)
-ui.OptionGrid(ui.PlayerEspCard, {{"Name","Player name"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"}}, state.EspSettings,136)
+ui.PlayerEspCard.Size = UDim2.new(1,0,0,284)
+ui.OptionGrid(ui.PlayerEspCard, {{"Name","Player name"},{"Distance","Distance"},{"Box","Body box"},{"Health","Health"},{"Energy","Nen bar"},{"Stamina","Stamina bar"}}, state.EspSettings,136)
+
+-- Stamina and aura bars: the game draws Character.StaminaBar3D / NenBar3D (Container.Fill, Y scale = fraction). NenClient creates
+-- NenBar3D on the client for its own character only (captured source), so another player's bar shows only if their character carries
+-- a readable copy here. Player@Nen is the trained Nen stat (3600 cap), not the aura pool, and is never used as a bar.
+local function barFraction(character,name)
+	local bar=character and character:FindFirstChild(name)
+	local container=bar and bar:FindFirstChild("Container")
+	local fill=container and container:FindFirstChild("Fill")
+	if not fill or not fill:IsA("GuiObject") then return nil end
+	local fraction=fill.Size.Y.Scale
+	return type(fraction)=="number" and fraction==fraction and math.clamp(fraction,0,1) or nil
+end
+local function attributePair(objects,current,maximum)
+	for _,object in ipairs(objects) do
+		local value,cap=object:GetAttribute(current),object:GetAttribute(maximum)
+		if type(value)=="number" and type(cap)=="number" and value==value and cap==cap and cap>0 and cap<math.huge then return value,cap end
+	end
+end
+function controller.ResolvePlayerEspData(target,character)
+	local objects={character,target}
+	local stamina,maxStamina=barFraction(character,"StaminaBar3D"),1
+	if not stamina then stamina,maxStamina=attributePair(objects,"Stamina","MaxStamina") end
+	local aura,maxAura=barFraction(character,"NenBar3D"),1
+	if not aura then aura,maxAura=attributePair(objects,"Aura","MaxAura") end
+	return {Stamina=stamina,MaxStamina=stamina and maxStamina,Energy=aura,MaxEnergy=aura and maxAura}
+end
+-- Read-only check of what each loaded character carries, to confirm whether other players' bars are visible to this client.
+local barCard=ui.Card(ui.Pages.Recorders,"ESP BAR DATA","Lists each player's bar objects and stamina/Nen/aura fields. No requests are sent.",150)
+barCard.LayoutOrder=40
+local barStatus=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,112),Size=UDim2.new(1,-28,0,30),BackgroundTransparency=1,Font=Enum.Font.Gotham,
+	TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Stand near other players, then capture."},barCard)
+local function relevant(name)
+	name=name:lower()
+	return name:find("stamina",1,true) or name:find("nen",1,true) or name:find("aura",1,true) or name:find("bar",1,true)
+end
+ui.Button(barCard,"Capture ESP Bar Data",14,72,180,function()
+	local lines={"HUNTER ESP BAR DATA v1 // read only, client-visible objects only"}
+	local count=0
+	for _,target in ipairs(Players:GetPlayers()) do
+		local character=target.Character
+		count+=1
+		table.insert(lines,"PLAYER #"..count..(target==Players.LocalPlayer and " (self)" or "").." character="..tostring(character~=nil))
+		for _,object in ipairs({target,character}) do
+			for key,value in pairs(object and object:GetAttributes() or {}) do
+				if relevant(key) then table.insert(lines,"  ATTRIBUTE "..object.ClassName.."@"..key.."="..tostring(value):sub(1,80)) end
+			end
+		end
+		for _,object in ipairs(character and character:GetDescendants() or {}) do
+			if #lines>3000 then break end
+			if object:IsA("LayerCollector") or (object:IsA("ValueBase") and relevant(object.Name)) or (object:IsA("GuiObject") and object.Name=="Fill") then
+				local detail=object:IsA("ValueBase") and ("="..tostring(object.Value):sub(1,80))
+					or object:IsA("GuiObject") and string.format(" fillY=%.3f",object.Size.Y.Scale)
+					or (" enabled="..tostring(object.Enabled))
+				table.insert(lines,"  "..object.ClassName.." "..object:GetFullName():gsub("^[^%.]+","Character")..detail)
+			end
+		end
+	end
+	local report=table.concat(lines,"\n")
+	if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal") end
+	local saved=type(writefile)=="function" and pcall(writefile,"AnomalyHub/universal/hunter_esp_bar_data_latest.txt",report)
+	barStatus.Text=saved and ("Saved bar data for "..count.." players.") or "File save failed."
+end,ui.Colors.AccentSoft).Size=UDim2.new(1,-28,0,34)
 
 -- Exact NPC card names from the linked Hunter X Enter Trello, reviewed Nov 16.
 -- This allows known static service/quest rigs without treating every prop as an NPC.

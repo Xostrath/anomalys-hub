@@ -23,7 +23,7 @@ Last reviewed: 2026-11-17. Scope: full feature history from 2026-11-16 onward (t
 | Auto Fish v7 | `src/HunterXEnterAutoFish.lua` | v5/v6 verified live; v7 fixes implemented / untested live | HXE-T008…T012 |
 | Auto Anti-Macro (answers the game's check) | `src/HunterXEnterAutoCheck.lua` | Observed success (colour question) | HXE-T012. **Stripped from every public commit** |
 | Check alert | `src/HunterXEnterCheckAlert.lua` | Working | Banner + notification when a check appears |
-| Perfect Block recorder | `src/HunterXEnterRecorders.lua` | Passive capture reviewed; local normal block and state signals observed, local perfect block unconfirmed | HXE-010; discovery limits affect coverage |
+| Perfect Block recorder | `src/HunterXEnterRecorders.lua` | Two local perfect-block effects paired with opponent Total stun observed; exact input timing unresolved | HXE-011; passive capture only, no active automation |
 | Recorders (training, hunger flow, fishing) | `src/HunterXEnterRecorders.lua` | Working capture tools | Passive; send no requests |
 | Nen Code Capture | `src/HunterNenSourceCapture.lua` | Private diagnostic | Dumps client Nen/fishing scripts for reading |
 | Hunger Run Test | `src/HunterHungerRunTest.lua` | Private diagnostic | HXE-T001 |
@@ -173,7 +173,7 @@ Infinite Nen writes the pool upvalue to max every frame while training. v1 held 
    Auto Eat and Auto Nen/Infinite Nen (Ren) are verified live. The other v7 and Speed changes compile but are **untested live**.
 2. **Open:** confirm v7's camera recovery (turn the camera away while fishing). Confirm the inventory-full stop fires (fish with a full bag). Check that a Speed rest reaches 0% rather than the early-stop rule.
 3. **Unknown:** the bag capacity number; whether running under Reduced Hunger still trains the Stamina stat; the Ki/aura impact of other skills at the 3600 cap.
-4. Latest observed block recording was still active during HXE-010 review; inspect current report status before treating it as finalized.
+4. The block recording pending in HXE-010 finalized at its 120-second limit and yielded two local perfect-block outcomes (HXE-011). Exact press attribution remains unresolved.
 
 ## Change history
 
@@ -206,3 +206,29 @@ Reviewed four finalized passive-v1 block histories from place 76571518635501 / u
 The normal-block effect arrives about 121 ms after the local 0.18 window-attribute receipt while that attribute has not yet cleared. This directly cautions against treating that attribute's receipt time plus 180 ms as a guaranteed perfect-block schedule. Network ordering, server eligibility, actor role and effect semantics need further correlation. The value 0.18 is an observed field, not a calibrated automation constant.
 
 **Decision / handoff:** the recorder is collecting useful input, state and outcome signals, but no local perfect-block success has been established in these completed captures. No runtime change or active block automation was made. Retain a local-target result filter and compare F, block-request, Blocking/window/stun, attacker-animation and health timelines when reviewing the newer run after it completes. A directly observed local perfect block is needed before claiming successful timing. Reuse Sparkling/Beyond Nen's separation of input, request receipt and outcome evidence; do not transfer Sparkling animation IDs, cooldowns or delays. Raw captures and character/player names remain private.
+
+
+## HXE-011 — two local perfect-block outcomes observed (2026-11-17)
+
+The previously partial session starting Unix 1794968184 has now finalized at 120.004 seconds (TIME_LIMIT), passive recorder v1, place 76571518635501. The report has 11,363 text lines, 43 F-down and 43 F-up observations, 243 Block/Start and 58 Block/End OUT hook observations, 35 observed local health decreases, and no recorder ERROR event. Actor discovery (1000) and GUI discovery (600) limits remain; coverage is incomplete. Multiple OUT observations per physical key cycle are not independent accepted blocks. No runtime change, remote replay or automated input was performed during review.
+
+**Verified observed outcome signals:** two incoming ClientFX Combat/Hit events name the local character and carry SFX=perfectblock, Particle=PerfectBlockHit, Type=Fists, at 59.6354 and 71.1579 seconds. In each sequence the opponent actor 2 immediately receives Stunned and StunType=Total, and the local PerfectBlockWindow clears. No local health decrease is recorded at either effect. This combination supports two local perfect-block outcomes, unlike the nonlocal effects in HXE-010. Five additional perfect-block effects target other characters and are excluded. Do not describe this as a two-of-43 success rate: key presses are not attack opportunities.
+
+| Event | First outcome (seconds) | Second outcome (seconds) |
+| --- | --- | --- |
+| Previous local health decrease | 58.7742 | 70.2540 |
+| Earlier F down before opponent animation | 59.3831 | 70.9585 |
+| Opponent animation 92677769777799 begins | 59.4311 | 70.9698 |
+| Local Stunned / StunType clear | 59.4680 / 59.4681 | 70.9705 / 70.9706 |
+| Local Blocking=true / PerfectBlockWindow=0.18 | 59.5159 / 59.5160 | 71.0706 / 71.0707 |
+| F up | 59.5365 | 71.0623 |
+| Another F down | 59.5956 | 71.1283 |
+| Local window clears | 59.6353 | 71.1577 |
+| Opponent receives Total stun | 59.6354 | 71.1578 |
+| Local perfect-block effect | 59.6354 | 71.1579 |
+
+Both outcomes follow the same opponent animation, 92677769777799, by 204.3 and 188.1 ms from client animation-start receipt. Each is preceded by an observed Combo=2 HitAnimation targeting the local character; the later attack's exact combo index is not independently confirmed. The shared animation is a useful candidate association, not a universal timing constant or complete weapon map.
+
+**Attribution limit:** the nearest F down is only 39.8 / 29.6 ms before the perfect-block effect, but local Blocking/window state already appeared before that press. Earlier presses, releases, repeated requests and network receipt order overlap. Do not set an automatic press delay from the nearest-key delta or assume the latest press caused the outcome. The earlier F-down-to-Blocking receipts are approximately 132.8 / 112.1 ms, while local stun is clearing in both sequences. These are client observations; exact server acceptance and stun eligibility remain unknown.
+
+**Handoff:** local perfect-block success signals are now available and supersede HXE-010's unresolved local-outcome question. Preserve the paired effect/local-target/opponent-stun evidence as the success reference. Next discriminate input timing using one deliberate F press per incoming attack, with full release between attempts and actor/animation context retained; avoid holding or repeatedly tapping throughout a combo when calibrating. Do not transfer the 188–204 ms effect interval into a scheduling delay. No active perfect-block implementation is claimed. Continue separating attempts, state transitions, confirmed local effects, failures and uncertain cases as in the Sparkling/Beyond Nen notes.

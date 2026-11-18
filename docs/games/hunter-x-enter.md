@@ -23,6 +23,7 @@ Last reviewed: 2026-11-17. Scope: full feature history from 2026-11-16 onward (t
 | Auto Fish v7 | `src/HunterXEnterAutoFish.lua` | v5/v6 verified live; v7 fixes implemented / untested live | HXE-T008…T012 |
 | Auto Anti-Macro (answers the game's check) | `src/HunterXEnterAutoCheck.lua` | Observed success (colour question) | HXE-T012. **Stripped from every public commit** |
 | Check alert | `src/HunterXEnterCheckAlert.lua` | Working | Banner + notification when a check appears |
+| Perfect Block recorder | `src/HunterXEnterRecorders.lua` | Passive capture reviewed; local normal block and state signals observed, local perfect block unconfirmed | HXE-010; discovery limits affect coverage |
 | Recorders (training, hunger flow, fishing) | `src/HunterXEnterRecorders.lua` | Working capture tools | Passive; send no requests |
 | Nen Code Capture | `src/HunterNenSourceCapture.lua` | Private diagnostic | Dumps client Nen/fishing scripts for reading |
 | Hunger Run Test | `src/HunterHungerRunTest.lua` | Private diagnostic | HXE-T001 |
@@ -172,7 +173,7 @@ Infinite Nen writes the pool upvalue to max every frame while training. v1 held 
    Auto Eat and Auto Nen/Infinite Nen (Ren) are verified live. The other v7 and Speed changes compile but are **untested live**.
 2. **Open:** confirm v7's camera recovery (turn the camera away while fishing). Confirm the inventory-full stop fires (fish with a full bag). Check that a Speed rest reaches 0% rather than the early-stop rule.
 3. **Unknown:** the bag capacity number; whether running under Reduced Hunger still trains the Stamina stat; the Ki/aura impact of other skills at the 3600 cap.
-4. No active recording sessions.
+4. Latest observed block recording was still active during HXE-010 review; inspect current report status before treating it as finalized.
 
 ## Change history
 
@@ -190,3 +191,18 @@ Infinite Nen writes the pool upvalue to max every frame while training. v1 held 
 **Validation:** changed modules and both staged builds compile. 31 mocked assertions cover all ten known abilities without consulting the trainer, no redundant write when full, inactive sentinels, disable/re-enable, unload and skill-switch logging. Any-active scope is implemented but not yet live-validated; the historical basic-Nen and Auto-Nen/Ren successes do not individually validate every skill. Source and exact public/private module replacements preserve concurrent work; private build backed up and hash-verified when installed. Existing game-specific activeSkill logic was reused; other game notes' input/result evidence distinctions remain applicable, with no foreign aura semantics imported.
 
 **Handoff:** reload the private hub, leave General → Infinite Nen ON, then turn on a Nen ability normally. Auto Nen can stay OFF. Verify the ability stays active past its normal drain duration and inspect the v3 report's HOLD/SAMPLE/write counts; a visually full bar alone is insufficient proof. Keep any new failures and skill-specific exceptions in this note.
+
+
+## HXE-010 — perfect-block recording review (2026-11-17)
+
+Reviewed four finalized passive-v1 block histories from place 76571518635501 / universe 9857379797. Session starts 1794967736 / 1794967744 / 1794967806 / 1794968067 end at 0.044 / 42.560 / 120.024 / 80.401 seconds with DEATH / STOPPED / TIME_LIMIT / UNLOAD respectively. The first is not a usable combat trial. No recorder ERROR events occur. Every capture reports actor discovery hitting 1000 objects and GUI discovery hitting 600 objects, so actor/UI coverage is incomplete. A newer session 1794968184 was still RECORDING at the 25.079-second snapshot; do not merge its partial counts into completed tests.
+
+**Observed block signaling:** F DOWN/UP and outgoing ReplicatedStorage.Assets.Remotes.Combat observations contain (Combat, Block, Start) / (Combat, Block, End). The 120-second capture has 20 F-down/up pairs and 123 Start / 29 End OUT observations. The latest completed capture has seven F-down/up pairs and 90 Start / 13 End OUT observations. These are hook observations, not independent accepted actions: repeated requests and duplicate hook paths must be distinguished before drawing conclusions. No remote is sent or replayed by this review.
+
+**Replicated state:** local Character.Blocking, Character.PerfectBlockWindow, Character.Stunned and Character.StunType are present. The latest completed run sets Blocking=true at 10.3613 seconds and PerfectBlockWindow=0.18 at 10.3615 after F-down at 10.1919 (~169.6 ms later). They clear at 10.5167/10.5168 after F-up at 10.4020. Another F-down at 13.0377 precedes Blocking/window updates at 13.3221/13.3222 (~284.5 ms); F-up is 13.3443, Blocking clears 13.4625, window clears 13.5136. These are client receipt delays, not server timestamps or an input latency calibration. StunType values Normal and Total occur; Stunned carries a numeric-looking string and later becomes nil. The epoch/expiry meaning is unverified.
+
+**Outcome evidence:** the latest completed run has one ClientFX Combat/Hit with BlockHit and blockenmieux naming the local character (13.4432 seconds), consistent with a normal block. Its three PerfectBlockHit/perfectblock effects name other characters, not the local effect target. Across the four finalized reports, five such perfect-block effects are observed and none names the local character in the primary model argument. Do not credit nearby effects as this user's perfect blocks or infer defender/attacker roles solely from proximity. Five local negative-health changes occur in the latest completed run; the preceding 120-second run has 21 and the 42.56-second run has two.
+
+The normal-block effect arrives about 121 ms after the local 0.18 window-attribute receipt while that attribute has not yet cleared. This directly cautions against treating that attribute's receipt time plus 180 ms as a guaranteed perfect-block schedule. Network ordering, server eligibility, actor role and effect semantics need further correlation. The value 0.18 is an observed field, not a calibrated automation constant.
+
+**Decision / handoff:** the recorder is collecting useful input, state and outcome signals, but no local perfect-block success has been established in these completed captures. No runtime change or active block automation was made. Retain a local-target result filter and compare F, block-request, Blocking/window/stun, attacker-animation and health timelines when reviewing the newer run after it completes. A directly observed local perfect block is needed before claiming successful timing. Reuse Sparkling/Beyond Nen's separation of input, request receipt and outcome evidence; do not transfer Sparkling animation IDs, cooldowns or delays. Raw captures and character/player names remain private.

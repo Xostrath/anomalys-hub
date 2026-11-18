@@ -7,7 +7,7 @@ Last reviewed: 2026-11-17. Scope: full feature history from 2026-11-16 onward (t
 - Universe `9857379797`; known place `76571518635501`. The profile is `HunterXEnter` (identity also checks known remote paths).
 - **The user considers the Hunter X Enter script finished for now (2026-11-17)**. Work moved to [Sparkling](sparkling.md). Only fix regressions here unless asked.
 - The user loads the **private build**: `dist/private/AnomalyPrivate.lua`, installed as `AnomalyPrivate.lua` in the executor workspace. Back up the installed copy before replacing it, then hash-check it after copying. Public builds go to GitHub via the commit workflow in [project notes](../../PROJECT_NOTES.md).
-- Scope line, set 2026-10-17 and still in force: build self/NPC features (training, farming, fishing, food, UI). **Do not build combat automation aimed at other players.** Infinite Nen therefore holds the aura only while training (see HXE-005), never for techniques used manually in a fight. Money/item granting and food non-consumption were declined too; don't re-offer them.
+- Scope: build self/NPC features (training, farming, fishing, food, UI); do not add player-targeted combat automation from these notes. **User update 2026-11-17:** Infinite Nen now applies to any manually or automatically activated Nen ability while its toggle is ON, superseding the earlier training-only restriction (HXE-009). Other historical scope decisions remain unchanged.
 - Never tune timings by guesswork. Read the newest report in `AnomalyHub/universal/` first. The user expects us to read the reports instead of asking them to re-record.
 
 ## Feature status
@@ -16,7 +16,7 @@ Last reviewed: 2026-11-17. Scope: full feature history from 2026-11-16 onward (t
 | --- | --- | --- | --- |
 | Auto Training (Push-ups K, Speed, Climb, Meditation) | `src/HunterXEnterTraining.lua` | Push-ups v7 verified live; Speed 0%→100% rest rule implemented / untested live | Push-ups: 61 results / 0 misses (HXE-T007) |
 | Auto Nen v2 (all 10 skills) | `src/HunterXEnterAutoNen.lua` | **Verified live** for Ren (2026-11-17) | `hunter_auto_nen_test.txt`: "Training Ren · aura 100%" |
-| Infinite Nen v2 | `src/HunterXEnterInfiniteNen.lua` | v1 verified live (basic Nen). v2 rule (basic Nen, or the skill Auto Nen trains) observed holding Ren at 100% | HXE-T006, HXE-T013 |
+| Infinite Nen v3 | `src/HunterXEnterInfiniteNen.lua` | Any active Nen ability, independent of Auto Nen; compiled and mock-tested, awaiting live validation | HXE-009; prior basic Nen/Ren evidence HXE-T006, HXE-T013, HXE-T015 |
 | Infinite Stamina | `src/HunterXEnterStaminaHold.lua` | Verified live (earlier sessions) | General section, y=0 |
 | Reduced Hunger | `src/HunterXEnterReducedHunger.lua` | User-confirmed (push-ups) | HXE-T005 |
 | Auto Eat | `src/HunterXEnterAutoEat.lua` | **Verified live** 2026-11-17 | Ate Bread 10→100%, paused and resumed Auto Nen + Auto Training |
@@ -88,7 +88,7 @@ Every NO_RESULT in the 2026-11-16 23:03 report was a tap less than 0.07 s after 
 - Quirk: In and Zetsu combine (pressing In while Zetsu is active keeps `ActiveNenSkill="Zetsu"` with an internal flag).
 - Toggling is refused while `Meditating`, `PushingUp`, carried, downed or executing.
 
-### HXE-005 — Infinite Nen scope
+### HXE-005 — Infinite Nen v2 scope (superseded by HXE-009)
 
 Infinite Nen writes the pool upvalue to max every frame while training. v1 held only for `ActiveNenSkill=="Nen"`, so with Ten active it did nothing (`writes=0`). The user read that as "doesn't work anymore" (HXE-T013). v2 holds for basic Nen, **or** for the skill Auto Nen is currently training (`controller.HunterAutoNenTraining()`). Techniques switched on manually in a fight drain normally (the scope line in Read first).
 
@@ -165,7 +165,7 @@ Infinite Nen writes the pool upvalue to max every frame while training. v1 held 
 1. **Latest change (2026-11-17):**
    - Auto Fish v7: camera re-aim, inventory-full stop, waits for anti-macro checks
    - Auto Nen v2: all skills with the user's binds
-   - Infinite Nen v2: training-only rule
+   - Infinite Nen v3: any active ability while enabled (HXE-009); replaces the training-only rule
    - Speed 0→100% rest
    - Auto Eat made public
 
@@ -177,3 +177,16 @@ Infinite Nen writes the pool upvalue to max every frame while training. v1 held 
 ## Change history
 
 - 2026-11-17 — Note rewritten from the initial reference inventory into a full ledger (HXE-001…008, HXE-T001…T016) by the Claude chat that built these features.
+
+
+## HXE-009 — Infinite Nen v3: any active ability (2026-11-17)
+
+**Explicit user request:** make infinite aura work when any Nen ability is turned on. This supersedes HXE-005's training-only restriction for Infinite Nen. Existing player-targeted automation scope is otherwise unchanged; this change only alters the local aura feature's activation condition.
+
+**Observed problem:** the latest local v2 report shows Ren and then En active while writes stays zero. Source gates non-basic skills on equality with HunterAutoNenTraining(), so manually activated skills receive no hold when Auto Nen is inactive or training another skill. This is the same scope limitation previously recorded for Ten, not evidence that the pool setter stopped working.
+
+**Implemented:** Infinite Nen v3 follows ActiveNenSkill whenever it is a nonempty string other than None/none, matching Auto Nen's existing active-skill convention. It no longer calls HunterAutoNenTraining(). This covers Nen, Ten, Ren, Gyo, Ken, Ko, In, En, Zetsu and Shu, including manual activation and switching between techniques. The Infinite Nen toggle still controls the feature and retains its saved preference. No skill is activated automatically. Inactive/nil/invalid values stop writes; disabling or unloading stops writes. Existing finite-value and captured getter-shape validation remain. Skill switches now produce HOLD entries even when the active flag stays true. Report and fallback card identify v3 and the expanded scope. Auto Nen's compatibility accessor remains available, with its obsolete scope comment corrected.
+
+**Validation:** changed modules and both staged builds compile. 31 mocked assertions cover all ten known abilities without consulting the trainer, no redundant write when full, inactive sentinels, disable/re-enable, unload and skill-switch logging. Any-active scope is implemented but not yet live-validated; the historical basic-Nen and Auto-Nen/Ren successes do not individually validate every skill. Source and exact public/private module replacements preserve concurrent work; private build backed up and hash-verified when installed. Existing game-specific activeSkill logic was reused; other game notes' input/result evidence distinctions remain applicable, with no foreign aura semantics imported.
+
+**Handoff:** reload the private hub, leave General → Infinite Nen ON, then turn on a Nen ability normally. Auto Nen can stay OFF. Verify the ability stays active past its normal drain duration and inspect the v3 report's HOLD/SAMPLE/write counts; a visually full bar alone is insufficient proof. Keep any new failures and skill-specific exceptions in this note.

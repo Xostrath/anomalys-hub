@@ -5266,7 +5266,7 @@ local function stop(reason)
 	saveReport(status.Text)
 end
 controller.StopHunterAutoNen=stop
--- Infinite Nen holds a technique's aura only while Auto Nen is training it.
+-- Reports the current training selection for compatibility; Infinite Nen independently follows any active ability.
 controller.HunterAutoNenTraining=function()return state.Enabled and not state.Closed and selected or nil end
 controller.HunterNenNeedsActivationWindow=function()
 	if not state.Enabled or state.Attempts>=3 or activeSkill() then return false end
@@ -6023,10 +6023,9 @@ controller.RegisterCleanup(function()closed=true;release()end)
 
 end)()
 ;(function()
--- Confirmed in-game 2026-11-16 (167s hold, Player.Nen kept rising). Keeps the client aura pool full while any Nen skill is active.
+-- Basic Nen pool hold verified in-game 2026-11-16 (167s); v3 any-active-skill scope awaits live validation.
 -- Same method as Infinite Stamina: NenClient's getCurrentNen has one upvalue, the live pool. No remote hooks or calls.
--- v2: every skill drains the same pool as basic Nen. Basic Nen is always held; another technique (Ten, Ren, Gyo, Ken, Ko, In, En, Zetsu, Shu)
--- only while Auto Nen is training that exact skill, so techniques used manually in a fight drain normally (training-only scope, 2026-11-16).
+-- v3: user-requested any-active-skill scope, including manual activation; Auto Nen need not be running.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="HunterXEnter"then return end
@@ -6034,7 +6033,7 @@ local player=game:GetService("Players").LocalPlayer
 local run=game:GetService("RunService")
 local ui=controller.UI
 local group=ui.GeneralSection
-local card=group and group.Body or ui.Card(ui.Pages.General,"INFINITE NEN // v2","Keeps aura full while training: basic Nen, or the skill Auto Nen is training.",120)
+local card=group and group.Body or ui.Card(ui.Pages.General,"INFINITE NEN // v3","Keeps aura full while any Nen ability is active, including manual activation.",120)
 local top=group and group.Height or 72
 if group then group.SetHeight(top+28) end
 local preference="AnomalyHub/universal/hunter_infinite_nen_enabled.txt"
@@ -6054,7 +6053,7 @@ end
 local function save()
  if type(writefile)~="function"then return false end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- return pcall(writefile,path,"HUNTER INFINITE NEN v2 // holds the client aura pool for basic Nen, or the skill Auto Nen is training\n"
+ return pcall(writefile,path,"HUNTER INFINITE NEN v3 // holds the client aura pool while any Nen ability is active; Auto Nen is not required\n"
   .."Proof is the skill staying on past the point the bar would normally empty, not a full bar.\n"..table.concat(state.Lines,"\n"))
 end
 local function system()
@@ -6107,15 +6106,14 @@ controller.Connect(run.Heartbeat,function()
  if closed or not selected then return end
  local now=os.clock()
  local skill=player:GetAttribute("ActiveNenSkill")
- local trainer=type(controller.HunterAutoNenTraining)=="function" and controller.HunterAutoNenTraining() or nil
- local training=type(skill)=="string" and (skill=="Nen" or skill==trainer)
- if training~=state.Holding then state.Holding=training;log((training and "HOLD "..skill or "RELEASE").." nen="..tostring(player:GetAttribute("Nen")))end
+ local active=type(skill)=="string" and skill~="" and skill~="None" and skill~="none"
+ if active~=state.Holding or active and skill~=state.Skill then state.Holding=active;state.Skill=active and skill or nil;log((active and "HOLD "..skill or "RELEASE").." nen="..tostring(player:GetAttribute("Nen")))end
  if now>=state.NextLog then
   state.NextLog=now+5
   log("SAMPLE skill="..tostring(player:GetAttribute("ActiveNenSkill")).." nen="..tostring(player:GetAttribute("Nen")).." writes="..state.Writes)
  end
  if now>=state.NextSave then state.NextSave=now+10;save()end
- if not training then return end
+ if not active then return end
  -- NenClient lives in PlayerScripts and survives respawns; re-check its functions once a second anyway.
  if not state.Getter or now>=state.NextCheck then
   state.NextCheck=now+1

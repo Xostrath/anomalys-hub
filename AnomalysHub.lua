@@ -4685,6 +4685,7 @@ local function start(mode)
 	if active then stop("SWITCHED_ACTIVITY") end
 	if controller.StopHunterTraining then controller.StopHunterTraining("Manual recording started") end
 	if controller.StopHunterAutoNen then controller.StopHunterAutoNen("Manual recording started")end
+	if controller.StopHunterAutoBlock then controller.StopHunterAutoBlock("Manual recording started")end
 	serial+=1
 	local ok,nonce=pcall(Http.GenerateGUID,Http,false)
 	if not ok then nonce=tostring(math.floor(os.clock()*1000000)).."_"..serial end
@@ -4788,6 +4789,7 @@ controller.Connect(Run.Heartbeat,function()
 		c.Mode.Id=="block" and (" · nearby actors: "..tostring(c.Nearby)) or c.NenSelection and (" · "..c.NenSelection) or "",c.Coverage or "")
 end)
 controller.StopHunterRecording=stop
+controller.IsHunterRecording=function()return active~=nil end
 controller.Connect(player.OnTeleport,function()stop("TELEPORT")end)
 controller.RegisterCleanup(function()stop("UNLOAD");closed=true end)
 

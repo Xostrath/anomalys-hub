@@ -7,7 +7,7 @@ Last reviewed: 2026-11-17. Scope: full feature history from 2026-11-16 onward (t
 - Universe `9857379797`; known place `76571518635501`. The profile is `HunterXEnter` (identity also checks known remote paths).
 - **The user considers the Hunter X Enter script finished for now (2026-11-17)**. Work moved to [Sparkling](sparkling.md). Only fix regressions here unless asked.
 - The user loads the **private build**: `dist/private/AnomalyPrivate.lua`, installed as `AnomalyPrivate.lua` in the executor workspace. Back up the installed copy before replacing it, then hash-check it after copying. Public builds go to GitHub via the commit workflow in [project notes](../../PROJECT_NOTES.md).
-- Scope: build self/NPC features (training, farming, fishing, food, UI); do not add player-targeted combat automation from these notes. **User update 2026-11-17:** Infinite Nen now applies to any manually or automatically activated Nen ability while its toggle is ON, superseding the earlier training-only restriction (HXE-009). Other historical scope decisions remain unchanged.
+- Scope: historical work focused on self/NPC features. **User update 2026-11-17:** active local perfect-block trial against the recorded player/NPC targets is now authorized (HXE-013); do not infer authorization for unrelated features. **User update 2026-11-17:** Infinite Nen now applies to any manually or automatically activated Nen ability while its toggle is ON, superseding the earlier training-only restriction (HXE-009). Other historical scope decisions remain unchanged.
 - Never tune timings by guesswork. Read the newest report in `AnomalyHub/universal/` first. The user expects us to read the reports instead of asking them to re-record.
 
 ## Feature status
@@ -23,6 +23,7 @@ Last reviewed: 2026-11-17. Scope: full feature history from 2026-11-16 onward (t
 | Auto Fish v7 | `src/HunterXEnterAutoFish.lua` | v5/v6 verified live; v7 fixes implemented / untested live | HXE-T008…T012 |
 | Auto Anti-Macro (answers the game's check) | `src/HunterXEnterAutoCheck.lua` | Observed success (colour question) | HXE-T012. **Stripped from every public commit** |
 | Check alert | `src/HunterXEnterCheckAlert.lua` | Working | Banner + notification when a check appears |
+| Auto Perfect Block v1 (private) | `src/HunterXEnterAutoBlock.lua` | Two observed attack cues, one F pulse and automatic focused diagnostics; compiled and mock-tested, awaiting live validation | HXE-013; Combat page; starts OFF |
 | Perfect Block recorder | `src/HunterXEnterRecorders.lua` | Six local perfect-block outcomes across two captures, including two isolated key cycles; timing/eligibility unresolved | HXE-011/012; latest capture hit its line cap at 94.884 s; passive only |
 | Player ESP stamina/Nen bars + ESP Bar Data capture | `src/HunterXEnterESP.lua` | Implemented / untested live; other players' bars may be client-only | HXE-T018 |
 | Recorders (training, hunger flow, fishing) | `src/HunterXEnterRecorders.lua` | Working capture tools | Passive; send no requests |
@@ -260,3 +261,36 @@ F holds are 183.3 and 171.0 ms. F-down-to-outcome is 209.4 / 237.7 ms; F-down-to
 The two remaining successes associate with opponent animation 87786111103136 at 40.2564 seconds (effect +244.7 ms) and 92677769777799 at 56.2743 seconds (effect +194.7 ms). The latter repeats HXE-011's candidate animation. Effects follow these observable animations, but their timestamps alone are not calibrated hit windows, and this is not a complete attack/weapon map.
 
 **Decision / handoff:** successful local outcomes now have repeated support, including two much cleaner key cycles; another undifferentiated F-spam baseline is unnecessary. No runtime or active-block code changed during this review. Use these as positive references when comparing failed cycles of the same animation, particularly whether local stun persisted, block state appeared, and the effect targeted self. Preserve request-observation ambiguity and incomplete actor coverage. Before relying on long further captures, reduce irrelevant block-recorder traffic or record shorter focused sessions: this run ended about 25 seconds early at its line cap. Do not simply claim a 180 ms universal timing from the window attribute or hold durations. Continue the game-specific investigation without importing Sparkling timing constants.
+
+
+## HXE-013 — comparative analysis and active perfect-block trial v1 (2026-11-17)
+
+**User direction:** use the existing recordings and implement a concrete change without requesting another confirmation or general baseline. The active local defensive trial described here is authorized, including the player/NPC targets represented by the test workflow. This supersedes the older training-only/player-target restriction for this feature specifically; it does not authorize unrelated actions. The trial remains private, consistent with the existing Hunter combat build boundary.
+
+### Completed comparison
+
+Compared opponent animation starts in sessions 1794968184 and 1794968758 with local perfect-block and negative-health receipts in the following 400 ms, retaining opponent/session identities. Animation 87786111103136: 28 observed cues, three followed by a local perfect effect, six followed by damage, 19 neither. Animation 92677769777799: 21 cues, three followed by a local perfect effect, eight followed by damage, ten neither. These are temporal associations, not success rates; actor discovery is incomplete and the observer may see animation starts at differing replication phases.
+
+Several damage-associated sequences have no F-down between 200 ms before and 300 ms after the cue. Others have multiple overlapping cycles while local stun is present. Both successful isolated presses in HXE-012 occur while stun is present and Blocking appears after clearance; therefore rejecting all stunned cues would also reject observed successful conditions. The analysis supports testing a single consistent response to a fresh known cue, observing eligibility rather than adding a guessed stun timer. It does not establish a universal optimal delay.
+
+### Implemented private trial
+
+New source module src/HunterXEnterAutoBlock.lua, **Auto Perfect Block v1**, on the private Hunter Combat page. Starts OFF on every reload. Responds only to fresh forward-playing animation starts for 87786111103136 and 92677769777799; existing, paused/reversed, stale (>0.10 phase) and unknown tracks do not trigger. A valid cue sends one virtual F-down immediately and releases after a 180 ms test hold; minimum pulse gap is 300 ms. The 180 ms hold is a bounded experimental choice informed by the isolated 171–183 ms holds, not a claimed server timing window. First/fourth/other attack animations are not silently mapped from weak evidence.
+
+Range=8 studs, attacker-facing dot>=0.2, self-facing dot>=0, direct line of sight and living current rigs are required. Independent Players/NPCs checkboxes start ON. Discovery prioritizes current player characters and direct humanoid rigs in Workspace, Workspace.Live and Workspace.LivingBeings; watches the nearest 12 within 30 studs. Retired player rigs cannot silently become NPC targets. Each track triggers at most once. Existing manual F, a current block or an owned held pulse prevents another pulse. Local stun is recorded without a hard rejection; no fabricated stun duration or cooldown bypass is added.
+
+The trial stops/releases on focus loss, text entry, menu, death/character change, teleport and unload. Failed releases retry every 100 ms while the controller is alive, with an additional unload retry; failures remain explicit rather than reporting a guaranteed release. Starting the trial stops manual recording and Auto Training/Auto Nen. Starting a manual recorder stops the trial. A read-only IsHunterRecording accessor provides a second runtime conflict check. No gameplay remotes are sent, invoked, replayed or modified.
+
+### Focused diagnostic format
+
+Automatic reports: AnomalyHub/universal/hunter_auto_block_latest.txt and hunter_auto_block_<unix>_<guid>.txt. Separate Recorders controls Save Trial Log / Copy Trial Log. Five-second autosave and final save; line detail is capped at 8,000 events / 1.5 MB but totals and input cleanup continue. No constant FPS, GUI tree, numeric stat scan or 20 Hz motion stream, avoiding the noise that exhausted HXE-012's recorder. This new focused log does not modify the old passive recorder's limits.
+
+Events include ATTEMPT, F_DOWN/F_UP with API outcomes, F input receipts, skips, initial/changed local block/window/stun state, watched-target state changes, local damage and local/other perfect-block effects. Recent automatic candidates use a 750 ms window and remain explicitly temporal; other-character effects do not count as local successes. There is no outgoing remote hook in this trial, so absence of Block/Start receipts is a coverage limit, not evidence that the game sent none. A reported local perfect effect does not automatically establish that a particular pulse caused it.
+
+### Validation and deployment
+
+46 mocked assertions cover both known cues, immediate scheduling, 180 ms release, duplicate/unknown/stale/paused/reversed cues, range/facing/LOS, manual F/existing block, player filtering and stale ownership, observed stun without invented rejection, pulse gap, typing/focus/death/recorder stops, down/up errors and release retries, self-versus-other results, damage, log bounds and unload. Module and staged public/private artifacts compile. These are implementation checks, not live success or a performance guarantee.
+
+Build pipeline loads the new module into the private build and removes it plus the Hunter Combat page from public output. Public changes only add recorder conflict hooks and handoff notes. Exact patches into the latest installed build preserve concurrent modules, including Infinite Nen v3 and current fishing changes. Existing installed build is backed up before copying and hash-verified after installation. Shared Section/Checkbox styling and Recorders controls follow Hunter's established UI; result-attribution and cleanup patterns follow Sparkling/Beyond Nen, without importing their attack IDs or delays.
+
+**Next validation:** reload the private hub, open Combat → Auto Perfect Block and enable it for one focused encounter. Leave F to the trial; diagnostics start automatically, so do not start the separate manual recorder. Disable afterward to finalize the report. Confirm ATTEMPT/F_DOWN/local Blocking/result or damage/F_UP for supported cues. Unknown attacks remain unsupported and should be reported as such. Evaluate this concrete build before requesting any further general recording; do not promise that one test will fully calibrate it.

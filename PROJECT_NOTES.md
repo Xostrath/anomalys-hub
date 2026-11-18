@@ -194,3 +194,8 @@ At the user's request, Combat page v11 restores all five known combo hits, inclu
 ### Sparkling event-state diagnostics v6 (2026-11-17)
 
 Combat page v13 restores baseline hit-3 timing after the +30 ms comparison showed no improvement. Automatic diagnostics now add STATE_CONTEXT/STATE_POINT snapshots after input and on damage, capped at 64 relevant client-visible fields per snapshot. Existing half-second deltas, report bounds and Recorders controls remain. Missing state is unknown; snapshots do not establish server acceptance. See [SP-T034](docs/games/sparkling.md).
+
+
+### Hunter active block trial and recorder ownership (2026-11-17)
+
+Private Hunter Combat now includes Auto Perfect Block v1 for two recorded attack cues. It logs focused input/state/outcome events automatically; Save/Copy controls remain in Recorders. Manual recording and active blocking stop each other; the recorder exposes IsHunterRecording. Build assembly includes HunterXEnterAutoBlock.lua privately and strips it and the Hunter Combat page publicly. See [HXE-013](docs/games/hunter-x-enter.md).

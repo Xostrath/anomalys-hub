@@ -1354,3 +1354,15 @@ Both other characters expose direct Fatigue, all six injury values, Shield with 
 **Evidence (Verified from capture):** history 1795127425 (97 s, two `Warrior Clan Rogue` NPCs, v16.4): 1 press, 52 damage events, 426 `unmapped_animation` skips — their combo uses different animations. Same-actor order: **hit 1 `78875817992139` → hit 2 `120572377399879` → hit 3 `119528335719333` → hit 4 `92958519453859` → hit 5 `80105885088261`** (A→B 450 ms, B→C 583, C→E 515, E→D 384 median), all seen at phase 0, speed 1.15. Attacker `HitOut` after the swing is seen (median, min): hit 1 117 (102), hit 2 201 (183), hit 3 151 (149), hit 4 84 (84), hit 5 270 (266). They also use the shared heavy (`88670347816269` → `102483335944327`). The user's own manual presses produced 7 Counter Parry and 1 Perfect Counter in the run.
 
 **Implemented / untested live — Combat page v16.5:** for NPCs, rogue hit 2 and hit 3 press at once (~200 / ~150 ms lead), hit 5 after 80 ms (~190 ms lead); hits 1 and 4 are skipped as `npc_late_hit` (too fast at ~100 ms ping, like the standard combo's hits 3–4). CUE lines carry `style=rogue hit=N`; header config adds `npcRogue=hit2,hit3@0,hit5@80ms;skip1,4`. Players using this style stay unmapped (`rogueStyle=player`). Hit 3's ~150 ms lead is at the edge of the window; expect ~50% there.
+
+## SP-050 — Rogue fight on v16.5; rogue heavy mapped; heavy defer cut; CEXP counter reload fix (2026-11-19, Claude)
+
+**Evidence (Verified from capture):** history 1795127683 (150 s, two Warrior Clan Rogues, v16.5, user fighting manually): 27 presses, 15 counters, 43 damage events.
+- Presses: rogue hit 2 **9 / 13** counters, hit 3 **3 / 7** (its ~150 ms lead is at the window's edge), hit 5 **3 / 4** (plus 1 block); shared heavy 0 / 3.
+- Hits taken by source: rogue **hit 1: 18** (skipped, lands ~117 ms after it is seen), rogue heavy `126361551838373`: 5 (unmapped), hit 4: 4 (skipped), pressed hits 2/3 that failed: 8, cooldown/pulse/facing skips: 7, a Ki explosion `112088711297135`: 1.
+- **Rogue heavy `126361551838373`** (length 0.7, knockback): our `Blunt` 0.417–0.435 s after it was seen, in all five cases. Earlier captures hold five self `Perfect Counter!` receipts against it with F pressed 0.25–0.37 s after it started (SP-037 list).
+- **Shared heavy after your combo:** in all four presses the NPC started its heavy at the moment the user's own combo ended (`CooldownNT` Counter 0.5 s arrives with the user's last `HitOut`). The v16.4 defer then pressed at ~0.50 s, after the hit had landed (0.25–0.53 s). Same pattern as the bandits (SP-041).
+
+**Implemented / untested live — Combat page v16.6:** rogue heavy pressed at a fixed 0.30 s (~120 ms before its hit; NPCs only; header `heavy@300ms`). Heavy cues defer through the counter cooldown only if it ends by 0.40 s (was 0.62), expiry 0.45 s.
+
+**CEXP tracker fix:** v1 lost its saved counters on every hub reload (`local got,data=ok and pcall(...)` keeps only pcall's first result), so the counts restarted at 15:34 when the hub was re-run; the rogue fight at 15:30–15:32 is missing from the next history line. Fixed; counters now carry over reloads.

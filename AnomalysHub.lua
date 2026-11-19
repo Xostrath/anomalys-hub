@@ -4548,7 +4548,9 @@ local function folder()
 end
 if type(readfile)=="function"then
  local ok,text=pcall(readfile,COUNTS)
- local got,data=ok and pcall(function()return http:JSONDecode(text)end)
+ -- (v1 wrote `local got,data=ok and pcall(...)`, which keeps only pcall's first result, so saved counts were lost on every reload.)
+ local got,data=false,nil
+ if ok and type(text)=="string" then got,data=pcall(function()return http:JSONDecode(text)end)end
  if got and type(data)=="table" then for key,value in pairs(data)do if counts[key]~=nil and tonumber(value)then counts[key]=tonumber(value)end end end
 end
 local function saveCounts()
@@ -4700,6 +4702,11 @@ local rogueHits={['78875817992139']=1,['120572377399879']=2,['119528335719333']=
 attacks['120572377399879']=0;attacks['119528335719333']=0;attacks['80105885088261']=.08
 attacks['78875817992139']=0;attacks['92958519453859']=0
 lateHits['78875817992139']=1;lateHits['92958519453859']=4
+-- Rogue heavy (SP-050): 126361551838373 (length 0.7, knockback) hit us 0.417-0.435 s after it was seen in all five runs of history
+-- 1795127683. Earlier captures hold five self "Perfect Counter!" receipts against it with F pressed 0.25-0.37 s after it started,
+-- so it is pressed at a fixed 0.30 s. NPCs only.
+local rogueHeavy='126361551838373'
+attacks[rogueHeavy]=.30;rogueHits[rogueHeavy]="heavy"
 local enabled,closed=false,false
 local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local windowFocused=true
@@ -4856,7 +4863,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=hits_1_2_5 timingTrial=shared_hit5_seed0 range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms;skip1,4 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -5133,7 +5140,7 @@ local function observe(model,track)
  seen[track]=now
  if #pending>=8 then skip("queue_full",detail);return end
  table.insert(pending,{Model=model,Track=track,Id=id,Serial=serial,At=rangeWait and now+.02 or now+delay,
-  DueAt=now+delay,SeenAt=now,Expires=now+math.max(.25,delay+.1,id==npcHeavy and .65 or 0),Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0,Range=range,
+  DueAt=now+delay,SeenAt=now,Expires=now+math.max(.25,delay+.1,id==npcHeavy and .45 or 0),Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0,Range=range,
   Heavy=id==npcHeavy or nil})
  log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
  if rangeWait then log("RANGE_WAIT","windowMs=80 marginStuds=3 stepMs=20 "..detail.." "..geometry)end
@@ -5417,8 +5424,9 @@ local function update(dt)
    end
    reason=reason or not valid and geometryReason
    if not reason and now<cooldownUntil then
-    -- Heavy cues may wait out the 0.5 s counter cooldown until 0.62 s after the release was seen (SP-039/041): bandits heavy right
-    if (cooldownUntil-now<=.08 and cooldownUntil<cue.Expires or cue.Heavy and cooldownUntil<=cue.SeenAt+.62) and cue.Deferrals<4 then
+    -- Heavy cues may wait out the 0.5 s counter cooldown until 0.40 s after the release was seen (SP-039/041/050; 0.62 in v16.4
+    -- pressed at ~0.5 s, after the hit had already landed in all four rogue cases): NPCs heavy right
+    if (cooldownUntil-now<=.08 and cooldownUntil<cue.Expires or cue.Heavy and cooldownUntil<=cue.SeenAt+.40) and cue.Deferrals<4 then
      cue.Deferrals+=1;cue.At=cooldownUntil
      log("DEFER","reason=counter_cooldown untilLocal="..cue.At.." "..detail)
      continue

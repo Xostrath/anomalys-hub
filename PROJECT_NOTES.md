@@ -199,3 +199,8 @@ Combat page v13 restores baseline hit-3 timing after the +30 ms comparison showe
 ### Hunter active block trial and recorder ownership (2026-11-17)
 
 Private Hunter Combat now includes Auto Perfect Block v1 for two recorded attack cues. It logs focused input/state/outcome events automatically; Save/Copy controls remain in Recorders. Manual recording and active blocking stop each other; the recorder exposes IsHunterRecording. Build assembly includes HunterXEnterAutoBlock.lua privately and strips it and the Hunter Combat page publicly. See [HXE-013](docs/games/hunter-x-enter.md).
+
+
+### Sparkling PvP range-entry diagnostics v7 (2026-11-19)
+
+Combat page v14 adds a bounded approach recheck for fresh mapped player swings just outside the configured radius. Actual input still requires that radius and every normal gate; NPC behavior and timing seeds remain. RANGE_WAIT/CHECK/ENTERED records admission, subsequent client geometry and entry, separately from input and outcomes. 231 mocked assertions pass; live PvP benefit is unverified. See [SP-T036](docs/games/sparkling.md).

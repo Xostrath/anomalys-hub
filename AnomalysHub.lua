@@ -3224,7 +3224,7 @@ controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
 
 end)()
 ;(function()
--- Combat page v13 / diagnostics v6: baseline timings, event-time local state capture.
+-- Combat page v14 / diagnostics v7: bounded PvP approach recheck; baseline timings retained.
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -3385,7 +3385,7 @@ local function sortedCounts(counts)
 end
 local function report(reason)
  if not session then return nil end
- return "SPARKLING AUTO PARRY DIAGNOSTICS v6 // ACTIVE TIMING TEST\n"
+ return "SPARKLING AUTO PARRY DIAGNOSTICS v7 // ACTIVE TIMING TEST\n"
   .."session="..session.Id.." place="..game.PlaceId.." universe="..game.GameId.." unix="..session.Unix.." localClock="..session.Started
   .."\nHISTORY="..session.Path
   .."\nCoverage: attack decisions, F API down/up results, nearby Workspace.Live animation starts, local combat input events, incoming CooldownNT/Effects, health and sampled local state."
@@ -3393,10 +3393,11 @@ local function report(reason)
   .."\nSELF_COUNTER lists recent actual attempts; attacker and causation remain unknown. OTHER_COUNTER logs other recipients. POSSIBLE_PARRIED requires recent local attack + nearby facing opponent counter + a local Counter=0.5 notice within 0.2s; this is a heuristic, not confirmation."
   .."\nDEFEND_REQUEST pairs adjacent observed requests with recent F input/API pulses (200ms window). Early releases and intervening inputs are explicit; all attribution is temporal. Stop disconnects hooks, so post-stop request receipts may be unavailable."
   .."\nSTATE_CONTEXT/STATE_POINT capture client-visible relevant local attributes/values after F API success and on damage. lastDamageAge is time since the previous observed damage in this session; unknown means no observation. Missing fields and snapshots do not prove server eligibility or absence of stun."
+  .."\nPvP approach recheck: fresh mapped player cues within Range+3 may wait at most 80ms, four checks at 20ms intervals, two waiting slots. F still requires configured Range, facing, LOS and all normal gates. RANGE_WAIT/CHECK/ENTERED describe client geometry, not hit confirmation."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=all_five timingTrial=baseline_state_capture range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -3508,7 +3509,7 @@ local function logLosObject(instance,excluded,kind)
  log("LOS_OBJECT",detail)
 end
 
-local function threat(model)
+local function threat(model,rangeLimit)
  if not model or not model:IsDescendantOf(workspace)then return false,"actor_unloaded",""end
  local char=player.Character
  local root=roots(char)
@@ -3521,7 +3522,7 @@ local function threat(model)
  local attackerDot=other.CFrame.LookVector:Dot(direction)
  local selfDot=root.CFrame.LookVector:Dot(-direction)
  local detail=string.format("distance=%.3f vertical=%.3f attackerDot=%.3f selfDot=%.3f",distance,delta.Y,attackerDot,selfDot)
- if distance>settings.Range then return false,"out_of_range",detail end
+ if distance>(rangeLimit or settings.Range) then return false,"out_of_range",detail end
  if attackerDot<.2 then return false,"attacker_facing",detail end
  if selfDot<0 then return false,"self_facing",detail end
  local params=RaycastParams.new()
@@ -3548,7 +3549,7 @@ parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. All five hits enabled. Baseline timing with event-state diagnostics v6."},card)
+ Text="Off. All five hits enabled. Baseline timing; bounded PvP range recheck v14."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -3629,11 +3630,29 @@ local function observe(model,track)
  local allowed,targetReason=targetAllowed(model)
  if not allowed then skip(targetReason,"stage=observe "..detail);return end
  local valid,reason,geometry=threat(model)
- if not valid then skip(reason,"stage=observe "..detail.." "..geometry);return end
+ local rangeWait=false
+ -- Only fresh player swings just outside range may wait briefly for entry. The actual
+ -- input gate still uses settings.Range; this is not an increased parry radius.
+ if not valid and reason=="out_of_range" and targetKind(model)=="Player" then
+  local phase,speed=track.TimePosition,track.Speed
+  local fresh=type(phase)=="number" and phase==phase and phase>=0 and phase<=.05
+   and type(speed)=="number" and speed==speed and speed>0 and speed<math.huge and track.IsPlaying
+  if fresh then
+   local near=threat(model,settings.Range+3)
+   if near then rangeWait=true end
+  end
+ end
+ if not valid and not rangeWait then skip(reason,"stage=observe "..detail.." "..geometry);return end
+ if rangeWait then
+  local waiting=0;for _,cue in ipairs(pending)do if cue.RangeUntil then waiting+=1 end end
+  if waiting>=2 then skip("range_queue_full",detail.." "..geometry);return end
+ end
  seen[track]=now
  if #pending>=8 then skip("queue_full",detail);return end
- table.insert(pending,{Model=model,Track=track,Id=id,Serial=serial,At=now+delay,SeenAt=now,Expires=now+.25,Deferrals=0})
+ table.insert(pending,{Model=model,Track=track,Id=id,Serial=serial,At=rangeWait and now+.02 or now+delay,
+  DueAt=now+delay,SeenAt=now,Expires=now+.25,Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0})
  log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
+ if rangeWait then log("RANGE_WAIT","windowMs=80 marginStuds=3 stepMs=20 "..detail.." "..geometry)end
 end
 local targetsLabel
 local function sync()
@@ -3891,7 +3910,25 @@ local function update(dt)
    local offScreen=settings.SkipOffScreen and not onScreen(cue.Model)
    local reason=not allowed and targetReason or now>cue.Expires and "expired" or held and "already_held"
     or manualF and "f_already_down" or not cue.Track.IsPlaying and "track_stopped" or seen[cue.Track]~=cue.SeenAt and "track_reused"
-    or knocked and "self_knocked" or offScreen and "off_screen" or not valid and geometryReason
+    or knocked and "self_knocked" or offScreen and "off_screen"
+   if not reason and cue.RangeUntil then
+    cue.RangeChecks+=1
+    log("RANGE_CHECK","check="..cue.RangeChecks.." remaining="..math.max(0,cue.RangeUntil-now).." "..detail)
+    if now>cue.RangeUntil or cue.RangeChecks>4 then reason="range_wait_expired"
+    elseif not valid then
+     local near=geometryReason=="out_of_range" and threat(cue.Model,settings.Range+3)
+     if near and now<cue.RangeUntil and cue.RangeChecks<4 then
+      cue.At=math.min(now+.02,cue.RangeUntil);continue
+     end
+     reason=near and "range_wait_expired" or geometryReason
+    else
+     log("RANGE_ENTERED","checks="..cue.RangeChecks.." "..detail)
+     cue.RangeUntil=nil
+     -- Entry never advances the normal per-hit seed or the user's offset.
+     if now<cue.DueAt then cue.At=cue.DueAt;continue end
+    end
+   end
+   reason=reason or not valid and geometryReason
    if not reason and now<cooldownUntil then
     if cooldownUntil-now<=.08 and cooldownUntil<cue.Expires and cue.Deferrals<4 then
      cue.Deferrals+=1;cue.At=cooldownUntil
@@ -3919,7 +3956,7 @@ local function update(dt)
    end
   end
  end
- status.Text=string.format("AUTO PARRY · Diagnostics v6 · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("AUTO PARRY · PvP range recheck v14 · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)

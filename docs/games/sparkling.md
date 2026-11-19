@@ -1003,3 +1003,32 @@ An approach cue checks at 20 ms intervals, at most four times and no later than 
 The first Shadow run (Unix 1795076236) similarly has Counter duration=5 at 51.6456 and 57.2116 s following attempts without isolated counter confirmation. Separately, ten isolated self-counter receipts across the two runs are followed by duration=0.5 notifications. That is an observed association, not enough to assign all short notices one meaning. One 0.5 notice at 55.2304 s replaces a still-active longer recorded deadline in the current implementation; whether that should reset a missed-parry penalty remains unverified. Preserve the actual notice chronology rather than silently assuming one shared or separate server timer.
 
 **Updated investigation priority:** analyze the first eligible unsuccessful attempt before each long cooldown, including prior input, hit phase, request/counter timing and the delay until the cooldown notice. Do not tune from all subsequent combo skips or describe the entire chain as random timing. Determine whether the penalty becomes active before the client notification and whether later short notices reset it before changing deadline handling. Keep the existing cooldown gate, timings and v14 PvP approach change as installed; no runtime edit is justified by this semantic clarification alone. The v14 approach change addresses a separate range-observation limitation, not the missed-parry penalty. Public notes retain user confirmation separately from capture-derived evidence; raw captures remain local.
+
+
+## SP-031 — NPC impact timing across all captures; NPC hits 3–5 no longer parried (2026-11-19, Claude)
+
+**Method:** one pass over every diagnostics history with NPC swings (main world `110405289082842` and place `135537125271116`; Thug5/6/8 and Shadow, ~900 mapped swings, ping ~107–115 ms). For each mapped NPC swing: the client-seen `ANIM_START`, our `F_DOWN`, the attacker's **`HitOut` effect** (impact receipt), and the local effect within −30/+120 ms of impact: `Counter Parry!`, `Blunt` (hit taken), `BlockEffect`, `Dodged!`. Counter cooldown notices within 0.6 s of impact. The analysis script is local (not published).
+
+**Impact after the swing is seen (median, ms):** hit 1 ≈ 234, hit 2 ≈ 234, hit 3 ≈ 116, hit 4 ≈ 85, hit 5 ≈ 184.
+
+**Outcome by lead (impact − press):** below 80 ms, 0 counters in 13; 80–159 ms, 15 counters in 99 (≈15%); 160–179 ms, 11 in 26; 180–199 ms, 65 in 92 (≈71%); 200–239 ms, 15 in 21. A counter needs F roughly **160–180 ms before impact receipt** at this ping.
+
+| Hit | Press after seen start | Lead | Counters / attempts |
+| --- | --- | --- | --- |
+| 1 | ~50 ms | ~180 ms | 52 / 73 (71%) |
+| 2 | ~50 ms | ~180 ms | 40 / 76 (53%) |
+| 3 | 2 ms (immediate) | ~115 ms | 9 / 61 |
+| 4 | 2 ms (immediate) | ~80 ms | 2 / 25 |
+| 5 | ~52 ms | ~135 ms | 4 / 10 |
+
+**Combo structure (Verified from these captures):** hit 2 never followed a countered hit 1, and hit 3 never followed a countered hit 2 (no mapped swing followed any countered swing within 1.3 s). **A counter ends the NPC's combo.** Gaps 1→2, 2→3, 3→4 and 4→5 vary ~400–1,000 ms (p10–p90), too wide to predict a later hit from the previous one.
+
+**Cooldown cost:** every counter (107/107) was followed by `Counter duration=0.5`. A failed attempt (`Blunt`) was followed by `duration=5` in 68 of 111 (the user-confirmed missed-parry penalty, SP-030). Counter-cooldown skips of hits 1/2 total 81 across the batch. The newest Shadow run (1795077608) shows the chain plainly: all six hit 3/4/5 attempts failed and each produced the 5 s penalty, then 9 hit-1/2 swings were skipped during it.
+
+**Conclusion:** hits 3–4 cannot be parried reactively at this latency; the client sees their animation too late. Attempting them mostly buys a 5 s penalty, which then blocks the next combo's hit 1 (71%) and hit 2 (53%). Hits 3–5 only occur after hits 1–2 already got through.
+
+**Implemented / untested live — Combat page v15:** NPC cues for hits 3, 4 and 5 are skipped at observe time (`SKIP reason=npc_late_hit hit=N`). Header config adds `npcHits=1-2`. Player cues, all seeds, hold, range recheck and gates are unchanged. This is NPC-only: Claude does not work on the PvP path (project scope line); PvP behaviour is GPT's.
+
+**Test:** fight the Shadow or a Thug with Auto Parry on. Expect `npc_late_hit` skips, fewer `duration=5` notices, and fewer `counter_cooldown` skips of hits 1/2. The open question is whether hit 1/2 counters per combo rise. Not yet tested: a slightly earlier hit 1/2 press (lead 200–239 ms countered 15 of 21, a small sample), and whether `Blunt` failures of hit 2 come from hit-stun after hit 1.
+
+**Auto Shadow Farm v1 (SP-A002) first live run (user, 2026-11-19):** ~110 s, PowerLevel 1,599 → 2,197; one kick-out, re-entered 2.5 s later. The Shadow's fields include **`@Player` = the owner's name** and `@AIId=Shadow`, health 60/60. v1.1 now targets only a Shadow whose `@Player` is the local player (or has no owner tag).

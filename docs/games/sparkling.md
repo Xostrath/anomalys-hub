@@ -1401,3 +1401,13 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 **Validation:** reproduced the original geometry failure, then passed 128 mocked assertions: 60 new-catalog/geometry/concurrent-NPC checks plus 36 standard-policy, 26 ownership/PvP/PvE and six settings/reload checks. Coverage includes every new ID, intended seeds and additive offset, unknown movement/reaction rejection, player-only catalog scope, both facing checks, manual input, cooldown, focus, wall, death/ownership, approach entry, standard exclusions, NPC range and rogue mapping, rogue-heavy facing exemption, shared-heavy stopped-track behavior and cleanup. Source and staged public/private builds compile; both generated variants are checked before installation. Exact-module replacement and hash checks preserve Claude's concurrent unrelated changes. No live Roblox interaction or gameplay input was performed by the agent.
 
 **Handoff:** reload v17 and enable PvP/Auto Parry. The next player run should first demonstrate queued/accepted player_set_b cues and correctly released inputs; only then assess counters, miss penalties and timing. Do not credit manual/unmatched counter events to automation, promise all fighting styles, or silently enable the NPC-only heavy catalog for players. Keep recording automatic. Original frozen evidence and analysis stay local; this note is sanitized.
+
+## SP-052 — Death on the rogue planet sent the user to Heaven (2026-11-19, Claude)
+
+**User:** "why did I go to heaven?"
+
+**Evidence:** history 1795128862 (15:54:22, place **120023577538065**, 1,056 s): the session ended with `STOP Character changed or died`; the CEXP tracker counted `Deaths=1`. All Warrior Clan Rogue fights since 15:30 (histories 1795127425 → 1795128862) were on this place, together with players (`BroInBum` attacking from 614 s on; health 128 at 918 s). The detail log hit its 12,000-line cap at ~918 s (6,450 lines dropped), so the last ~137 s before the death — what landed the final hit or a grip — were not recorded.
+
+**Why Heaven (Trello):** "Dying in Pietra will send you to Heaven or Hell" and "you lose 10% of CEXP and Power Level and [are] set straight to the afterlife"; Pietra is "a battle grounds planet… higher gravity", with Pietra Wave Defense spawning groups of NPCs. Elsewhere a death respawns you at the hospital. Heaven vs Hell follows Karma (neutral or positive → Heaven). **Inference:** place 120023577538065 is Pietra (the death went straight to the afterlife; the rogues spawn there in groups). Not confirmed by a location label.
+
+**Expected cost:** 10% of CEXP (1,808 → about 1,627 if nothing was gained) and 10% of Power Level; the next Varrik check will show it.

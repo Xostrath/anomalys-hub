@@ -1032,3 +1032,26 @@ The first Shadow run (Unix 1795076236) similarly has Counter duration=5 at 51.64
 **Test:** fight the Shadow or a Thug with Auto Parry on. Expect `npc_late_hit` skips, fewer `duration=5` notices, and fewer `counter_cooldown` skips of hits 1/2; judge the hit-5 trial on its own counters. Trade-off for the Shadow farm: hits 3–4 now land instead of rarely being countered, so kick-outs may rise (compare with the first run: one in ~110 s). The open question is whether hit 1/2 counters per combo rise. Not yet tested: a slightly earlier hit 1/2 press (lead 200–239 ms countered 15 of 21, a small sample), and whether `Blunt` failures of hit 2 come from hit-stun after hit 1.
 
 **Auto Shadow Farm v1 (SP-A002) first live run (user, 2026-11-19):** ~110 s, PowerLevel 1,599 → 2,197; one kick-out, re-entered 2.5 s later. The Shadow's fields include **`@Player` = the owner's name** and `@AIId=Shadow`, health 60/60. v1.1 now targets only a Shadow whose `@Player` is the local player (or has no owner tag).
+
+
+## SP-032 — v15 verified against the Shadow; own punches block counters; where Shadow-farm BP comes from (2026-11-19, Claude)
+
+**Evidence:** diagnostics v7 / Combat page v15 histories 1795078255 (416 s) and 1795078719 (1,872 s), both `npcSkip=hit3,hit4 npcHit5Seed=0`, Shadow only, run alongside Auto Shadow Farm. Detail lines hit the 12,000-line cap early in each (dropped 6,480 / 73,014), so per-swing figures cover the detail portion (271 swings); footer totals cover the whole session: 532 attempts, 345 self counters, 0 damage events.
+
+| Shadow, pressed swings | Before v15 (SP-031 batch) | v15 |
+| --- | --- | --- |
+| Hit 1 counters | 3 / 15 | 35 / 57 (61%) |
+| Hit 2 counters | 22 / 38 (58%) | 49 / 70 (70%) |
+| Hit 5 counters | 0 / 3 | **15 / 16 (94%)** at seed 0, ~182 ms lead |
+| Hit 1/2 skipped for counter cooldown | 39 | 18 |
+| Share of swings that were hits 3–5 | 37% | 23% (combos end earlier) |
+
+**Verified:** the hit-5 seed-0 trial works (94%), and skipping NPC hits 3–4 roughly halved cooldown losses. Keep both.
+
+**Own punches block counters (Verified from these captures):** time from our last outgoing `Action("MouseButton1")` to the F press, hits 1–2: under 150 ms → **0 / 19 counters** (12 `BlockEffect`, 3 `Blunt`); 150–300 ms → 4 / 16; 300–500 ms → 16 / 23; 500–1,000 ms → 36 / 44; over 1 s → 28 / 32. A press too soon after a punch gives a block instead of a counter. This explains why hit 1/2 (which arrive while the farm is punching) trail hit 5 at the same lead.
+
+**Where the farm's BP comes from (sampled `character.PowerLevel` rises in history 1795078255, 252 s):** ~1,900 of 2,417 PL followed our own landed hits (self `HitOut` + Shadow `Blunt`) within 0.6 s; ~240 followed hits taken; counters ~150. **Landing punches is the BP source;** parrying mainly prevents kick-outs. Decision: do not slow the farm's punching for better counters.
+
+**Auto Shadow Farm second run (user, 2026-11-19):** ~39 min, PowerLevel 2,202 → 23,634, one kick-out (re-entered in 2.5 s). The `@Player` owner filter was active. Verified live.
+
+**Next:** none required. If kick-outs become a problem, consider pausing punches for ~300 ms when the Shadow starts a hit-1 swing; not built.

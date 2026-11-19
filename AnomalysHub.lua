@@ -3446,7 +3446,7 @@ local busy=false
 
 local function relevant(name)
  name=name:lower()
- for _,word in ipairs({"fatigue","inj","limb","bleed","burn","cripple","sunder","blur","tired","exhaust","sleep","rest"})do
+ for _,word in ipairs({"fatigue","inj","limb","bleed","burn","cripple","sunder","blur","tired","exhaust","sleep"})do
   if name:find(word,1,true)then return true end
  end
  return false

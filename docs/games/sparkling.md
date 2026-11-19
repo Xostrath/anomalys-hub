@@ -1073,3 +1073,11 @@ The first Shadow run (Unix 1795076236) similarly has Counter duration=5 at 51.64
 **Implemented / untested live — Fatigue & Injury Data v1 (Recorders):** dumps matching values/attributes on player, character and humanoid; humanoid WalkSpeed/Jump; PostEffects in Lighting and the camera; the KiHud limbs figure (image ids, colors, text); `getconnections` listener sources for each value's Changed; names of matching LocalScripts/ModuleScripts. Then sets each value above its minimum to the minimum locally for 3 s, logging `REVERTED` (game put it back) or `STAYED` (restored by the recorder), with samples of WalkSpeed, HUD % and effects.
 
 **Next:** user captures once with injured limbs. If values revert at once → server-owned; offer Auto Sleep (N) at a fatigue threshold instead. If they stay and the blur/speed follow → build a local hold for those parts only, and say plainly that server effects remain.
+
+**Result — first capture (user, 2026-11-19, place 135537125271116, Verified from capture):**
+- `Fatigue` set to 0 locally **reverted in 0.07 s** and kept rising (1.09→1.14 in 2.6 s while active; HUD showed 0% for one sample, then 1%). **Fatigue is server-owned; a client hold is not possible.**
+- Six injury values exist: `HeadInj` 3.2, `TorsoInj` 2.1, `LeftArmInj` 56.9, `RightArmInj` 79.4, `RightLegInj` 3.5, `LeftLegInj` 2.8. Set to 0 locally they **stayed for 3 s** (then restored by the recorder). This only means the server did not change them in those 3 s; a replicated value is overwritten on its next server change. Their effects (arm damage, regeneration) are server-side per Trello.
+- No `Changed` listeners on any value; WalkSpeed stayed 16 and `Lighting.Blur` stayed size 1 throughout (head injury only 3, so the blur test is inconclusive). Matching client scripts: `PlayerScripts.Primary.Effects.Bleed` and `RampageBlur` only.
+- Recorder flaw (fixed in v1.1 source): the word "rest" matched `TempCoreStr` (50), which was zeroed locally for 3 s and restored.
+
+**Conclusion:** an HxE-style fatigue/injury block cannot affect the server. The workable feature is **Auto Sleep** (N lowers fatigue to 0%, Trello) at a fatigue threshold; sleep mechanics (toggle, duration, where allowed) are not yet captured.

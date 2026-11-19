@@ -1328,3 +1328,9 @@ Both other characters expose direct Fatigue, all six injury values, Shield with 
 - Earlier "Shadow" sightings on 11-17 (PL 14k–25k, 6 sessions) were a different character/setup and are not counted.
 - **Tabbed-out test (SP-035) — Verified from logs for a background (not minimized) window:** punches and PL gain continued while unfocused. Minimized is still untested.
 - Farm AIM samples (SP-035): the first five punches logged camera, mouse and Shadow directions; not yet matched against the M1 request vector.
+
+## SP-047 — CEXP found: Varrik's dialogue (2026-11-19, Claude)
+
+**Evidence (CEXP Finder capture, user at Varrik, place 102793290484692; Verified from capture):** talking to `Workspace.NPCs.Varrik` sends `Requests.Dialogue` IN `{msg="Hm. You've got the look of someone who's been in a few fights…", choices={"Can you check my combat experience? (5000 Zeni)","Never mind."}}`. Choosing the first sends `Requests.Dialogue:FireServer({exit=false, choice="Can you check my combat experience? (5000 Zeni)"})`; the server answers 83 ms later with `{msg="You have 1808 combat experience. Not bad. You're getting there.", choices={}}`. **The user's CEXP was 1,808** at 14:42. CEXP is not in the client profile and arrives only as this dialogue text; each check costs 5,000 Zeni.
+
+**Implemented / untested live:** Visuals listens to `Requests.Dialogue` and, on "You have N combat experience", stores N with the time in `sparkling_cexp_value.txt` (seeded with this capture's 1,808). The CEXP row shows e.g. "1,808 (Varrik, 12 min ago)", or "Ask Varrik (5,000 Zeni) to read it" when nothing is stored. It never asks Varrik itself.

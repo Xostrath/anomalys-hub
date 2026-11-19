@@ -2673,11 +2673,39 @@ local function injuries(target)
  return #parts>0 and table.concat(parts," · ") or nil
 end
 
+-- CEXP (SP-047, CEXP Finder 2026-11-19): choosing "Can you check my combat experience? (5000 Zeni)" makes the server send
+-- Requests.Dialogue {msg="You have 1808 combat experience. ...", npc=Workspace.NPCs.Varrik}. Listen for that line and remember it.
+local cexpPath="AnomalyHub/universal/sparkling_cexp_value.txt"
+local cexp={}
+if type(readfile)=="function"then
+ local ok,text=pcall(readfile,cexpPath)
+ local value,at=ok and tostring(text):match("^(%d+)%s+(%d+)")
+ if value then cexp.Value,cexp.At=tonumber(value),tonumber(at)end
+end
+local dialogue=rs:FindFirstChild("Requests") and rs.Requests:FindFirstChild("Dialogue")
+if dialogue and dialogue:IsA("RemoteEvent")then
+ controller.Connect(dialogue.OnClientEvent,function(data)
+  local msg=type(data)=="table" and data.msg
+  local amount=type(msg)=="string" and msg:match("[Yy]ou have%s+([%d,]+)%s+combat experience")
+  amount=amount and tonumber((amount:gsub(",","")))
+  if not amount then return end
+  cexp.Value,cexp.At=amount,os.time()
+  if type(writefile)=="function"then
+   if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+   pcall(writefile,cexpPath,amount.." "..cexp.At)
+  end
+ end)
+end
 -- Sources from the Profile Scan (2026-11-17). Character attributes/values replicate for every player; the stats menu is yours only.
 -- A field marked (?) is a likely mapping that still needs confirming.
 local FIELDS={
- -- Not in the client profile (scan v3); per the game guide only the NPC Varrik shows it.
- {Label="Combat Experience (CEXP)",SelfOnly=true,Resolve=function()return "Server only (ask Varrik)"end},
+ -- Not in the client profile (scan v3); only Varrik reveals it (SP-047): the last answer heard is shown with its age.
+ {Label="Combat Experience (CEXP)",SelfOnly=true,Resolve=function()
+  if not cexp.Value then return "Ask Varrik (5,000 Zeni) to read it"end
+  local age=os.time()-cexp.At
+  local ago=age<90 and "just now" or age<5400 and (math.floor(age/60).." min ago") or age<172800 and (math.floor(age/3600).." h ago") or (math.floor(age/86400).." days ago")
+  return number(cexp.Value).." (Varrik, "..ago..")"
+ end},
  {Label="Battle Power",Resolve=function(target)return show(value(target,"PowerLevel"))end},
  {Label="Health",Optional=true,Resolve=function(target)
   local hum=target.Character and target.Character:FindFirstChildOfClass("Humanoid")

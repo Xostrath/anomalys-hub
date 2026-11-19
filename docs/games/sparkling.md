@@ -1252,3 +1252,11 @@ The PVP (Players) toggle still controls player inputs; no settings file is rewri
 **Request (user):** add Zeni to Visuals.
 
 **Implemented / untested live:** Visuals → Profile has a **Zeni** row after Battle Power. For you it reads the inventory label (`PlayerGui.Inventory…infos.hh`, "Zeni:N", which updated live as Auto Job paid), parsed with thousands separators and a k/m suffix; fallback the profile snapshot's `Zeni`. For another player it shows a `Zeni` value or attribute on their character if one exists (none has been seen in captures), otherwise "Hidden (only shown for you)".
+
+## SP-045 — Visuals: Race Variant confirmed; Limit Break Progress reworked (2026-11-19, Claude)
+
+**User:** remove the (?) for Traditional (Race Variant) and for Limit Break Progress.
+
+- **Race Variant:** `Character@Trait` (e.g. "Traditional") confirmed by the user as the race variant; (?) removed. **User-confirmed.**
+- **Limit Break Progress:** Trello (Limit Breaking): BP progress stops at **100k / 250k / 450k / 700k / 1M** until a bar on the right of the screen is filled by fighting (faster against players close in power). Profile Scan: `Character@Limit` is 0 or 1 across players, read as breaks done (inference from Trello + values, not confirmed); `Character.LimitBreak` was 0 for every player scanned and is read as that bar's value (maximum unknown). The row now shows e.g. "0 breaks done · next wall 100k (40,267 BP to go)", or "at the 100k wall, bar N" once BP reaches the next wall. Implemented / untested live.
+- **Next:** capture `LimitBreak` while filling the bar at a wall to learn its maximum.

@@ -2684,7 +2684,8 @@ local FIELDS={
   return show(own("Personality")) or infoLine("Personality") or "Loading profile..."
  end},
  {Label="Race",Resolve=function(target)return show(attr(target,"Race"))end},
- {Label="Race Variant",Resolve=function(target)local trait=show(attr(target,"Trait"));return trait and (trait.." (?)")end},
+ -- User confirmed (2026-11-19) that Trait is the race variant, e.g. Traditional.
+ {Label="Race Variant",Resolve=function(target)return show(attr(target,"Trait"))end},
  -- Profile SkillMastery is a JSON list (empty "[]" for the user so far); GravityMastery is a number.
  {Label="Form Mastery",Resolve=function(target)
   if target~=localPlayer then return OWN_ONLY end
@@ -2700,10 +2701,20 @@ local FIELDS={
   local gravity=number(own("GravityMastery"))
   return (#parts>0 and table.concat(parts,", ") or "No skill/form mastery yet")..(gravity and (" · Gravity "..gravity) or "")
  end},
+ -- Trello (Limit Breaking): progress stops at 100k / 250k / 450k / 700k / 1M BP until a bar (right side of the screen) is filled by
+ -- fighting. Character@Limit is 0 or 1 across players in the Profile Scan, read here as breaks done; Character.LimitBreak is that bar's
+ -- value (0 for everyone scanned, its maximum is not known yet).
  {Label="Limit Break Progress",Resolve=function(target)
-  local progress,limit=value(target,"LimitBreak"),attr(target,"Limit")
-  if not finite(progress) and not finite(limit) then return nil end
-  return (show(progress) or "?").." (Limit "..(show(limit) or "?")..") (?)"
+  local breaks,bar,bp=tonumber(attr(target,"Limit")),tonumber(value(target,"LimitBreak")),tonumber(value(target,"PowerLevel"))
+  if not breaks and not bar then return nil end
+  breaks=math.floor(breaks or 0)
+  local walls={100000,250000,450000,700000,1000000}
+  local function short(n)return n>=1e6 and (string.format("%g",n/1e6).."M") or (string.format("%g",n/1e3).."k")end
+  local nextAt=walls[breaks+1]
+  local text=breaks.." break"..(breaks==1 and "" or "s").." done"
+  if not nextAt then return text.." · past the 1M wall" end
+  if bp and bp>=nextAt then return text.." · at the "..short(nextAt).." wall, bar "..(show(bar) or "0")end
+  return text.." · next wall "..short(nextAt)..(bp and (" ("..number(nextAt-bp).." BP to go)") or "")
  end},
  {Label="Karma",Resolve=function(target)
   local number=show(attr(target,"Karma"))

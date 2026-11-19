@@ -1236,3 +1236,13 @@ The PVP (Players) toggle still controls player inputs; no settings file is rewri
 **First live run, v1.1 (user, 2026-11-19, `sparkling_auto_job_latest.txt`; Verified from log):** Scientific Engineer ran four jobs; the inventory Zeni went 239 → 439 → 639 → 839 (+200 each). The job completes at counter 50: progress turns 1/1 about 10.5 s after the laptop prompt (taps=50–51 at 5/s), the Mission window disappears 0.3 s later, and the Restart Quest box appears at the same moment. **Restart Quest `[ Yes ]` was not pressed by the VirtualInputManager click** at the button's centre (button (1547,710) 97×27, `IgnoreGuiInset=true`, inset 58; click (1596,723)): 7–10 clicks per box, the box then went away on its own (~9 s) or by the user's own click. The minigame key changes per job (D, S, A, W). User: "it doesn't do the restart quest, I had to press it myself."
 
 **v1.2 (implemented / untested live):** button presses rotate through: click at the centre, centre −inset, centre +inset, and the button's own handlers via `getconnections` (`Activated`, `MouseButton1Click`, `MouseButton1Down`). If the box disappears within 1.2 s of a press, that method is kept for later presses and logged as `PRESS_WORKED method=…`. Each press logs its method and geometry.
+
+**v1.2 live run (user: "working perfectly"; Verified from log):** `PRESS_WORKED method=click+inset` on the first box. VirtualInputManager clicks need the top-bar inset added even for an `IgnoreGuiInset` ScreenGui (Restart `[ Yes ]` at (1547,710) 97×27 was pressed by a click at (1596,781), inset 58). Then **62 Scientific Engineer jobs in ~12.4 min** (one every ~12 s, ≈ $1,000/min), every restart pressed on the first try. The log's `zeni=` field read 1,1,…,13 — the inventory label groups thousands (inferred: the read value went up by 1 every 5 jobs = $1,000), so v1.2 read only the digits before the comma.
+
+## SP-043 — Shadow farm arm-injury stop; Auto Job money target (2026-11-19, Claude)
+
+**Request (user):** stop Auto Shadow Farm when either arm reaches 90% injury; option to stop Auto Job at an amount of money, 0 = forever.
+
+**Implemented / untested live:**
+- **Auto Shadow Farm:** stops when `Character.LeftArmInj` or `RightArmInj` (SP-033) is ≥ 90 ("Left/Right arm at N% injury"); POWER lines now log `arms=L/R`. The 0–100 scale is assumed from the HUD.
+- **Auto Job v1.3:** "Stop at Zeni (0 = never)" box, saved to `sparkling_auto_job_target.txt`; checked once a second against the inventory label, now parsed with thousands separators and a k/m suffix. The exact label format above 999 is inferred, not captured.

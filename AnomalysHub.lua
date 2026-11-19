@@ -3360,7 +3360,7 @@ local ui=controller.UI
 local page=ui.Pages.Auto
 if not page then return end
 
-local SEARCH,REACH=400,5
+local SEARCH,REACH,ARM_LIMIT=400,5,90
 local path="AnomalyHub/universal/sparkling_auto_shadow_latest.txt"
 local state={Enabled=false,Closed=false,Lines={},Held={},Seen={},Focused=true}
 
@@ -3379,7 +3379,7 @@ local section=ui.Section(page,"Auto Farm",96,true)
 section.Frame.LayoutOrder=-60
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,32),Size=UDim2.new(1,-28,0,58),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
  TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Enters the Inner World with J, walks to your Shadow and punches (M1). Turn Auto Parry on for defense. Needs Meditation Type."},section.Body)
+ Text="Off. Enters the Inner World with J, walks to your Shadow and punches (M1). Stops when either arm reaches 90% injury. Turn Auto Parry on for defense. Needs Meditation Type."},section.Body)
 local button
 
 local function release(item)
@@ -3495,9 +3495,19 @@ controller.Connect(run.Heartbeat,function()
   return
  end
  if state.Paused then state.Paused=false;log("RESUME")end
+ -- Arm injury (user request, SP-043): punching injures the arms (LeftArmInj/RightArmInj reached 57/79 while farming, SP-033); stop at 90.
+ for _,name in ipairs({"LeftArmInj","RightArmInj"})do
+  local value=character:FindFirstChild(name)
+  local amount=value and value:IsA("ValueBase") and tonumber(value.Value)
+  if amount and amount>=ARM_LIMIT then
+   stop(string.format("%s arm at %d%% injury (limit %d%%).",name=="LeftArmInj" and "Left" or "Right",math.floor(amount),ARM_LIMIT));return
+  end
+ end
  if now>=state.NextPower then
   state.NextPower=now+10
-  log("POWER "..tostring(power(character)).." focused="..tostring(state.Focused).." punches="..state.Clicks.." unfocusedPunches="..state.UnfocusedClicks)
+  local left,right=character:FindFirstChild("LeftArmInj"),character:FindFirstChild("RightArmInj")
+  log("POWER "..tostring(power(character)).." focused="..tostring(state.Focused).." punches="..state.Clicks.." unfocusedPunches="..state.UnfocusedClicks
+   .." arms="..tostring(left and tonumber(left.Value) and math.floor(left.Value) or "?").."/"..tostring(right and tonumber(right.Value) and math.floor(right.Value) or "?"))
  end
  if now>=state.NextSave then state.NextSave=now+10;save()end
  local shadow,distance,count=findShadow(root)
@@ -4003,7 +4013,7 @@ controller.RegisterCleanup(function()stop("Unloaded.")end)
 
 end)()
 ;(function()
--- Sparkling Auto Job v1.2 (SP-042). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
+-- Sparkling Auto Job v1.3 (SP-042/043). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
 -- Evidence (Job Recorder, SP-040, 2026-11-19): a job is taken from a "Take Quest" prompt (Floor Staff: Workspace.NPCs.Thlentil;
 -- Scientific Engineer: Workspace.Map.Model.Model.Paperworks), which creates PlayerGui.Mission ("Progress: a/b"). Floor Staff: one
 -- "Spill" prompt under Workspace.Quest.Spills moves after each wipe; progress rises ~2.2 s after the prompt; at 10/10 the game sends
@@ -4035,16 +4045,32 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- pcall(writefile,path,"SPARKLING AUTO JOB v1.2 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop, PROGRESS = window text,"
+ pcall(writefile,path,"SPARKLING AUTO JOB v1.3 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop, PROGRESS = window text,"
   .." DONE = job finished (pay arrives from the game), QUIT = pressed [ Quit ], ZENI = inventory label.\n"..table.concat(state.Lines,"\n"))
 end
 
-local section=ui.Section(page,"Auto Job",96,true)
+local section=ui.Section(page,"Auto Job",136,true)
 section.Frame.LayoutOrder=-55
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,32),Size=UDim2.new(1,-28,0,58),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
  TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
  Text="Off. Stand near the Floor Staff NPC (cafe) or the Scientific Engineer board (laptop), then turn on. Loops until you turn it off."},section.Body)
 local button
+-- Money target (user request, SP-043): stop once the inventory Zeni reaches it; 0 keeps going. Remembered across reloads.
+local targetPath="AnomalyHub/universal/sparkling_auto_job_target.txt"
+local target=0
+if type(readfile)=="function"then local ok,value=pcall(readfile,targetPath);target=ok and tonumber(value) or 0 end
+local targetBox=ui.ValueBox(section.Body,"Stop at Zeni (0 = never)",14,96,180,tostring(target),function(box)
+ local value=tonumber((box.Text:gsub("[,%s]","")))
+ if not value or value<0 then box.Text=tostring(target);return end
+ target=math.floor(value);box.Text=tostring(target)
+ if type(writefile)=="function"then
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  pcall(writefile,targetPath,tostring(target))
+ end
+end)
+targetBox.Position=UDim2.fromOffset(170,96);targetBox.Size=UDim2.new(1,-184,0,30)
+ui.Create("TextLabel",{Position=UDim2.fromOffset(14,96),Size=UDim2.fromOffset(150,30),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextColor3=ui.Colors.Text,TextXAlignment=Enum.TextXAlignment.Left,Text="Stop at Zeni (0 = never)"},section.Body)
 
 local function gui()return player:FindFirstChildOfClass("PlayerGui")end
 local function mission()
@@ -4074,7 +4100,13 @@ local function timerSeconds(job)
 end
 local function zeni()
  local g=gui();local label=g and g:FindFirstChild("hh",true)
- return label and label:IsA("TextLabel") and label.Text:match("Zeni:%s*(%d+)") or nil
+ if not (label and label:IsA("TextLabel"))then return nil end
+ -- The label groups thousands ("Zeni:12,839"); v1.2 read only "12". A k/m suffix is handled in case it abbreviates.
+ local digits,suffix=label.Text:match("Zeni:%s*([%d,%.]+)%s*([kKmM]?)")
+ local value=digits and tonumber((digits:gsub(",","")))
+ if not value then return nil end
+ suffix=suffix:lower()
+ return tostring(math.floor(value*(suffix=="k" and 1e3 or suffix=="m" and 1e6 or 1)))
 end
 local function promptPart(prompt)
  local part=prompt.Parent
@@ -4230,6 +4262,11 @@ local function step(now)
  end
  if state.Paused then state.Paused=false;log("RESUME")end
  if now>=state.NextSave then state.NextSave=now+10;save()end
+ if target>0 and now>=(state.NextMoney or 0) then
+  state.NextMoney=now+1
+  local money=tonumber(zeni())
+  if money and money>=target then stop(string.format("Reached %d Zeni (target %d).",money,target));return end
+ end
  local job=mission()
  local game1=minigame()
  local yes=restartYes()

@@ -1216,3 +1216,16 @@ The PVP (Players) toggle still controls player inputs; no settings file is rewri
 - Jobs can also be taken with `Requests.Quest:FireServer("QuestBoard")` (sent by the game when the user clicked the quest board).
 - **Scientific Engineer [1]** (Tech, place 102793290484692; board `Workspace.Map.Model.Model.Paperworks.Part.Quest` at (1465, 2133, −203), NPC `Hum` nearby): Mission "Help the company to develop a new system", "Progress: 0/1", Pay $200. Prompt `Workspace.Map.Model.Model.Laptop1.Bottom.CapsuleMinigame1` ("Capsule Minigame") opens `CapsuleMission1`: "Time: 60s (Aim for over 50)", "Counter: N", and a key to press (`Button.TextLabel`, "A" both times). Each key press raises the counter (user reached 241 and 117); from counter 50 on, each press also sends `Requests.Quest:FireServer("Increment", PlayerGui.CapsuleMission1)`. The game also sent `Cancel` a few times mid-minigame without a click (cause unknown).
 - Rate: Floor Staff ≈ 36 s of wiping + quit/retake for $200; Scientific Engineer 60 s for $200.
+
+## SP-042 — Auto Job v1: Floor Staff + Scientific Engineer, looped (2026-11-19, Claude)
+
+**Request (user):** Auto Job for both jobs; after a payout, quit the stuck window and take the job again (user answers to design questions).
+
+**More evidence from the recordings (Verified from captures):** after a job, a `PlayerGui.RestartMission` box appears ("Restart Quest", `[ Yes ]` / `[ No ]`, ~6 s countdown); clicking Yes makes the game send `Requests.Quest:FireServer("QuestBoard")` and a fresh job window appears. `[ Quit ]` on a finished window does not always close it: in history 1795120008 the user pressed it 37 times over 19 s and the window stayed. The Floor Staff window has a 300 s timer; Scientific Engineer's reads 9999 s.
+
+**Implemented / untested live — Auto → Auto Job (`src/SparklingAutoJob.lua`):** uses `ProximityPrompt:InputHoldBegin/End` (90 ms tap, the Beyond Nen Auto Chests precedent) and VirtualInputManager key/mouse input; sends no requests itself.
+- No job window: click Restart Quest `[ Yes ]` if shown, else walk to the nearest "Take Quest" prompt (150 studs) and trigger it.
+- Floor Staff: walk to the nearest "Spill" prompt under `Workspace.Quest.Spills`, trigger it, wait for progress (or 3.5 s), repeat.
+- Scientific Engineer: trigger the "Capsule Minigame" laptop prompt; while `CapsuleMission1` is open, tap the key it shows at 5/s (walks back if the key drifts the character over 5 studs from the laptop).
+- Finished (a/b reaches b, or the minigame closed): wait 2 s for the pay, click Restart `[ Yes ]` if shown, else `[ Quit ]` up to 8 times (1.5 s apart); then wait for the window's timer (stops if it reads over 600 s). A job without progress for 90 s is quit.
+- Clicks are refused while the hub window covers the button. Pauses for chat/menu; stops on death, character change, teleport or unload. Log: `sparkling_auto_job_latest.txt` (TAKE/TASK/PROGRESS/DONE/QUIT/RESTART lines and the inventory Zeni label).

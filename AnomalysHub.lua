@@ -4001,6 +4001,280 @@ controller.RegisterCleanup(function()stop("Unloaded.")end)
 
 end)()
 ;(function()
+-- Sparkling Auto Job v1 (SP-042). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
+-- Evidence (Job Recorder, SP-040, 2026-11-19): a job is taken from a "Take Quest" prompt (Floor Staff: Workspace.NPCs.Thlentil;
+-- Scientific Engineer: Workspace.Map.Model.Model.Paperworks), which creates PlayerGui.Mission ("Progress: a/b"). Floor Staff: one
+-- "Spill" prompt under Workspace.Quest.Spills moves after each wipe; progress rises ~2.2 s after the prompt; at 10/10 the game sends
+-- its own reward request. Scientific Engineer: the "Capsule Minigame" laptop prompt opens PlayerGui.CapsuleMission1 for 60 s; press
+-- the key it shows (Button.TextLabel) as often as possible, aim for over 50. Both paid +200 Zeni, but the Mission window stays open
+-- afterwards; its [ Quit ] button clears it. Uses prompt holds and key/mouse input like playing by hand; sends no requests itself.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local players=game:GetService("Players")
+local input=game:GetService("UserInputService")
+local guiService=game:GetService("GuiService")
+local run=game:GetService("RunService")
+local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
+local player=players.LocalPlayer
+local ui=controller.UI
+local page=ui.Pages.Auto
+if not page then return end
+
+local SEARCH=150          -- studs to look for job prompts
+local TAP_RATE=5          -- minigame key presses per second (the user did ~4/s; the goal is over 50 in 60 s)
+local path="AnomalyHub/universal/sparkling_auto_job_latest.txt"
+local state={Enabled=false,Closed=false,Lines={},Held={}}
+
+local function log(text)
+ if #state.Lines>=1500 then table.remove(state.Lines,1)end
+ table.insert(state.Lines,string.format("%.3f %s",os.clock(),text))
+end
+local function save()
+ if type(writefile)~="function" then return end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ pcall(writefile,path,"SPARKLING AUTO JOB v1 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop, PROGRESS = window text,"
+  .." DONE = job finished (pay arrives from the game), QUIT = pressed [ Quit ], ZENI = inventory label.\n"..table.concat(state.Lines,"\n"))
+end
+
+local section=ui.Section(page,"Auto Job",96,true)
+section.Frame.LayoutOrder=-55
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,32),Size=UDim2.new(1,-28,0,58),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Off. Stand near the Floor Staff NPC (cafe) or the Scientific Engineer board (laptop), then turn on. Loops until you turn it off."},section.Body)
+local button
+
+local function gui()return player:FindFirstChildOfClass("PlayerGui")end
+local function mission()
+ local g=gui();local m=g and g:FindFirstChild("Mission")
+ local main=m and m:FindFirstChild("Main")
+ if not main then return nil end
+ local name=main:FindFirstChild("NameLabel");local amount=main:FindFirstChild("Amount")
+ local a,b=amount and amount.Text:match("(%d+)%s*/%s*(%d+)")
+ return {Gui=m,Main=main,Name=name and name.Text or "",Done=tonumber(a),Total=tonumber(b),Quit=main:FindFirstChild("Cancel")}
+end
+local function minigame()
+ local g=gui();local m=g and g:FindFirstChild("CapsuleMission1")
+ if not m or (m:IsA("ScreenGui") and not m.Enabled) then return nil end
+ local label=m:FindFirstChild("Button") and m.Button:FindFirstChild("TextLabel")
+ local counter=m:FindFirstChild("Main") and m.Main:FindFirstChild("Counter")
+ return {Gui=m,Key=label and label.Text or "",Counter=counter and tonumber(counter.Text:match("(%d+)")) or nil}
+end
+local function restartYes()
+ local g=gui();local r=g and g:FindFirstChild("RestartMission")
+ if not r or (r:IsA("ScreenGui") and not r.Enabled) then return nil end
+ local main=r:FindFirstChild("Main");local yes=main and main:FindFirstChild("Yes")
+ return yes and yes.Visible and main.Visible and yes or nil
+end
+local function timerSeconds(job)
+ local timer=job.Main:FindFirstChild("Timer")
+ return timer and tonumber(timer.Text:match("(%d+)%s*s")) or nil
+end
+local function zeni()
+ local g=gui();local label=g and g:FindFirstChild("hh",true)
+ return label and label:IsA("TextLabel") and label.Text:match("Zeni:%s*(%d+)") or nil
+end
+-- Nearest enabled prompt with this action text within SEARCH studs.
+local function findPrompt(root,action,under)
+ local best,bestDistance
+ for _,object in ipairs((under or workspace):GetDescendants())do
+  if object:IsA("ProximityPrompt") and object.Enabled and object.ActionText==action then
+   local part=object.Parent
+   if part and part:IsA("Attachment")then part=part.Parent end
+   if part and part:IsA("BasePart")then
+    local distance=(part.Position-root.Position).Magnitude
+    if distance<=SEARCH and (not best or distance<bestDistance)then best,bestDistance=object,distance end
+   end
+  end
+ end
+ return best,bestDistance
+end
+local function promptPart(prompt)
+ local part=prompt.Parent
+ if part and part:IsA("Attachment")then part=part.Parent end
+ return part
+end
+local function release()
+ for _,item in ipairs(state.Held)do
+  if item.Prompt then pcall(function()item.Prompt:InputHoldEnd()end)
+  elseif item.Mouse then pcall(function()vim:SendMouseButtonEvent(item.X,item.Y,0,false,game,0)end)
+  else pcall(function()vim:SendKeyEvent(false,item.Key,false,game)end)end
+ end
+ table.clear(state.Held)
+end
+local function stop(reason)
+ if not state.Enabled then return end
+ state.Enabled=false;release()
+ button.Text="Auto Job: OFF"
+ status.Text=string.format("%s Jobs finished: %d. Zeni now: %s.",reason,state.Jobs,tostring(zeni() or "?"))
+ log("STOP "..reason);save()
+end
+-- Walk to a prompt and trigger it with a short hold, the way pressing E does (the precedent is Beyond Nen Auto Chests).
+local function usePrompt(humanoid,root,prompt,now,label)
+ local part=promptPart(prompt)
+ local distance=(part.Position-root.Position).Magnitude
+ local reach=math.max(3,math.min(prompt.MaxActivationDistance,10)-2)
+ if distance>reach then
+  if now>=state.NextMove then state.NextMove=now+.3;humanoid:MoveTo(part.Position)end
+  return false
+ end
+ if now<state.NextPrompt then return false end
+ state.NextPrompt=now+1.2
+ local ok=pcall(function()prompt:InputHoldBegin()end)
+ if ok then table.insert(state.Held,{Prompt=prompt,At=now+.09})end
+ log(string.format("%s %s at %.1f studs ok=%s",label,prompt:GetFullName():sub(1,120),distance,tostring(ok)))
+ return ok
+end
+local function clickButton(object)
+ local inset=guiService:GetGuiInset()
+ local x=object.AbsolutePosition.X+object.AbsoluteSize.X/2
+ local y=object.AbsolutePosition.Y+object.AbsoluteSize.Y/2+inset.Y
+ local window=ui.Window
+ if ui.Gui.Enabled and window.Visible then
+  local left,top=window.AbsolutePosition.X,window.AbsolutePosition.Y+inset.Y
+  if x>=left and x<=left+window.AbsoluteSize.X and y>=top and y<=top+window.AbsoluteSize.Y then return nil end
+ end
+ local ok=pcall(function()vim:SendMouseButtonEvent(x,y,0,true,game,0)end)
+ if ok then table.insert(state.Held,{Mouse=true,X=x,Y=y,At=os.clock()+.06})end
+ return ok
+end
+local function toggle()
+ if state.Closed then return end
+ if state.Enabled then stop("Off.");return end
+ if not vim then status.Text="Key input is unavailable in this executor.";return end
+ local character=player.Character
+ local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+ if not humanoid or humanoid.Health<=0 then status.Text="Wait until your character is alive.";return end
+ state.Enabled=true;state.Lines={};state.Character=character;state.Jobs=0;state.Phase="start";state.NextMove=0;state.NextPrompt=0
+ state.NextTap=0;state.NextSave=0;state.Paused=false;state.LastDone=nil;state.DoneAt=nil;state.QuitTries=0;state.Kind=nil;state.MinigameSeen=false
+ state.LastProgressAt=os.clock();state.Taps=0
+ button.Text="Auto Job: ON";status.Text="On."
+ log("START zeni="..tostring(zeni()))
+end
+button=ui.Checkbox(section.Body,"Auto Job","Auto Job: OFF",toggle)
+button.Position=UDim2.fromOffset(14,0)
+
+controller.Connect(run.Heartbeat,function()
+ local now=os.clock()
+ for index=#state.Held,1,-1 do
+  local item=state.Held[index]
+  if now>=item.At then
+   if item.Prompt then pcall(function()item.Prompt:InputHoldEnd()end)
+   elseif item.Mouse then pcall(function()vim:SendMouseButtonEvent(item.X,item.Y,0,false,game,0)end)
+   else pcall(function()vim:SendKeyEvent(false,item.Key,false,game)end)end
+   table.remove(state.Held,index)
+  end
+ end
+ if state.Closed or not state.Enabled then return end
+ local character=player.Character
+ local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+ local root=character and character:FindFirstChild("HumanoidRootPart")
+ if character~=state.Character or not humanoid or humanoid.Health<=0 or not root then stop("Character changed or died.");return end
+ if input:GetFocusedTextBox() or guiService.MenuIsOpen then
+  if not state.Paused then state.Paused=true;release();log("PAUSE chat or menu")end
+  status.Text="Paused while chat or the Roblox menu is open.";return
+ end
+ if state.Paused then state.Paused=false;log("RESUME")end
+ if now>=state.NextSave then state.NextSave=now+10;save()end
+ local job=mission()
+ local game1=minigame()
+
+ -- Scientific Engineer minigame running: press the key it shows.
+ if game1 then
+  state.MinigameSeen=true
+  local key=Enum.KeyCode[game1.Key:upper()] or nil
+  if not key then status.Text="Minigame key '"..game1.Key.."' is not a key I can press.";return end
+  -- The minigame key can be a movement key (A); walk back if it drifts us away from the laptop.
+  if state.Laptop and (root.Position-state.Laptop).Magnitude>5 and now>=state.NextMove then state.NextMove=now+.5;humanoid:MoveTo(state.Laptop)end
+  if now>=state.NextTap then
+   state.NextTap=now+1/TAP_RATE
+   if pcall(function()vim:SendKeyEvent(true,key,false,game)end)then table.insert(state.Held,{Key=key,At=now+.04});state.Taps+=1 end
+  end
+  status.Text=string.format("Scientific Engineer minigame: pressing %s (counter %s). Jobs finished: %d",game1.Key,tostring(game1.Counter),state.Jobs)
+  return
+ end
+ if not job then
+  -- No job window. After a job the game offers "Restart Quest? [ Yes ]" for a few seconds (it starts the same job); otherwise use
+  -- the nearest "Take Quest" prompt.
+  state.Kind=nil;state.DoneAt=nil;state.QuitTries=0;state.MinigameSeen=false;state.SpillWait=nil
+  local yes=restartYes()
+  if yes and now>=state.NextPrompt then
+   state.NextPrompt=now+1
+   local ok=clickButton(yes)
+   if ok==nil then status.Text="The hub covers the Restart Quest box; move the hub (or hide it with Right Alt).";return end
+   log("RESTART yes ok="..tostring(ok));state.LastProgressAt=now
+   status.Text="Restarting the job...";return
+  end
+  if yes then return end
+  local prompt=findPrompt(root,"Take Quest")
+  if not prompt then status.Text="No \"Take Quest\" prompt within "..SEARCH.." studs. Stand near the cafe NPC or the laptop job board.";return end
+  if usePrompt(humanoid,root,prompt,now,"TAKE")then state.LastProgressAt=now end
+  status.Text=string.format("Taking a job... Jobs finished: %d",state.Jobs)
+  return
+ end
+ -- A new job window (taken or restarted) starts a fresh job.
+ if job.Gui~=state.MissionGui then
+  state.MissionGui=job.Gui;state.DoneAt=nil;state.QuitTries=0;state.MinigameSeen=false;state.SpillWait=nil;state.LastProgressAt=now
+  log("WINDOW new job window")
+ end
+ local kind=job.Name:find("Floor Staff",1,true) and "floor" or job.Name:find("Scientific Engineer",1,true) and "science" or nil
+ if kind~=state.Kind then state.Kind=kind;log("JOB "..job.Name.." progress="..tostring(job.Done).."/"..tostring(job.Total))end
+ if job.Done~=state.LastDone then state.LastDone=job.Done;state.LastProgressAt=now;log("PROGRESS "..tostring(job.Done).."/"..tostring(job.Total))end
+ -- Finished (Floor Staff 10/10, or the minigame has closed): wait for the pay, then press [ Quit ] to clear the stuck window.
+ local finished=(job.Total and job.Total>0 and job.Done and job.Done>=job.Total) or (kind=="science" and state.MinigameSeen)
+ if finished then
+  if not state.DoneAt then state.DoneAt=now;state.Jobs+=1;log("DONE "..job.Name.." taps="..state.Taps.." zeni="..tostring(zeni()));state.Taps=0 end
+  if now-state.DoneAt<2 then status.Text="Job finished; waiting for the pay...";return end
+  if not job.Quit or not job.Quit.Visible then status.Text="Finished, but the Quit button is not visible.";return end
+  local yes=restartYes()
+  if yes and now>=state.NextPrompt then
+   state.NextPrompt=now+1;state.MinigameSeen=false
+   clickButton(yes);log("RESTART yes (window still open)");return
+  end
+  -- Quit often does not close the window (the user pressed it 37 times once); after 8 tries, wait for its timer instead.
+  if state.QuitTries<8 and now>=state.NextPrompt then
+   state.NextPrompt=now+1.5;state.QuitTries+=1
+   local ok=clickButton(job.Quit)
+   if ok==nil then status.Text="The hub covers the job window's Quit button; move the hub (or hide it with Right Alt).";return end
+   log("QUIT try "..state.QuitTries.." ok="..tostring(ok))
+  end
+  local left=timerSeconds(job)
+  if state.QuitTries>=8 then
+   if left and left>600 then stop("The finished job window will not close (its timer reads "..left.." s). Rejoin or close it by hand.");return end
+   status.Text=string.format("Job window stuck after paying; waiting for its timer (%s s left). Jobs finished: %d",tostring(left or "?"),state.Jobs)
+   return
+  end
+  status.Text=string.format("Closing the finished job... Jobs finished: %d",state.Jobs)
+  return
+ end
+ state.DoneAt=nil;state.QuitTries=0
+ if not kind then stop("Unsupported job: "..job.Name..". Auto Job knows Floor Staff and Scientific Engineer.");return end
+ -- A job that has not moved for 90 s (stuck or blocked): quit and retake.
+ if now-state.LastProgressAt>90 then
+  log("STUCK no progress for 90 s; quitting")
+  if job.Quit and job.Quit.Visible and now>=state.NextPrompt then state.NextPrompt=now+1;clickButton(job.Quit)end
+  return
+ end
+ if kind=="floor" then
+  local spills=workspace:FindFirstChild("Quest") and workspace.Quest:FindFirstChild("Spills")
+  local prompt=findPrompt(root,"Spill",spills)
+  if not prompt then status.Text="Waiting for the next spill...";return end
+  -- Progress rises ~2.2 s after a wipe, then the spill moves: wait for that (or 3.5 s) before wiping again.
+  if state.SpillWait and now<state.SpillWait and job.Done==state.SpillDone then return end
+  if usePrompt(humanoid,root,prompt,now,"TASK spill")then state.SpillWait=now+3.5;state.SpillDone=job.Done end
+  status.Text=string.format("Floor Staff: wiping spills %s/%s. Jobs finished: %d",tostring(job.Done),tostring(job.Total),state.Jobs)
+ else
+  local prompt=findPrompt(root,"Capsule Minigame")
+  if not prompt then status.Text="No laptop (\"Capsule Minigame\") prompt nearby.";return end
+  if usePrompt(humanoid,root,prompt,now,"TASK laptop")then state.Laptop=promptPart(prompt).Position end
+  status.Text=string.format("Scientific Engineer: opening the laptop minigame. Jobs finished: %d",state.Jobs)
+ end
+end)
+controller.Connect(player.OnTeleport,function()stop("Teleporting.")end)
+controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
+
+end)()
+;(function()
 -- Combat page v16 / diagnostics v7: shared NPC/player policy at user request (SP-034); hits 3-4 skipped, hit 5 seed 0.
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.

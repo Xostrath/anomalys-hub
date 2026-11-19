@@ -3909,11 +3909,11 @@ local function report(reason)
   .."\nSELF_COUNTER lists recent actual attempts; attacker and causation remain unknown. OTHER_COUNTER logs other recipients. POSSIBLE_PARRIED requires recent local attack + nearby facing opponent counter + a local Counter=0.5 notice within 0.2s; this is a heuristic, not confirmation."
   .."\nDEFEND_REQUEST pairs adjacent observed requests with recent F input/API pulses (200ms window). Early releases and intervening inputs are explicit; all attribution is temporal. Stop disconnects hooks, so post-stop request receipts may be unavailable."
   .."\nSTATE_CONTEXT/STATE_POINT capture client-visible relevant local attributes/values after F API success and on damage. lastDamageAge is time since the previous observed damage in this session; unknown means no observation. Missing fields and snapshots do not prove server eligibility or absence of stun."
-  .."\nPvP approach recheck: fresh mapped player cues within Range+3 may wait at most 80ms, four checks at 20ms intervals, two waiting slots. F still requires configured Range, facing, LOS and all normal gates. RANGE_WAIT/CHECK/ENTERED describe client geometry, not hit confirmation."
+  .."\nApproach recheck: fresh mapped player and NPC cues within Range+3 (your own Shadow uses range 12, SP-036) may wait at most 80ms, four checks at 20ms intervals, two waiting slots. F still requires configured Range, facing, LOS and all normal gates. RANGE_WAIT/CHECK/ENTERED describe client geometry, not hit confirmation."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=hits_1_2_5 timingTrial=shared_hit5_seed0 range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true shadowRange=12 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -3946,6 +3946,15 @@ end
 local function targetKind(model)
  if not model or not model:IsA("Model")then return "Unknown"end
  return targetOwner(model) and "Player" or "NPC"
+end
+-- Your own Inner World Shadow lunges in: 54 of 57 hit 1/2/5 swings it started 8-12 studs away still hit you (SP-036).
+local SHADOW_RANGE=12
+local function cueRange(model)
+ if model and model.Name=="Shadow" and targetKind(model)=="NPC" then
+  local owner=model:GetAttribute("Player")
+  if owner==nil or owner==player.Name then return math.max(settings.Range,SHADOW_RANGE)end
+ end
+ return settings.Range
 end
 local function targetAllowed(model)
  if model==player.Character then return false,"self_target"end
@@ -4147,11 +4156,12 @@ local function observe(model,track)
  if not allowed then skip(targetReason,"stage=observe "..detail);return end
  if lateHits[id] then skip(targetKind(model)=="NPC" and "npc_late_hit" or "player_late_hit","stage=observe hit="..lateHits[id].." "..detail);return end
  if id==immediateHit5 then delay=math.max(0,settings.TimingOffsetMs/1000);detail=detail.." trial="..(targetKind(model)=="NPC" and "npc_hit5_seed0" or "player_hit5_seed0") end
- local valid,reason,geometry=threat(model)
+ local range=cueRange(model)
+ local valid,reason,geometry=threat(model,range)
  local rangeWait=false
- -- Only fresh player swings just outside range may wait briefly for entry. The actual
- -- input gate still uses settings.Range; this is not an increased parry radius.
- if not valid and reason=="out_of_range" and targetKind(model)=="Player" then
+ -- Fresh swings just outside range may wait briefly for entry (players since v14; NPCs too since SP-036,
+ -- since grunts also close in mid-swing). The input gate still uses the cue's range.
+ if not valid and reason=="out_of_range" then
   local phase,speed=track.TimePosition,track.Speed
   local fresh=type(phase)=="number" and phase==phase and phase>=0 and phase<=.05
    and type(speed)=="number" and speed==speed and speed>0 and speed<math.huge and track.IsPlaying
@@ -4168,7 +4178,7 @@ local function observe(model,track)
  seen[track]=now
  if #pending>=8 then skip("queue_full",detail);return end
  table.insert(pending,{Model=model,Track=track,Id=id,Serial=serial,At=rangeWait and now+.02 or now+delay,
-  DueAt=now+delay,SeenAt=now,Expires=now+.25,Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0})
+  DueAt=now+delay,SeenAt=now,Expires=now+.25,Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0,Range=range})
  log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
  if rangeWait then log("RANGE_WAIT","windowMs=80 marginStuds=3 stepMs=20 "..detail.." "..geometry)end
 end
@@ -4419,7 +4429,7 @@ local function update(dt)
  for i=#pending,1,-1 do
   local cue=pending[i]
   if now>=cue.At then
-   local valid,geometryReason,geometry=threat(cue.Model)
+   local valid,geometryReason,geometry=threat(cue.Model,cue.Range)
    local allowed,targetReason=targetAllowed(cue.Model)
    local manualF=input:IsKeyDown(Enum.KeyCode.F)
    local detail=string.format("cue=%d actor=%s age=%.4f scheduledLate=%.4f held=%s pulseRemaining=%.4f counterRemaining=%.4f inputF=%s %s %s",

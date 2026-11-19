@@ -2522,7 +2522,7 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Sparkling Visuals v5.1: replicated player stats, including Hunger, Focus and Overcharge (SP-047). Read-only; sends no game requests.
+-- Sparkling Visuals v5.2: requested row cleanup, injuries >=70%, Zeni parser fix and honest Race Potential label (SP-048). Read-only; sends no game requests.
 -- Each field reads only a source confirmed in a capture. Unconfirmed fields say so instead of guessing (2026-11-17).
 -- Recorders -> Sparkling Profile Scan finds the sources for the rest.
 local env=(getgenv and getgenv()) or shared
@@ -2667,8 +2667,8 @@ end
 local function injuries(target)
  local parts={}
  for _,pair in ipairs({{"Head","HeadInj"},{"Torso","TorsoInj"},{"L arm","LeftArmInj"},{"R arm","RightArmInj"},{"L leg","LeftLegInj"},{"R leg","RightLegInj"}})do
-  local amount=number(value(target,pair[2]))
-  if amount then table.insert(parts,pair[1].." "..amount)end
+  local raw=value(target,pair[2])
+  if finite(raw) and raw>=70 then table.insert(parts,pair[1].." "..number(raw).."%")end
  end
  return #parts>0 and table.concat(parts," · ") or nil
 end
@@ -2686,12 +2686,9 @@ local FIELDS={
  end},
  {Label="Ki",Optional=true,Resolve=function(target)return resource(target,"Ki")end},
  {Label="Stamina",Optional=true,Resolve=function(target)return resource(target,"Stamina")end},
- {Label="Shield",Optional=true,Resolve=function(target)return resource(target,"Shield")end},
  {Label="Output",Optional=true,Resolve=function(target)return resource(target,"Output","MaxOutput")end},
  {Label="Fatigue",Optional=true,Resolve=function(target)return number(value(target,"Fatigue"))end},
- {Label="Hunger",Optional=true,Resolve=function(target)return number(value(target,"Hunger"))end},
  {Label="Focus",Optional=true,Resolve=function(target)return number(value(target,"Focus"))end},
- {Label="Overcharge",Optional=true,Resolve=function(target)return resource(target,"OverCharge")end},
  {Label="Injuries",Optional=true,Resolve=injuries},
  {Label="Form ID",Optional=true,Resolve=function(target)return show(attr(target,"Form"))end},
  {Label="God Ki",Optional=true,Resolve=function(target)return show(attr(target,"GodKi"))end},
@@ -2705,10 +2702,12 @@ local FIELDS={
   local gui=localPlayer:FindFirstChildOfClass("PlayerGui")
   local label=gui and gui:FindFirstChild("Inventory")
   label=label and label:FindFirstChild("hh",true)
-  local digits,suffix=label and label:IsA("TextLabel") and label.Text:match("Zeni:%s*([%d,%.]+)%s*([kKmM]?)")
+  local digits,suffix
+  -- Logical and collapses multiple returns: assign both match captures directly.
+  if label and label:IsA("TextLabel")then digits,suffix=strip(label.Text):match("[Zz]eni:%s*([%d,%.]+)%s*([kKmM]?)")end
   local live=digits and tonumber((digits:gsub(",","")))
   if live then
-   suffix=suffix:lower()
+   suffix=(suffix or ""):lower()
    return number(math.floor(live*(suffix=="k" and 1e3 or suffix=="m" and 1e6 or 1)))
   end
   return carried or number(own("Zeni")) or (profile and "Unknown" or "Loading profile...")
@@ -2771,7 +2770,11 @@ local FIELDS={
   local label,percent=infoLine("Karma"),hudCounter("KarmaCounter")
   return number..(label and (" · "..label) or "")..(percent and (" · "..percent) or "")
  end},
- {Label="Latent Power",Resolve=function(target)local potential=show(value(target,"RacePotential"));return potential and ("x"..potential.." RacePotential (?)")end},
+ -- RacePotential is observed, but its equivalence to latent power is not established.
+ {Label="Race Potential",Optional=true,Resolve=function(target)
+  local potential=value(target,"RacePotential")
+  return finite(potential) and tostring(potential) or nil
+ end},
  {Label="Emotion",Resolve=function(target)
   if target~=localPlayer then return OWN_ONLY end
   local raw,label,percent=number(own("Emotion")),infoLine("Emotion"),hudCounter("EmotionCounter")
@@ -2897,9 +2900,9 @@ controller.Connect(run.Heartbeat,function(dt)
   values[index].TextColor3=(missing or text==OWN_ONLY) and colors.Muted or colors.Text
  end
  availability.Position=UDim2.fromOffset(14,y+4)
- availability.Text=target==localPlayer and "(?) = unconfirmed mapping. Temporary stats are separate from allocated stats. / ? means no known maximum."
+ availability.Text=target==localPlayer and "(?) = unconfirmed mapping. Temporary stats are separate; injuries show only at 70%+. Race Potential is not confirmed latent power. / ? = unknown maximum."
   or (not target.Character and "Character unavailable. Stats will return when this player spawns."
-   or "Live character data; temporary stats are separate. / ? = unknown maximum. "..(#hidden>0 and ("Not available: "..table.concat(hidden,", ")..".") or ""))
+   or "Injuries: 70%+ only. Race Potential is not confirmed latent power. / ? = unknown max. "..(#hidden>0 and ("Not available: "..table.concat(hidden,", ")..".") or ""))
  if rowY~=y then rowY=y;section.SetHeight(y+54)end
 end)
 

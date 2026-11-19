@@ -55,7 +55,7 @@ Use the existing **Settings → Capture Fingerprint** first. It inventories clie
 
 The manual recorder stops auto parry before starting. Auto parry refuses to start while a manual combat recording is active. This preserves one owner of the shared hooks and keeps manual evidence separate from generated inputs.
 
-Diagnostics detail freezes at its size/line cap, while counters and final status continue. A capture-limit marker means missing events cannot be treated as absence. Save failures appear in the UI; Copy Log remains available from memory. Latest and history writes are reported independently. Death, character change, teleport, focus loss, disable, and unload stop auto parry and attempt F release.
+Diagnostics detail freezes at its size/line cap, while counters and final status continue. A capture-limit marker means missing events cannot be treated as absence. Save failures appear in the UI; Copy Log remains available from memory. Latest and history writes are reported independently. Death, character change, teleport, focus loss, disable, and unload stop auto parry and attempt F release. **Superseded for focus loss (SP-035):** focus loss is now logged (`WINDOW_FOCUS`) and only skips player cues (`unfocused_player`); NPC cues continue.
 
 ### Diagnostic report format v2
 
@@ -510,7 +510,7 @@ There were **20 counter messages targeting other actors**. Five counter receipts
 - **Timing offset (ms):** default 0, bounded -80 to +150; added to the catalog seed, with final delay floored at zero. Negative values schedule earlier, positive later. A timing edit clears queued cues rather than mixing schedules.
 - **F hold (ms):** default 120, bounded 60–250. Settings and PvP/PvE preferences persist; enabled state does not. Pulse gap remains 0.3 s, cue expiry 0.25 s.
 - Requires living/current target, selected PvP/PvE type, configured range, facing, clear LOS, playing/non-reused track, no manual F, observed Counter cooldown and optional knocked/off-screen gates. Text entry and game menus **always** pause/release active F; the old record-only SkipTyping preference no longer allows typing into a focused field.
-- Input API failures stop the experiment and attempt F release even if key-down may have partly succeeded. Release errors are logged and retried, including stop/unload attempts. Focus loss, death/character change, teleport, unload and starting a manual combat recording stop it.
+- Input API failures stop the experiment and attempt F release even if key-down may have partly succeeded. Release errors are logged and retried, including stop/unload attempts. Focus loss, death/character change, teleport, unload and starting a manual combat recording stop it. (Focus loss superseded by SP-035: no longer stops it.)
 
 ### Opponents parrying the local character
 
@@ -1098,3 +1098,17 @@ The PVP (Players) toggle still controls player inputs; no settings file is rewri
 **Validation:** 154 mocked assertions pass: 36 shared-policy scenarios, 26 PvP/PvE ownership/filter scenarios, 39 bounded range-recheck scenarios, 47 logger/lifecycle scenarios and six settings/reload checks. Policy tests verify no inputs or pending approach cues for hits 3/4, unchanged hits 1/2 scheduling, immediate hit 5 for both targets, additive user offsets, PvP-off behavior, player hit-5 range recovery and cleanup. Older generic fixtures that used hit 3/4 merely to obtain a zero-delay eligible pulse now use hit 5; the dedicated policy tests cover the new exclusions. Source module and both staged artifacts compile, and both generated build variants are checked before installation. Exact-module transplantation onto the latest builds, file hash checks and remote refresh preserve concurrent changes, including Claude's farm and recorder work.
 
 **Evidence boundary / handoff:** the user requested the policy transfer; NPC outcome rates in SP-031/SP-032 are not PvP validation. The live player effect is still unverified. Reload v16, enable PVP (Players) and Auto Parry when testing players, and inspect player_late_hit skips plus permitted hits and their outcomes. Keep NPC and player result analysis separate. Neither a counter-rate promise nor a new timing calibration follows from this change.
+
+## SP-035 — Shadow farm and Auto Parry while tabbed out (2026-11-19, Claude)
+
+**Request (user):** make the Shadow farm and Auto Parry work tabbed out.
+
+**Source inspection:** Auto Parry stopped itself on `WindowFocusReleased` (a lifecycle choice; no note records VIM input failing while unfocused). The Shadow farm had no focus check. Whether Volt's VirtualInputManager presses still reach the game while Roblox is unfocused or minimized is **unknown**.
+
+**Implemented / untested live:**
+- Auto Parry: focus loss no longer stops it. `WINDOW_FOCUS lost/gained` is logged. While unfocused, NPC cues press F as before; player cues are skipped as `unfocused_player` (PvP behavior while tabbed out is not automated by this change).
+- Shadow farm: logs `FOCUS lost/gained` with punch counts, `focused=` on every J press and POWER line, and five `AIM` lines (camera LookVector, mouse UnitRay direction, direction to the Shadow) at the start, to match the M1 request's third argument.
+
+**Request shapes seen (parry captures, for a possible fallback):** `Requests.Action:FireServer("Defend", true/false)`; `("MeditationTrain")`; `("MouseButton1", false|true, <unit Vector3>)`. The M1 boolean's meaning and the vector's source are unknown, so no direct-request fallback is built.
+
+**Test plan:** run both features about 5 min with Roblox behind another window (not minimized), then a few minutes minimized; then focus it again. Read per period: F_DOWN followed by DEFEND_REQUEST (F reached the game), M1 OUT lines while unfocused (punches reached the game), POWER rising, FRAME_GAP lines and counter lead (a throttled client may lose the ~160–180 ms lead). If presses are dropped, build a direct-request fallback for NPC cues and the farm only.

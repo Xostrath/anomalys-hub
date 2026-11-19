@@ -3229,7 +3229,7 @@ end)()
 -- Evidence (Auto Parry diagnostics, 2026-11-19, place 135537125271116): J sends Action("MeditationTrain") and Workspace.Live.Shadow appears
 -- ~0.2s later about 20 studs away; a second J sends the same action and removes it, so J toggles the Inner World. The Shadow stayed for the
 -- whole recorded fight (no win or respawn seen). User: you take no damage, but enough hits kick you out, so the farm re-enters with J.
--- M1 sends Action("MouseButton1") with no aim argument, so punches follow the character's facing. Trello: Inner World needs Meditation Type.
+-- M1 sends Action("MouseButton1",false,<unit direction>); the direction's source (camera or mouse) is being checked with AIM lines (SP-035). Trello: Inner World needs Meditation Type.
 -- Defense is left to Auto Parry (Combat page). Reference: Auto Meditation's tap/release pattern and Hunter X Enter Auto Fish's archive logs.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -3246,7 +3246,7 @@ if not page then return end
 
 local SEARCH,REACH=400,5
 local path="AnomalyHub/universal/sparkling_auto_shadow_latest.txt"
-local state={Enabled=false,Closed=false,Lines={},Held={},Seen={}}
+local state={Enabled=false,Closed=false,Lines={},Held={},Seen={},Focused=true}
 
 local function log(text)
  if #state.Lines>=1500 then table.remove(state.Lines,1)end
@@ -3256,7 +3256,7 @@ local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
  pcall(writefile,path,"SPARKLING AUTO SHADOW FARM v1 // key and mouse input only\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
-  .." SHADOW = the Shadow's fields (looking for an owner tag), POWER = your PowerLevel, PAUSE = chat/menu open.\n"..table.concat(state.Lines,"\n"))
+  .." SHADOW = the Shadow's fields (looking for an owner tag), POWER = your PowerLevel, PAUSE = chat/menu open, FOCUS = Roblox window focus.\n"..table.concat(state.Lines,"\n"))
 end
 
 local section=ui.Section(page,"Auto Farm",96,true)
@@ -3353,10 +3353,11 @@ local function toggle()
  local humanoid=character and character:FindFirstChildOfClass("Humanoid")
  if not humanoid or humanoid.Health<=0 then status.Text="Wait until your character is alive.";return end
  state.Enabled=true;state.Lines={};state.Character=character;state.Entries=0;state.Kicks=0;state.Clicks=0;state.Tries=0
+ state.UnfocusedClicks=0;state.UnfocusedJ=0;state.Aims=0
  state.InWorld=false;state.MissingSince=nil;state.NextJ=0;state.NextMove=0;state.NextClick=0;state.NextPower=0;state.NextSave=0;state.Paused=false
  table.clear(state.Seen)
  button.Text="Auto Shadow Farm: ON";status.Text="On."
- log("START power="..tostring(power(character)))
+ log("START power="..tostring(power(character)).." focused="..tostring(state.Focused))
 end
 button=ui.Checkbox(section.Body,"Auto Shadow Farm","Auto Shadow Farm: OFF",toggle)
 button.Position=UDim2.fromOffset(14,0)
@@ -3378,7 +3379,10 @@ controller.Connect(run.Heartbeat,function()
   return
  end
  if state.Paused then state.Paused=false;log("RESUME")end
- if now>=state.NextPower then state.NextPower=now+10;log("POWER "..tostring(power(character)))end
+ if now>=state.NextPower then
+  state.NextPower=now+10
+  log("POWER "..tostring(power(character)).." focused="..tostring(state.Focused).." punches="..state.Clicks.." unfocusedPunches="..state.UnfocusedClicks)
+ end
  if now>=state.NextSave then state.NextSave=now+10;save()end
  local shadow,distance,count=findShadow(root)
  if not shadow then
@@ -3388,7 +3392,8 @@ controller.Connect(run.Heartbeat,function()
   if now-state.MissingSince>=2.5 and now>=state.NextJ then
    if state.Tries>=3 then stop("Pressed J 3 times and no Shadow appeared. The Inner World needs Meditation Type.");return end
    state.NextJ=now+6;state.Tries+=1
-   if tap(Enum.KeyCode.J)then log("PRESS J (enter the Inner World) try "..state.Tries)else stop("Key input failed.");return end
+   if not state.Focused then state.UnfocusedJ+=1 end
+   if tap(Enum.KeyCode.J)then log("PRESS J (enter the Inner World) try "..state.Tries.." focused="..tostring(state.Focused))else stop("Key input failed.");return end
   end
   status.Text=string.format("Entering the Inner World... Entries: %d · kicked out: %d",state.Entries,state.Kicks)
   return
@@ -3412,9 +3417,22 @@ controller.Connect(run.Heartbeat,function()
   if ok==nil then status.Text="The hub covers the screen; hide it (Right Alt) so punches reach the game.";return end
   if not ok then stop("Mouse input failed.");return end
   state.Clicks+=1
+  if not state.Focused then state.UnfocusedClicks+=1 end
+  -- First few punches: camera and mouse directions, to match against the M1 request's direction argument in the parry log.
+  if state.Aims<5 and state.Focused then
+   state.Aims+=1
+   local mouse=player:GetMouse()
+   log("AIM camera="..tostring(workspace.CurrentCamera.CFrame.LookVector).." mouse="..tostring(mouse.UnitRay.Direction).." toShadow="..tostring((target-root.Position).Unit))
+  end
  end
  status.Text=string.format("Fighting your Shadow (%.0f studs). Entries: %d · kicked out: %d · punches: %d · power %s",
   distance,state.Entries,state.Kicks,state.Clicks,tostring(power(character) and math.floor(power(character)) or "?"))
+end)
+-- Tabbed out (SP-035): the farm keeps going; focus changes are logged to check whether key/mouse input still reaches the game.
+controller.Connect(input.WindowFocusReleased,function()state.Focused=false;if state.Enabled then log("FOCUS lost");save()end end)
+controller.Connect(input.WindowFocused,function()
+ state.Focused=true
+ if state.Enabled then log("FOCUS gained punches="..state.Clicks.." unfocusedPunches="..state.UnfocusedClicks.." unfocusedJ="..state.UnfocusedJ)end
 end)
 controller.Connect(player.OnTeleport,function()stop("Teleporting.")end)
 controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
@@ -3625,6 +3643,7 @@ local lateHits={['95937874840716']=3,['139487903747364']=4}
 local immediateHit5='131649056441662'
 local enabled,closed=false,false
 local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
+local windowFocused=true
 local sendingAttempt
 local nextPulse,nextScan,cooldownUntil=0,0,0
 local lastLocalAttack=-math.huge
@@ -4291,7 +4310,9 @@ local function update(dt)
     cue.Serial,actor(cue.Model),now-cue.SeenAt,now-cue.At,tostring(held),math.max(0,nextPulse-now),math.max(0,cooldownUntil-now),tostring(manualF),trackData(cue.Track),geometry).." targetType="..targetKind(cue.Model)
    local knocked=settings.SkipKnocked and ownCharacter:GetAttribute("Ragdolled")==true
    local offScreen=settings.SkipOffScreen and not onScreen(cue.Model)
-   local reason=not allowed and targetReason or now>cue.Expires and "expired" or held and "already_held"
+   -- Tabbed out (SP-035): NPC cues still press F; player cues wait until the window is focused again.
+   local reason=not allowed and targetReason or not windowFocused and targetKind(cue.Model)~="NPC" and "unfocused_player"
+    or now>cue.Expires and "expired" or held and "already_held"
     or manualF and "f_already_down" or not cue.Track.IsPlaying and "track_stopped" or seen[cue.Track]~=cue.SeenAt and "track_reused"
     or knocked and "self_knocked" or offScreen and "off_screen"
    if not reason and cue.RangeUntil then
@@ -4421,7 +4442,9 @@ local function inputEvent(direction,object,processed)
 end
 controller.Connect(input.InputBegan,guarded("InputBegan",function(object,processed)inputEvent("DOWN",object,processed)end))
 controller.Connect(input.InputEnded,guarded("InputEnded",function(object,processed)inputEvent("UP",object,processed)end))
-controller.Connect(input.WindowFocusReleased,function()if enabled then stop("Paused: game lost focus. Enable again to resume.")end end)
+-- Focus loss no longer stops Auto Parry (SP-035, user: work tabbed out); it is logged and gates player cues only.
+controller.Connect(input.WindowFocusReleased,function()windowFocused=false;if enabled then log("WINDOW_FOCUS","lost")end end)
+controller.Connect(input.WindowFocused,function()windowFocused=true;if enabled then log("WINDOW_FOCUS","gained")end end)
 controller.Connect(player.OnTeleport,function()stop("Teleport")end)
 controller.StopSparklingAutoParry=stop
 controller.RegisterCleanup(function()

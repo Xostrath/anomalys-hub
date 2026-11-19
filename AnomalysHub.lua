@@ -3734,6 +3734,7 @@ end)()
 -- Combat page v16 / diagnostics v7: shared NPC/player policy at user request (SP-034); hits 3-4 skipped, hit 5 seed 0.
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.
+-- v16.3 (SP-039): heavy cues ignore the release track stopping early and may wait out the 0.5 s post-counter cooldown.
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -4195,7 +4196,8 @@ local function observe(model,track)
  seen[track]=now
  if #pending>=8 then skip("queue_full",detail);return end
  table.insert(pending,{Model=model,Track=track,Id=id,Serial=serial,At=rangeWait and now+.02 or now+delay,
-  DueAt=now+delay,SeenAt=now,Expires=now+math.max(.25,delay+.1),Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0,Range=range})
+  DueAt=now+delay,SeenAt=now,Expires=now+math.max(.25,delay+.1,id==npcHeavy and .48 or 0),Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0,Range=range,
+  Heavy=id==npcHeavy or nil})
  log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
  if rangeWait then log("RANGE_WAIT","windowMs=80 marginStuds=3 stepMs=20 "..detail.." "..geometry)end
 end
@@ -4456,7 +4458,8 @@ local function update(dt)
    -- Tabbed out (SP-035): NPC cues still press F; player cues wait until the window is focused again.
    local reason=not allowed and targetReason or not windowFocused and targetKind(cue.Model)~="NPC" and "unfocused_player"
     or now>cue.Expires and "expired" or held and "already_held"
-    or manualF and "f_already_down" or not cue.Track.IsPlaying and "track_stopped" or seen[cue.Track]~=cue.SeenAt and "track_reused"
+    -- The heavy release is first seen at phase 0.30 and normally stops at ~0.42-0.52, 0.1-0.2 s before its hit lands (SP-039).
+    or manualF and "f_already_down" or not cue.Heavy and not cue.Track.IsPlaying and "track_stopped" or seen[cue.Track]~=cue.SeenAt and "track_reused"
     or knocked and "self_knocked" or offScreen and "off_screen"
    if not reason and cue.RangeUntil then
     cue.RangeChecks+=1
@@ -4477,7 +4480,8 @@ local function update(dt)
    end
    reason=reason or not valid and geometryReason
    if not reason and now<cooldownUntil then
-    if cooldownUntil-now<=.08 and cooldownUntil<cue.Expires and cue.Deferrals<4 then
+    -- Heavy cues may wait out the 0.5 s post-counter cooldown until 0.38 s after the release was seen (SP-039).
+    if (cooldownUntil-now<=.08 and cooldownUntil<cue.Expires or cue.Heavy and cooldownUntil<=cue.SeenAt+.38) and cue.Deferrals<4 then
      cue.Deferrals+=1;cue.At=cooldownUntil
      log("DEFER","reason=counter_cooldown untilLocal="..cue.At.." "..detail)
      continue

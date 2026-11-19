@@ -25,7 +25,7 @@ Last reviewed: 2026-11-19. This is the initial consolidated handoff from the ava
 | Power ESP | Direct Character.PowerLevel numeric value; rounded whole numbers with commas | Numeric source observed; formatting compiled | Base, effective, or suppressed power? |
 | Ki ESP | Blue bar next to red health bar; requires known Ki and explicit positive MaxKi for fill | Ki observed; bar compiled | No verified MaxKi source; unknown max shows an empty track marked `?` |
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
-| Auto parry | Players and NPCs: hits 1/2/5, hit 5 seed 0; hits 3/4 deliberately skipped. v16.1: own Shadow range 12, NPC approach recheck (SP-036, untested live); v16.2: NPC heavy perfect-counter timing trial (SP-037, untested live); runs tabbed out for NPCs (SP-035) | v16 policy transfer mocked/compiled; NPC findings in SP-031/SP-032 | Player outcomes need live validation; do not transfer NPC success rates |
+| Auto parry | Players and NPCs: hits 1/2/5, hit 5 seed 0; hits 3/4 deliberately skipped. v16.1: own Shadow range 12, NPC approach recheck (SP-036, untested live); v16.2/16.3: NPC heavy perfect-counter timing trial (SP-037/039, untested live); runs tabbed out for NPCs (SP-035) | v16 policy transfer mocked/compiled; NPC findings in SP-031/SP-032 | Player outcomes need live validation; do not transfer NPC success rates |
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
 | Combat page v11 (SP-T030) | Normal Auto Parry controls; no temporary single-hit filters | 174 mocked assertions and compilation passed; all-hit coverage/cleanup live-verified in SP-T031 | Preserve target context and distinguish conflicted counter receipts from automatic results |
 | Parry diagnostics v7 | Adds RANGE_WAIT/CHECK/ENTERED to existing request/state/outcome records | v6 state snapshots verified live in SP-T035; new geometry trace mocked in SP-T036 | Range entry is not a successful parry; live recovery outcomes outstanding |
@@ -1150,3 +1150,22 @@ The PVP (Players) toggle still controls player inputs; no settings file is rewri
 **Why groups are hard:** hits 3–4 are seen ~85–116 ms before they land (less than the ~150 ms a counter needs at ~100 ms ping); any failed press starts a 5 s counter cooldown, during which every grunt's combo lands; several grunts swing at once.
 
 **Possible next trial (not built):** press hits 3–4 ahead of time from the previous hit's start (e.g. hit 3 at hit-2 start + ~470 ms, ~230 ms lead at the median), only when the previous hit was not pressed. Needs the early edge of the window first.
+
+## SP-039 — Grunt run on v16.2: heavy trial never pressed (fixed in v16.3); hits 3–4 not predictable for grunts (2026-11-19, Claude)
+
+**Evidence (Verified from capture):** history 1795118462 (196 s, 4 Saiyan Grunts, v16.2 header with `npcHeavyTrial`): 32 presses, 23 counters (72%), 55 damage events (0.28/s; the v16 run 1795118069 had 56% and 0.36/s against 3 grunts — slightly better, not conclusive).
+
+| Hit | Swings | Pressed | Counters | Hits taken | Main skips |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 29 | 10 | 4 | 10 | out_of_range 9, attacker_facing 4 |
+| 2 | 23 | 12 | 9 | 11 | counter_cooldown 3, range 4 |
+| 3 | 12 | 0 | 0 | 12 | npc_late_hit (by design) |
+| 4 | 12 | 0 | 0 | 11 | npc_late_hit (by design) |
+| 5 | 11 | 10 | **10** | 0 | — |
+
+- **Heavy trial:** 4 heavy cues queued (260/320/380/320 ms), **0 pressed**: 3 `track_stopped`, 1 `counter_cooldown` (0.17 s left). The release is first seen at phase 0.30 and the track normally stops ~0.1–0.2 s later, before the press; the hit still lands 0.38–0.67 s after it is seen. This run says nothing about perfect-counter timing.
+- **Approach recheck:** 8 RANGE_WAIT, 5 RANGE_ENTERED → presses gave 3 counters, 1 block, 1 empty.
+- **Failed presses and the 5 s cooldown (4 grunt runs, 75 presses):** 50 counters; 12 `Blunt` with no 5 s cooldown; 8 empty presses, 2 of them followed by `Counter duration=5`. The 5 s lockout comes from some empty presses, not from every failure (refines SP-031's wording for grunt fights).
+- **Hit-3 predictability (impact receipt of hit 3, p10–p90 spread):** from hit-2 start: Grunt 302 ms, Thug 195, Shadow 150; from hit-2 HitOut: Grunt 169 (235 within 6 studs), Thug 141–160, Shadow 119–132; from hit-2 ANIM_STOP: 133–548. **No reference is tight enough for grunts** (go threshold ~120 ms), so a predictive hit-3 press is not built. Hits 3–4 remain a hard limit against grunts at ~100 ms ping.
+
+**Implemented / untested live — Combat page v16.3:** heavy cues are exempt from the `track_stopped` gate, expire at 0.48 s, and may defer through the 0.5 s post-counter cooldown if it ends by 0.38 s after the release was seen. Analysis script note: count `Perfect Counter!` as a heavy outcome.

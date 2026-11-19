@@ -2522,7 +2522,7 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Sparkling Visuals v5: selected-player replicated stats and compact availability (SP-046). Read-only; sends no game requests.
+-- Sparkling Visuals v5.1: replicated player stats, including Hunger, Focus and Overcharge (SP-047). Read-only; sends no game requests.
 -- Each field reads only a source confirmed in a capture. Unconfirmed fields say so instead of guessing (2026-11-17).
 -- Recorders -> Sparkling Profile Scan finds the sources for the rest.
 local env=(getgenv and getgenv()) or shared
@@ -2689,6 +2689,9 @@ local FIELDS={
  {Label="Shield",Optional=true,Resolve=function(target)return resource(target,"Shield")end},
  {Label="Output",Optional=true,Resolve=function(target)return resource(target,"Output","MaxOutput")end},
  {Label="Fatigue",Optional=true,Resolve=function(target)return number(value(target,"Fatigue"))end},
+ {Label="Hunger",Optional=true,Resolve=function(target)return number(value(target,"Hunger"))end},
+ {Label="Focus",Optional=true,Resolve=function(target)return number(value(target,"Focus"))end},
+ {Label="Overcharge",Optional=true,Resolve=function(target)return resource(target,"OverCharge")end},
  {Label="Injuries",Optional=true,Resolve=injuries},
  {Label="Form ID",Optional=true,Resolve=function(target)return show(attr(target,"Form"))end},
  {Label="God Ki",Optional=true,Resolve=function(target)return show(attr(target,"GodKi"))end},

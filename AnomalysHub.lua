@@ -3885,6 +3885,20 @@ local function start()
      rec.Noisy[object]=now+.5
     end
     log("IN "..path.." "..sample(table.pack(...)))
+    -- DataUpdated carries the whole profile; the sample above stops at 24 fields, so log money/job/quest fields separately (SP-040).
+    local data=...
+    if type(data)=="table" then
+     local parts={}
+     pcall(function()
+      for key,value in next,data do
+       local name=tostring(key):lower()
+       if name:find("zeni",1,true) or name:find("job",1,true) or name:find("quest",1,true) or name:find("work",1,true) or name:find("industry",1,true) or name:find("subclass",1,true)then
+        table.insert(parts,tostring(key).."="..sample(value))
+       end
+      end
+     end)
+     if #parts>0 then log("VALUE DATA "..object.Name.." "..table.concat(parts," "))end
+    end
    end)
   end
  end

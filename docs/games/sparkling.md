@@ -1308,3 +1308,23 @@ Both other characters expose direct Fatigue, all six injury values, Shield with 
 **Latent Power correction:** the old row was reading Character.RacePotential and guessing that it represented latent power, marked with (?). That equivalence has not been established by the captures. The local guide capture describes a latent-power mechanic, but does not map it to this value. v5.2 removes the misleading Latent Power row and replaces it with optional Race Potential, displaying the actual finite numeric field without an inferred x multiplier. Direct numeric formatting preserves observed values such as 0.85 and 1.15, which the general one-decimal formatter previously rounded. The footer states that Race Potential is not confirmed latent power. Actual latent power remains unresolved; do not restore the alias without evidence.
 
 **Validation:** 59 mocked assertions pass, including the existing selected-player source/layout/scan checks and new boundary/nonfinite injury cases, removed-row checks, Zeni parsing/fallback/source isolation, and RacePotential precision. Source and staged public/private artifacts compile; both regenerated variants are checked before installation. Exact-module replacement with source/public/private hash checks preserves concurrent work and gameplay behavior. No live UI validation was performed. No new capture is required for the confirmed parser fix or requested filtering; reload the installed build to see them.
+
+## SP-046 — Shadow training log, all runs so far (2026-11-19, Claude)
+
+**Request (user):** take note of all the Shadow trainings done.
+
+**Sources:** Auto Parry diagnostics histories that saw `Workspace.Live.Shadow` (PowerLevel from sampled `character.PowerLevel`; long sessions hit the 12,000-line detail cap, so their last sample is early and the end value comes from the next session's start or the farm log), and `sparkling_auto_shadow_latest.txt` (only the most recent farm run is kept). Times are local.
+
+| Run (11-19) | Length | Power Level | Parry build | Shadow presses → counters | Notes |
+| --- | --- | --- | --- | --- | --- |
+| 01:17–01:40 (4 short sessions) | ~4 min | 35 → 2,187 | v14 | 36 → 15 | Manual fights before Auto Shadow Farm existed |
+| 01:50 + 01:58 | ~39 min | 2,202 → 23,634 | v15 | 640 → 422 | First Auto Shadow Farm run (SP-032); 1 kick-out |
+| 02:34 | ~26 min | 23,725 → ~35,000 | v15 | 432 → 304 | Steady 430–490 PL/min |
+| 11:38 | ~23 min | 37,990 → ~48,680 | v16 | 380 → 261 | End value = next session's start |
+| 12:09 | ~7 min | 48,697 → ~51,800 | v16 | 131 → 103 | |
+| 12:24 | ~9 min | 51,807 → 55,578 | v16 + SP-035 | 156 → 116 | **Tabbed out for part of it:** 323 of 1,045 punches while unfocused; PL rose ~480/min in the unfocused stretch, same as focused. 1 kick-out. |
+
+**Totals on 11-19:** about **104 minutes** of farming, Power Level **2,202 → 55,578 (+53,400, ~510/min)**; Auto Parry against the Shadow countered **1,206 of 1,739** presses (69%), 0 damage events in the farm runs. Kick-outs seen: 2 (one per logged run; the other runs' farm logs were overwritten).
+- Earlier "Shadow" sightings on 11-17 (PL 14k–25k, 6 sessions) were a different character/setup and are not counted.
+- **Tabbed-out test (SP-035) — Verified from logs for a background (not minimized) window:** punches and PL gain continued while unfocused. Minimized is still untested.
+- Farm AIM samples (SP-035): the first five punches logged camera, mouse and Shadow directions; not yet matched against the M1 request vector.

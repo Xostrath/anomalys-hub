@@ -210,3 +210,8 @@ Combat page v14 adds a bounded approach recheck for fresh mapped player swings j
 ### Sparkling shared NPC/player parry policy (2026-11-19)
 
 The user explicitly requested applying Claude’s NPC auto-parry behavior to players. This supersedes historical NPC-only scope statements for Sparkling. Combat v16 uses hits 1/2/5 for both target types, skips hits 3/4, and sets hit 5 to seed 0 with the user offset retained. PvP remains controlled by its toggle; NPC behavior, the Shadow farm and automatic logging remain intact. Config/START/accepted cues identify the shared policy. See [SP-034](docs/games/sparkling.md); NPC results do not establish PvP success.
+
+
+### Sparkling other-player Visuals and Profile Scan v2 (2026-11-19)
+
+Visuals v5 shows selected-character live resources and condition fields when present, keeps temporary stats separate from allocated stats, and collapses unavailable other-player profile rows. The existing Run Profile Scan now includes other-player values/attributes without the old keyword filter, retaining object limits and an explicit 6,000-line truncation marker. Captures stay local; no requests are sent. See [SP-046](docs/games/sparkling.md) for verified sources, missing data and validation.

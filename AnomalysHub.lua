@@ -2522,7 +2522,7 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Sparkling Visuals tab: profile details for you or a selected player. Read-only; sends no game requests.
+-- Sparkling Visuals v5: selected-player replicated stats and compact availability (SP-046). Read-only; sends no game requests.
 -- Each field reads only a source confirmed in a capture. Unconfirmed fields say so instead of guessing (2026-11-17).
 -- Recorders -> Sparkling Profile Scan finds the sources for the rest.
 local env=(getgenv and getgenv()) or shared
@@ -2643,12 +2643,57 @@ local function decode(text)
  return ok and result or nil
 end
 local function number(n)return finite(n) and (math.abs(n)>=1000 and commas(n) or (n%1==0 and tostring(n) or string.format("%.1f",n))) or nil end
+
+-- Only the selected character's direct values/attributes are used here. Never read
+-- AttackerTags, trainer templates or the local profile as another player's stats.
+local STAT_KEYS={{"STR","Strength"},{"BODY","CoreStr"},{"CONC","Concentration"},{"REACT","Reactions"},{"AGI","Agility"},{"KI","Mind"}}
+local function replicatedStats(target,prefix)
+ local parts={}
+ for _,pair in ipairs(STAT_KEYS)do
+  local key=(prefix or "")..pair[2]
+  local direct,attribute=value(target,key),attr(target,key)
+  local a,b=finite(direct) and direct or nil,finite(attribute) and attribute or nil
+  if a~=nil and b~=nil and a~=b then table.insert(parts,pair[1].." conflicting sources")
+  elseif a~=nil or b~=nil then table.insert(parts,pair[1].." "..number(a or b))end
+ end
+ return #parts>0 and table.concat(parts," · ") or nil
+end
+local function resource(target,key,maxKey)
+ local child=target.Character and target.Character:FindFirstChild(key)
+ if not child or not child:IsA("ValueBase") or not finite(child.Value)then return nil end
+ local maximum=child:GetAttribute(maxKey or "Max")
+ return number(child.Value).." / "..(finite(maximum) and maximum>0 and number(maximum) or "?")
+end
+local function injuries(target)
+ local parts={}
+ for _,pair in ipairs({{"Head","HeadInj"},{"Torso","TorsoInj"},{"L arm","LeftArmInj"},{"R arm","RightArmInj"},{"L leg","LeftLegInj"},{"R leg","RightLegInj"}})do
+  local amount=number(value(target,pair[2]))
+  if amount then table.insert(parts,pair[1].." "..amount)end
+ end
+ return #parts>0 and table.concat(parts," · ") or nil
+end
+
 -- Sources from the Profile Scan (2026-11-17). Character attributes/values replicate for every player; the stats menu is yours only.
 -- A field marked (?) is a likely mapping that still needs confirming.
 local FIELDS={
  -- Not in the client profile (scan v3); per the game guide only the NPC Varrik shows it.
- {Label="Combat Experience (CEXP)",Resolve=function()return "Server only (ask Varrik)"end},
+ {Label="Combat Experience (CEXP)",SelfOnly=true,Resolve=function()return "Server only (ask Varrik)"end},
  {Label="Battle Power",Resolve=function(target)return show(value(target,"PowerLevel"))end},
+ {Label="Health",Optional=true,Resolve=function(target)
+  local hum=target.Character and target.Character:FindFirstChildOfClass("Humanoid")
+  if not hum or not finite(hum.Health)then return nil end
+  return number(hum.Health).." / "..(finite(hum.MaxHealth) and hum.MaxHealth>0 and number(hum.MaxHealth) or "?")
+ end},
+ {Label="Ki",Optional=true,Resolve=function(target)return resource(target,"Ki")end},
+ {Label="Stamina",Optional=true,Resolve=function(target)return resource(target,"Stamina")end},
+ {Label="Shield",Optional=true,Resolve=function(target)return resource(target,"Shield")end},
+ {Label="Output",Optional=true,Resolve=function(target)return resource(target,"Output","MaxOutput")end},
+ {Label="Fatigue",Optional=true,Resolve=function(target)return number(value(target,"Fatigue"))end},
+ {Label="Injuries",Optional=true,Resolve=injuries},
+ {Label="Form ID",Optional=true,Resolve=function(target)return show(attr(target,"Form"))end},
+ {Label="God Ki",Optional=true,Resolve=function(target)return show(attr(target,"GodKi"))end},
+ {Label="Current Area",Optional=true,Resolve=function(target)return show(value(target,"CurrentArea"))end},
+ {Label="Temporary Stats",Optional=true,Resolve=function(target)return replicatedStats(target,"Temp")end},
  -- Zeni (user request, SP-044): your inventory label updates live as jobs pay (Auto Job, SP-042); the profile copy is a snapshot.
  -- Another player's Zeni is not known to replicate; shown only if their character carries it.
  {Label="Zeni",Resolve=function(target)
@@ -2666,7 +2711,7 @@ local FIELDS={
   return carried or number(own("Zeni")) or (profile and "Unknown" or "Loading profile...")
  end},
  {Label="Stats",Resolve=function(target)
-  if target~=localPlayer then return OWN_ONLY end
+  if target~=localPlayer then return replicatedStats(target) or OWN_ONLY end
   if profile then
    local parts={}
    for _,pair in ipairs({{"STR","Strength"},{"BODY","CoreStr"},{"CONC","Concentration"},{"REACT","Reactions"},{"AGI","Agility"},{"KI","Mind"}})do
@@ -2802,22 +2847,23 @@ setOpen(false)
 
 -- Profile rows: label on the left, value on the right.
 -- Label column 38%, value column 62%; long values (stats, relationships, mastery) get two-line rows.
-local TALL={["Stats"]=true,["Relationships"]=true,["Form Mastery"]=true,["Karma"]=true,["Emotion"]=true}
+local TALL={["Stats"]=true,["Temporary Stats"]=true,["Injuries"]=true,["Relationships"]=true,["Form Mastery"]=true,["Karma"]=true,["Emotion"]=true}
 local section=ui.Section(page,"Profile",0,true)
 section.Frame.LayoutOrder=2
-local values,rowY={},0
+local values,rowLabels,rowHeights,rowY={},{},{},0
 for index,field in ipairs(FIELDS)do
- local height=TALL[field.Label] and 34 or 22
- ui.Create("TextLabel",{Position=UDim2.fromOffset(14,rowY),Size=UDim2.new(.38,-14,0,height),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=11,
+ local height=(field.Label=="Injuries" or field.Label=="Temporary Stats") and 48 or (TALL[field.Label] and 34 or 22)
+ rowHeights[index]=height
+ rowLabels[index]=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,rowY),Size=UDim2.new(.38,-14,0,height),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=11,
   TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,TextWrapped=true,Text=field.Label},section.Body)
  values[index]=ui.Create("TextLabel",{Position=UDim2.new(.38,0,0,rowY),Size=UDim2.new(.62,-14,0,height),BackgroundTransparency=1,Font=Enum.Font.GothamSemibold,TextSize=11,
   TextColor3=colors.Text,TextXAlignment=Enum.TextXAlignment.Right,TextWrapped=true,TextTruncate=Enum.TextTruncate.AtEnd,Text=""},section.Body)
  rowY+=height
 end
-ui.Create("TextLabel",{Position=UDim2.fromOffset(14,rowY+4),Size=UDim2.new(1,-28,0,24),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=9,
+local availability=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,rowY+4),Size=UDim2.new(1,-28,0,48),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=9,
  TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
  Text="(?) = likely source, not yet confirmed. Your stats, personality, emotion, mastery and relationships come from your own profile data, which the game only sends to you."},section.Body)
-section.SetHeight(rowY+30)
+section.SetHeight(rowY+54)
 
 local elapsed=0
 controller.Connect(run.Heartbeat,function(dt)
@@ -2827,10 +2873,19 @@ controller.Connect(run.Heartbeat,function(dt)
  if not target or target.Parent~=players then target=localPlayer;refreshPicker()end
  -- Re-read the profile while the tab is open: it changes as you play, and a fresh snapshot appears on each update.
  if os.clock()-profileAt>15 then refreshProfile()end
+ local y,hidden=0,{}
  for index,field in ipairs(FIELDS)do
   local ok,text=pcall(field.Resolve,target)
   text=ok and text or nil
   local missing=text==nil
+  local visible=not (target~=localPlayer and (field.SelfOnly or missing or text==OWN_ONLY))
+   and not (field.Optional and missing)
+  rowLabels[index].Visible=visible;values[index].Visible=visible
+  if visible then
+   rowLabels[index].Position=UDim2.fromOffset(14,y)
+   values[index].Position=UDim2.new(.38,0,0,y)
+   y+=rowHeights[index]
+  elseif not field.Optional then table.insert(hidden,field.Label)end
   if missing then
    -- CEXP, Form Mastery and Relationships have no source yet; the rest are just absent right now.
    text=target.Character and "Unavailable" or "No character"
@@ -2838,6 +2893,11 @@ controller.Connect(run.Heartbeat,function(dt)
   values[index].Text=text
   values[index].TextColor3=(missing or text==OWN_ONLY) and colors.Muted or colors.Text
  end
+ availability.Position=UDim2.fromOffset(14,y+4)
+ availability.Text=target==localPlayer and "(?) = unconfirmed mapping. Temporary stats are separate from allocated stats. / ? means no known maximum."
+  or (not target.Character and "Character unavailable. Stats will return when this player spawns."
+   or "Live character data; temporary stats are separate. / ? = unknown maximum. "..(#hidden>0 and ("Not available: "..table.concat(hidden,", ")..".") or ""))
+ if rowY~=y then rowY=y;section.SetHeight(y+54)end
 end)
 
 -- Recorders: one bounded, read-only scan to locate every requested field.
@@ -2857,10 +2917,11 @@ local function scan()
  if busy or controller.IsUnloaded()then return end
  busy=true;status.Text="Scanning..."
  local ok,err=pcall(function()
-  local lines={"SPARKLING PROFILE SCAN v1 // READ ONLY","place="..game.PlaceId.." universe="..game.GameId,
+  local lines={"SPARKLING PROFILE SCAN v2 // READ ONLY","place="..game.PlaceId.." universe="..game.GameId,
    "Locates Visuals fields. VALUE/ATTRIBUTE = replicated data; UI = text in your PlayerGui (only the game's menu, may be local-only).",
-   "Own Player and Character: every value and attribute. Other players and ReplicatedStorage: keyword matches only. Limits are reported."}
-  local function log(s)if #lines<6000 then table.insert(lines,s)end end
+   "Every player and character: bounded values and attributes, including fields formerly missed by keyword filtering. ReplicatedStorage: keyword matches only. Limits are reported."}
+  local dropped=0
+  local function log(s)if #lines<6000 then table.insert(lines,s)else dropped+=1 end end
   local function dump(object,all)
    local hit=all or matches(object.Name)
    if object:IsA("ValueBase") and hit then log("VALUE "..object:GetFullName().." ["..object.ClassName.."]="..tostring(object.Value):sub(1,160))end
@@ -2883,9 +2944,9 @@ local function scan()
   for _,player in ipairs(players:GetPlayers())do
    local own=player==localPlayer
    log("PLAYER "..(own and "self" or "other").." "..player:GetFullName())
-   walk(player,own,own and 4000 or 1500,private)
+   walk(player,true,own and 4000 or 1500,private)
    -- Character parts carry many unrelated values; own character still dumps everything under 3000 objects.
-   if player.Character then walk(player.Character,own,own and 3000 or 1500,nil)end
+   if player.Character then walk(player.Character,true,own and 3000 or 1500,nil)end
   end
   log("REPLICATEDSTORAGE")
   local names={}
@@ -2915,6 +2976,7 @@ local function scan()
    log("UI matches="..shown)
   end
   log("END")
+  if dropped>0 then lines[#lines]="LIMIT report 6000 lines; dropped="..dropped.." (missing fields may be beyond the limit)" end
   local report=table.concat(lines,"\n")
   if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
   local saved=type(writefile)=="function" and pcall(writefile,"AnomalyHub/universal/sparkling_profile_scan_latest.txt",report)

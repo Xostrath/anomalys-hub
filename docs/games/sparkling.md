@@ -1133,3 +1133,20 @@ The PVP (Players) toggle still controls player inputs; no settings file is rewri
 **Implemented / untested live — Combat page v16.2:** NPC heavy releases are queued as cues (`trial=npc_heavy heavyDelayMs=260|320|380`, rotating) and press F at that delay after the release starts (expected ~200/140/80 ms before the median impact); cue expiry extends to delay+0.1 s for these. Normal gates apply (range, facing, LOS, counter cooldown, pulse gap). Player heavies stay unmapped. Header config adds `npcHeavyTrial=102483335944327@260/320/380ms`.
 
 **Risk:** a failed counter starts the 5 s counter cooldown, which can cost the next hit 1/2. **Judge by:** `Perfect Counter!` receipts per delay on heavy cues, then keep the best delay. If none of the three works, try holding F through the impact (block) next.
+
+## SP-038 — Saiyan Grunt groups: why parry is unreliable; counter window by lead (2026-11-19, Claude)
+
+**Evidence:** history 1795118069 (127 s, 3 Saiyan Grunts, 46 damage events, 16 presses, 9 counters). Its header has no `shadowRange`/`npcHeavyTrial`, so it ran **v16 without SP-036/037** (the hub was not re-executed after those installs).
+- Hit 1: 17 swings, 3 pressed (0 counters), **10 skipped out of range**, 3 attacker facing; 7 hits taken.
+- Hit 2: 13 swings, 7 pressed at 164–199 ms lead → 3 counters, 3 hits, 1 block (other grunts hitting at the same moment is the likely cause; not attributable from these logs).
+- Hits 3–4: 16 swings, skipped by design, **14 hits taken**. Hit 5: **6 / 6 countered**.
+- Heavies unmapped in that build.
+
+**Counter window by lead (all NPC presses, 37 captures; lead = attacker HitOut receipt − our press):** <100 ms 3/40 counters; 100–140 8/52; 140–160 17/34; 160–180 70/106; 180–200 301/419; 200–230 36/52; **230–300 5/6**. A press needs ≥ ~150 ms of lead; the early edge is not found yet (few presses above 230 ms).
+- Past hit 3/4 presses (pre-v15): 85, 11 counters; 52 ended `Blunt` + 5 s counter cooldown. `BlockEffect` never coincided with a 5 s cooldown.
+
+**NPC combo rhythm (same actor, start of hit N → impact of hit N+1, p10/median/p90 ms):** hit 2 → hit 3: Shadow 651/701/801, Thug 654/717/849, Grunt 665/718/967; hit 3 → hit 4: Shadow 534/585/651, Thug 493/589/642, Grunt 518/582/735.
+
+**Why groups are hard:** hits 3–4 are seen ~85–116 ms before they land (less than the ~150 ms a counter needs at ~100 ms ping); any failed press starts a 5 s counter cooldown, during which every grunt's combo lands; several grunts swing at once.
+
+**Possible next trial (not built):** press hits 3–4 ahead of time from the previous hit's start (e.g. hit 3 at hit-2 start + ~470 ms, ~230 ms lead at the median), only when the previous hit was not pressed. Needs the early edge of the window first.

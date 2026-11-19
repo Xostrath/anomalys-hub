@@ -3732,6 +3732,8 @@ button.Size=UDim2.new(1,-28,0,34)
 end)()
 ;(function()
 -- Combat page v16 / diagnostics v7: shared NPC/player policy at user request (SP-034); hits 3-4 skipped, hit 5 seed 0.
+-- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
+-- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -3757,6 +3759,15 @@ local lateHits={['95937874840716']=3,['139487903747364']=4}
 -- SP-034: user requested the same policy for players. NPC evidence does not establish PvP success.
 -- Both target types press hit 5 with seed 0; the user timing offset still applies.
 local immediateHit5='131649056441662'
+-- NPC heavy (M2) trial (SP-037). Shadow, Thug and SaiyanGrunt share it: wind-up 88670347816269, then release 102483335944327 ~0.3 s
+-- later, impact (attacker HitOut) a median ~462 ms after the release (301-731). It hit us 141 of 152 times; 12 F taps that happened
+-- to come 164-195 ms before impact gave 0 counters and 0 blocks. User + tutorial: heavies are answered by a perfect counter/block, not the
+-- light counter parry. The 5 self "Perfect Counter!" receipts seen came 46-139 ms after our Defend press, so the release is pressed at a
+-- rotating 260/320/380 ms (~200/140/80 ms before the median impact) to find the window. NPCs only; player heavies stay unmapped.
+local npcHeavy='102483335944327'
+local HEAVY_DELAYS={.26,.32,.38}
+local heavyTrial=0
+attacks[npcHeavy]=0
 local enabled,closed=false,false
 local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local windowFocused=true
@@ -3913,7 +3924,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=hits_1_2_5 timingTrial=shared_hit5_seed0 range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true shadowRange=12 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true shadowRange=12 npcHeavyTrial=102483335944327@260/320/380ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -4156,6 +4167,12 @@ local function observe(model,track)
  if not allowed then skip(targetReason,"stage=observe "..detail);return end
  if lateHits[id] then skip(targetKind(model)=="NPC" and "npc_late_hit" or "player_late_hit","stage=observe hit="..lateHits[id].." "..detail);return end
  if id==immediateHit5 then delay=math.max(0,settings.TimingOffsetMs/1000);detail=detail.." trial="..(targetKind(model)=="NPC" and "npc_hit5_seed0" or "player_hit5_seed0") end
+ if id==npcHeavy then
+  if targetKind(model)~="NPC" then skip("unmapped_animation",detail.." heavy=player");return end
+  heavyTrial=heavyTrial%#HEAVY_DELAYS+1
+  delay=math.max(0,HEAVY_DELAYS[heavyTrial]+settings.TimingOffsetMs/1000)
+  detail=detail.." trial=npc_heavy heavyDelayMs="..math.floor(HEAVY_DELAYS[heavyTrial]*1000)
+ end
  local range=cueRange(model)
  local valid,reason,geometry=threat(model,range)
  local rangeWait=false
@@ -4178,7 +4195,7 @@ local function observe(model,track)
  seen[track]=now
  if #pending>=8 then skip("queue_full",detail);return end
  table.insert(pending,{Model=model,Track=track,Id=id,Serial=serial,At=rangeWait and now+.02 or now+delay,
-  DueAt=now+delay,SeenAt=now,Expires=now+.25,Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0,Range=range})
+  DueAt=now+delay,SeenAt=now,Expires=now+math.max(.25,delay+.1),Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0,Range=range})
  log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
  if rangeWait then log("RANGE_WAIT","windowMs=80 marginStuds=3 stepMs=20 "..detail.." "..geometry)end
 end

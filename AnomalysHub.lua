@@ -4653,7 +4653,7 @@ controller.RegisterCleanup(saveCounts)
 
 end)()
 ;(function()
--- Combat page v16 / diagnostics v7: shared NPC/player policy at user request (SP-034); hits 3-4 skipped, hit 5 seed 0.
+-- Combat page v17 / diagnostics v7: additional recorded player combo and restored geometry evaluation (SP-052).
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.
 -- v16.3 (SP-039): heavy cues ignore the release track stopping early and may wait out the 0.5 s post-counter cooldown.
@@ -4709,6 +4709,11 @@ lateHits['78875817992139']=1;lateHits['92958519453859']=4
 -- so it is pressed at a fixed 0.30 s. NPCs only.
 local rogueHeavy='126361551838373'
 attacks[rogueHeavy]=.30;rogueHits[rogueHeavy]="heavy"
+-- SP-052: additional player combo, observed repeatedly in order with same-actor HitOut.
+-- Style name unknown. Initial seeds are a trial, not server parry-window measurements.
+-- This is a different animation set; the standard combo's skipped IDs stay skipped.
+local playerCombo={['113515398511336']={Hit=1,Delay=.04},['94221477646836']={Hit=2,Delay=0},
+ ['86875409360329']={Hit=3,Delay=0},['122413336728467']={Hit=4,Delay=.04},['139712447236537']={Hit=5,Delay=.02}}
 local enabled,closed=false,false
 local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local windowFocused=true
@@ -4864,8 +4869,8 @@ local function report(reason)
   .."\nApproach recheck: fresh mapped player and NPC cues within Range+3 (your own Shadow uses range 12, SP-036) may wait at most 80ms, four checks at 20ms intervals, two waiting slots. F still requires configured Range, facing, LOS and all normal gates. RANGE_WAIT/CHECK/ENTERED describe client geometry, not hit confirmation."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
-  .."\nConfig: mode=active_test scope=hits_1_2_5 timingTrial=shared_hit5_seed0 range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .."\nConfig: mode=active_test scope=per_style_catalog timingTrial=player_set_b_initial range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -5004,7 +5009,8 @@ local function threat(model,rangeLimit,anyFacing)
  local selfDot=root.CFrame.LookVector:Dot(-direction)
  local detail=string.format("distance=%.3f vertical=%.3f attackerDot=%.3f selfDot=%.3f",distance,delta.Y,attackerDot,selfDot)
  if distance>(rangeLimit or settings.Range) then return false,"out_of_range",detail end
- -- Heavies turn and lunge as they swing (SP-051): facing is not required for them.
+ -- The rogue heavy exemption remains scoped to that cue; ordinary swings require both facing checks.
+ if attackerDot<.2 and not anyFacing then return false,"attacker_facing",detail end
  if selfDot<0 and not anyFacing then return false,"self_facing",detail end
  local params=RaycastParams.new()
  params.FilterType=Enum.RaycastFilterType.Exclude
@@ -5030,7 +5036,7 @@ parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Players & NPCs: hits 1, 2 and 5; hits 3-4 skipped. Hit 5 uses no added delay (v16)."},card)
+ Text="Off. v17: additional player combo mapped. Standard and NPC policies retained; diagnostics record while enabled."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -5105,11 +5111,14 @@ local function observe(model,track)
  end
  if seen[track] and now-seen[track]<.2 then skip("duplicate_track",detail);return end
  local id=track.Animation and track.Animation.AnimationId:match("%d+")
- local seed=id and attacks[id]
+ local playerMove=id and playerCombo[id]
+ if playerMove and targetKind(model)~="Player" then skip("unmapped_animation",detail.." playerCombo=npc_unverified");return end
+ local seed=playerMove and playerMove.Delay or (id and attacks[id])
  local delay=seed and math.max(0,seed+settings.TimingOffsetMs/1000)
  if delay==nil then skip("unmapped_animation",detail);return end
  local allowed,targetReason=targetAllowed(model)
  if not allowed then skip(targetReason,"stage=observe "..detail);return end
+ if playerMove then detail=detail.." style=player_set_b hit="..playerMove.Hit.." timing=initial_trial" end
  if rogueHits[id] and targetKind(model)~="NPC" then skip("unmapped_animation",detail.." rogueStyle=player");return end
  if rogueHits[id] then detail=detail.." style=rogue hit="..rogueHits[id] end
  if lateHits[id] then skip(targetKind(model)=="NPC" and "npc_late_hit" or "player_late_hit","stage=observe hit="..lateHits[id].." "..detail);return end
@@ -5122,6 +5131,7 @@ local function observe(model,track)
  end
  local range=cueRange(model)
  local anyFacing=id==rogueHeavy or nil
+ local valid,reason,geometry=threat(model,range,anyFacing)
  local rangeWait=false
  -- Fresh swings just outside range may wait briefly for entry (players since v14; NPCs too since SP-036,
  -- since grunts also close in mid-swing). The input gate still uses the cue's range.
@@ -5130,7 +5140,7 @@ local function observe(model,track)
   local fresh=type(phase)=="number" and phase==phase and phase>=0 and phase<=.05
    and type(speed)=="number" and speed==speed and speed>0 and speed<math.huge and track.IsPlaying
   if fresh then
-   local near=threat(model,settings.Range+3)
+   local near=threat(model,range+3,anyFacing)
    if near then rangeWait=true end
   end
  end
@@ -5241,7 +5251,7 @@ local function start()
  enabled=true;ownCharacter=player.Character;nextScan=0;nextPulse=0
  seen=setmetatable({},{__mode="k"})
  button.Text="Auto Parry: ON"
- log("START","mode=active_test scope=hits_1_2_5 timingTrial=shared_hit5_seed0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
+ log("START","mode=active_test scope=per_style_catalog timingTrial=player_set_b_initial offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
  local coverage="outgoing hooks unavailable"
  if controller.BeginSparklingParryObservation then
   local ok,disconnect,description=pcall(controller.BeginSparklingParryObservation,guarded("ActionProbe",function(remote,direction,args,started,id,result,path)
@@ -5412,7 +5422,7 @@ local function update(dt)
     log("RANGE_CHECK","check="..cue.RangeChecks.." remaining="..math.max(0,cue.RangeUntil-now).." "..detail)
     if now>cue.RangeUntil or cue.RangeChecks>4 then reason="range_wait_expired"
     elseif not valid then
-     local near=geometryReason=="out_of_range" and threat(cue.Model,settings.Range+3)
+     local near=geometryReason=="out_of_range" and threat(cue.Model,cue.Range+3,cue.AnyFacing)
      if near and now<cue.RangeUntil and cue.RangeChecks<4 then
       cue.At=math.min(now+.02,cue.RangeUntil);continue
      end
@@ -5438,7 +5448,7 @@ local function update(dt)
    if not reason and now<nextPulse then reason="pulse_cooldown"end
    table.remove(pending,i)
    if reason then skip(reason,"stage=execute "..detail)else
-    log("CUE_ACCEPTED","scope=hits_1_2_5 timingTrial=shared_hit5_seed0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
+    log("CUE_ACCEPTED","scope=per_style_catalog timingTrial=player_set_b_initial offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
     sendingAttempt=attempts+1;heldAttempt=sendingAttempt
     held=true;heldAt=now;releaseAt=now+settings.HoldMs/1000;nextPulse=now+.3;nextReleaseRetry=0
     table.insert(session.Pulses,{Id=heldAttempt,DownAt=now})
@@ -5454,7 +5464,7 @@ local function update(dt)
    end
   end
  end
- status.Text=string.format("AUTO PARRY v16 · Players & NPCs: hits 1, 2, 5 · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("AUTO PARRY v17 · Player combo coverage updated · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)

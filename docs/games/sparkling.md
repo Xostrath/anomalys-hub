@@ -1246,3 +1246,9 @@ The PVP (Players) toggle still controls player inputs; no settings file is rewri
 **Implemented / untested live:**
 - **Auto Shadow Farm:** stops when `Character.LeftArmInj` or `RightArmInj` (SP-033) is ≥ 90 ("Left/Right arm at N% injury"); POWER lines now log `arms=L/R`. The 0–100 scale is assumed from the HUD.
 - **Auto Job v1.3:** "Stop at Zeni (0 = never)" box, saved to `sparkling_auto_job_target.txt`; checked once a second against the inventory label, now parsed with thousands separators and a k/m suffix. The exact label format above 999 is inferred, not captured.
+
+## SP-044 — Visuals: Zeni row (2026-11-19, Claude)
+
+**Request (user):** add Zeni to Visuals.
+
+**Implemented / untested live:** Visuals → Profile has a **Zeni** row after Battle Power. For you it reads the inventory label (`PlayerGui.Inventory…infos.hh`, "Zeni:N", which updated live as Auto Job paid), parsed with thousands separators and a k/m suffix; fallback the profile snapshot's `Zeni`. For another player it shows a `Zeni` value or attribute on their character if one exists (none has been seen in captures), otherwise "Hidden (only shown for you)".

@@ -2649,6 +2649,22 @@ local FIELDS={
  -- Not in the client profile (scan v3); per the game guide only the NPC Varrik shows it.
  {Label="Combat Experience (CEXP)",Resolve=function()return "Server only (ask Varrik)"end},
  {Label="Battle Power",Resolve=function(target)return show(value(target,"PowerLevel"))end},
+ -- Zeni (user request, SP-044): your inventory label updates live as jobs pay (Auto Job, SP-042); the profile copy is a snapshot.
+ -- Another player's Zeni is not known to replicate; shown only if their character carries it.
+ {Label="Zeni",Resolve=function(target)
+  local carried=number(tonumber(value(target,"Zeni")) or tonumber(attr(target,"Zeni")))
+  if target~=localPlayer then return carried or OWN_ONLY end
+  local gui=localPlayer:FindFirstChildOfClass("PlayerGui")
+  local label=gui and gui:FindFirstChild("Inventory")
+  label=label and label:FindFirstChild("hh",true)
+  local digits,suffix=label and label:IsA("TextLabel") and label.Text:match("Zeni:%s*([%d,%.]+)%s*([kKmM]?)")
+  local live=digits and tonumber((digits:gsub(",","")))
+  if live then
+   suffix=suffix:lower()
+   return number(math.floor(live*(suffix=="k" and 1e3 or suffix=="m" and 1e6 or 1)))
+  end
+  return carried or number(own("Zeni")) or (profile and "Unknown" or "Loading profile...")
+ end},
  {Label="Stats",Resolve=function(target)
   if target~=localPlayer then return OWN_ONLY end
   if profile then

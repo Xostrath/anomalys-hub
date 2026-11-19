@@ -3597,7 +3597,7 @@ button.Size=UDim2.new(1,-28,0,34)
 
 end)()
 ;(function()
--- Combat page v15 / diagnostics v7: NPC hits 3-4 skipped, NPC hit 5 seed 0 trial (SP-031); bounded PvP approach recheck; player timings unchanged.
+-- Combat page v16 / diagnostics v7: shared NPC/player policy at user request (SP-034); hits 3-4 skipped, hit 5 seed 0.
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -3618,10 +3618,11 @@ local attacks={['114493250337466']=.04,['84394230178792']=.04,['95937874840716']
 -- NPC hits 3-4 are not parried (SP-031). Across 900 NPC swings a counter needed F ~160-180 ms before impact (ping ~110 ms); hits 3/4 land
 -- only ~116/85 ms after their animation is seen, so even an immediate press countered 15%/8% of them, and a failed parry costs a 5 s
 -- cooldown that blocked the next combo's hit 1 (71% counters). A counter on hit 1 or 2 always ended the NPC's combo.
-local npcLateHits={['95937874840716']=3,['139487903747364']=4}
+local lateHits={['95937874840716']=3,['139487903747364']=4}
 -- NPC hit 5 lands ~184 ms after it is seen, as slow as hits 1/2; its 0.04 seed left only ~135 ms of lead (4/10 counters).
--- Trial: press NPC hit 5 immediately (~180 ms lead, the band where 65/92 countered). Player hit 5 keeps its seed.
-local npcHit5='131649056441662'
+-- SP-034: user requested the same policy for players. NPC evidence does not establish PvP success.
+-- Both target types press hit 5 with seed 0; the user timing offset still applies.
+local immediateHit5='131649056441662'
 local enabled,closed=false,false
 local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local sendingAttempt
@@ -3776,8 +3777,8 @@ local function report(reason)
   .."\nPvP approach recheck: fresh mapped player cues within Range+3 may wait at most 80ms, four checks at 20ms intervals, two waiting slots. F still requires configured Range, facing, LOS and all normal gates. RANGE_WAIT/CHECK/ENTERED describe client geometry, not hit confirmation."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
-  .."\nConfig: mode=active_test scope=all_five timingTrial=baseline_state_capture range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .."\nConfig: mode=active_test scope=hits_1_2_5 timingTrial=shared_hit5_seed0 range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -3929,7 +3930,7 @@ parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. NPCs: hits 3-4 skipped, hit 5 pressed at once (v15). Players: all five hits, baseline timing; bounded PvP range recheck."},card)
+ Text="Off. Players & NPCs: hits 1, 2 and 5; hits 3-4 skipped. Hit 5 uses no added delay (v16)."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -4009,8 +4010,8 @@ local function observe(model,track)
  if delay==nil then skip("unmapped_animation",detail);return end
  local allowed,targetReason=targetAllowed(model)
  if not allowed then skip(targetReason,"stage=observe "..detail);return end
- if npcLateHits[id] and targetKind(model)=="NPC" then skip("npc_late_hit","stage=observe hit="..npcLateHits[id].." "..detail);return end
- if id==npcHit5 and targetKind(model)=="NPC" then delay=math.max(0,settings.TimingOffsetMs/1000);detail=detail.." trial=npc_hit5_seed0" end
+ if lateHits[id] then skip(targetKind(model)=="NPC" and "npc_late_hit" or "player_late_hit","stage=observe hit="..lateHits[id].." "..detail);return end
+ if id==immediateHit5 then delay=math.max(0,settings.TimingOffsetMs/1000);detail=detail.." trial="..(targetKind(model)=="NPC" and "npc_hit5_seed0" or "player_hit5_seed0") end
  local valid,reason,geometry=threat(model)
  local rangeWait=false
  -- Only fresh player swings just outside range may wait briefly for entry. The actual
@@ -4130,7 +4131,7 @@ local function start()
  enabled=true;ownCharacter=player.Character;nextScan=0;nextPulse=0
  seen=setmetatable({},{__mode="k"})
  button.Text="Auto Parry: ON"
- log("START","mode=active_test scope=all_five timingTrial=baseline_state_capture offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
+ log("START","mode=active_test scope=hits_1_2_5 timingTrial=shared_hit5_seed0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
  local coverage="outgoing hooks unavailable"
  if controller.BeginSparklingParryObservation then
   local ok,disconnect,description=pcall(controller.BeginSparklingParryObservation,guarded("ActionProbe",function(remote,direction,args,started,id,result,path)
@@ -4322,7 +4323,7 @@ local function update(dt)
    if not reason and now<nextPulse then reason="pulse_cooldown"end
    table.remove(pending,i)
    if reason then skip(reason,"stage=execute "..detail)else
-    log("CUE_ACCEPTED","scope=all_five timingTrial=baseline_state_capture offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
+    log("CUE_ACCEPTED","scope=hits_1_2_5 timingTrial=shared_hit5_seed0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
     sendingAttempt=attempts+1;heldAttempt=sendingAttempt
     held=true;heldAt=now;releaseAt=now+settings.HoldMs/1000;nextPulse=now+.3;nextReleaseRetry=0
     table.insert(session.Pulses,{Id=heldAttempt,DownAt=now})
@@ -4338,7 +4339,7 @@ local function update(dt)
    end
   end
  end
- status.Text=string.format("AUTO PARRY v15 · NPC hits 3-4 skipped · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("AUTO PARRY v16 · Players & NPCs: hits 1, 2, 5 · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)

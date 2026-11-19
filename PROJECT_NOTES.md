@@ -204,3 +204,8 @@ Private Hunter Combat now includes Auto Perfect Block v1 for two recorded attack
 ### Sparkling PvP range-entry diagnostics v7 (2026-11-19)
 
 Combat page v14 adds a bounded approach recheck for fresh mapped player swings just outside the configured radius. Actual input still requires that radius and every normal gate; NPC behavior and timing seeds remain. RANGE_WAIT/CHECK/ENTERED records admission, subsequent client geometry and entry, separately from input and outcomes. 231 mocked assertions pass; live PvP benefit is unverified. See [SP-T036](docs/games/sparkling.md).
+
+
+### Sparkling shared NPC/player parry policy (2026-11-19)
+
+The user explicitly requested applying Claude’s NPC auto-parry behavior to players. This supersedes historical NPC-only scope statements for Sparkling. Combat v16 uses hits 1/2/5 for both target types, skips hits 3/4, and sets hit 5 to seed 0 with the user offset retained. PvP remains controlled by its toggle; NPC behavior, the Shadow farm and automatic logging remain intact. Config/START/accepted cues identify the shared policy. See [SP-034](docs/games/sparkling.md); NPC results do not establish PvP success.

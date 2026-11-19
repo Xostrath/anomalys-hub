@@ -346,6 +346,7 @@ local pageMeta = {
 	Combat = {"COMBAT", "Combat recording and defense tools"},
 	Visuals = {"VISUALS", "Profile details for you or another player"},
 	Servers = {"SERVER NAVIGATION", "Rejoin or move to another public server"},
+	Chat = {"CHAT LOGS", "Live in-server chat history. The newest 100 messages are kept."},
 	Settings = {"SETTINGS", "Persistence, keybind, reload, and cleanup"},
 }
 local function makePage(name)
@@ -364,7 +365,7 @@ local function makePage(name)
 	pages[name] = page
 	return page
 end
-for _, name in ipairs({"Home", "General", "ESP", "Servers", "Settings"}) do makePage(name) end
+for _, name in ipairs({"Home", "General", "ESP", "Servers", "Chat", "Settings"}) do makePage(name) end
 if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
 if env.__AnomalyDetectedProfile == "HunterXEnter" or env.__AnomalyDetectedProfile == "Sparkling" then makePage("Auto") end
 
@@ -397,6 +398,7 @@ if pages.Combat then table.insert(tabNames,{"Combat","Combat",nil,"◇"})end
 if pages.Visuals then table.insert(tabNames,{"Visuals","Visuals",nil,"◐"})end
 table.insert(tabNames,{"ESP","Player & NPC ESP","VISION","◎"})
 table.insert(tabNames,{"Servers","Servers","UTILITIES","≡"})
+table.insert(tabNames,{"Chat","Chat Logs",nil,"✉"})
 if pages.Recorders then table.insert(tabNames,{"Recorders","Recorders",nil,"◌"})end
 table.insert(tabNames,{"Settings","Settings",nil,"⚙"})
 for order, definition in ipairs(tabNames) do
@@ -1298,15 +1300,129 @@ connect(UserInputService.InputEnded, function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
 end)
 
--- Keep a bounded local chat history for future adapters without exposing a separate tab.
-local function bindChat(target)
-	connect(target.Chatted, function(message)
-		table.insert(state.ChatLog, {At = os.time(), UserId = target.UserId, Name = target.DisplayName, Text = tostring(message)})
-		while #state.ChatLog > 100 do table.remove(state.ChatLog, 1) end
+-- Chat Logs tab (ported from GohanHub's chat log): every message this client receives, newest 100, with
+-- capture on/off, show/hide Roblox's own chat, and clear. Nothing is sent; private channels only appear if this client receives them.
+do
+	local TextChatService = game:GetService("TextChatService")
+	local StarterGui = game:GetService("StarterGui")
+	local chat = {Capture = true, NativeVisible = true, Entries = {}, Max = 100, Elapsed = 0}
+	local chatCard = card(pages.Chat, "SERVER CHANNEL", nil, 470)
+	local countLabel = create("TextLabel", {AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -330, 0, 10), Size = UDim2.fromOffset(70, 20),
+		BackgroundTransparency = 1, Font = Enum.Font.Code, Text = "0 / 100", TextColor3 = colors.Muted, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right}, chatCard)
+	local captureButton = button(chatCard, "CAPTURE: ON", 0, 6, 108, nil, colors.AccentSoft)
+	local nativeButton = button(chatCard, "ROBLOX CHAT: SHOW", 0, 6, 132, nil, colors.AccentSoft)
+	local clearButton = button(chatCard, "CLEAR", 0, 6, 62, nil)
+	for index, object in ipairs({clearButton, nativeButton, captureButton}) do
+		object.AnchorPoint = Vector2.new(1, 0)
+		object.Size = UDim2.fromOffset(object.Size.X.Offset, 26)
+		object.TextSize = 9
+	end
+	clearButton.Position = UDim2.new(1, -12, 0, 6)
+	nativeButton.Position = UDim2.new(1, -80, 0, 6)
+	captureButton.Position = UDim2.new(1, -218, 0, 6)
+	local list = create("ScrollingFrame", {Position = UDim2.fromOffset(12, 40), Size = UDim2.new(1, -24, 1, -52), BackgroundColor3 = colors.Surface,
+		BackgroundTransparency = 0.15, BorderSizePixel = 0, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollingDirection = Enum.ScrollingDirection.Y, ScrollBarThickness = 4, ScrollBarImageColor3 = colors.Accent}, chatCard)
+	create("UICorner", {CornerRadius = UDim.new(0, 4)}, list)
+	create("UIPadding", {PaddingTop = UDim.new(0, 7), PaddingBottom = UDim.new(0, 7), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8)}, list)
+	create("UIListLayout", {Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder}, list)
+	local serial = 0
+	local function add(sender, username, message, isSystem, channel)
+		if type(message) ~= "string" or message == "" or not chat.Capture then return end
+		message = string.gsub(message, "[%z\1-\8\11\12\14-\31]", "")
+		if #message > 300 then message = string.sub(message, 1, 297) .. "..." end
+		sender = tostring(sender or "SYSTEM")
+		local handle = type(username) == "string" and username ~= "" and username ~= sender and (" (@" .. username .. ")") or ""
+		local tag = channel and channel ~= "" and ("[" .. channel .. "] ") or ""
+		serial += 1
+		local label = create("TextLabel", {LayoutOrder = serial, Size = UDim2.new(1, -2, 0, 20), AutomaticSize = Enum.AutomaticSize.Y,
+			BackgroundColor3 = isSystem and colors.AccentSoft or colors.Raised, BackgroundTransparency = isSystem and 0.72 or 0.45, BorderSizePixel = 0,
+			Font = Enum.Font.Code, Text = string.format("[%s] %s%s%s: %s", os.date("%H:%M:%S"), tag, sender, handle, message),
+			TextColor3 = isSystem and colors.Accent or colors.Text, TextSize = 10, TextWrapped = true,
+			TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top}, list)
+		create("UICorner", {CornerRadius = UDim.new(0, 3)}, label)
+		create("UIPadding", {PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5), PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7)}, label)
+		table.insert(chat.Entries, label)
+		while #chat.Entries > chat.Max do table.remove(chat.Entries, 1):Destroy() end
+		countLabel.Text = string.format("%d / %d", #chat.Entries, chat.Max)
+		-- Kept for adapters (state.ChatLog predates the tab).
+		if not isSystem then
+			table.insert(state.ChatLog, {At = os.time(), Name = sender, Text = message})
+			while #state.ChatLog > 100 do table.remove(state.ChatLog, 1) end
+		end
+		task.defer(function()
+			if list.Parent then list.CanvasPosition = Vector2.new(0, math.max(0, list.AbsoluteCanvasSize.Y)) end
+		end)
+	end
+	local previousCore, previousWindow, previousInput
+	pcall(function() previousCore = StarterGui:GetCoreGuiEnabled(Enum.CoreGuiType.Chat) end)
+	pcall(function()
+		previousWindow = TextChatService.ChatWindowConfiguration.Enabled
+		previousInput = TextChatService.ChatInputBarConfiguration.Enabled
 	end)
+	local function applyNative()
+		pcall(StarterGui.SetCoreGuiEnabled, StarterGui, Enum.CoreGuiType.Chat, chat.NativeVisible)
+		pcall(function()
+			TextChatService.ChatWindowConfiguration.Enabled = chat.NativeVisible
+			TextChatService.ChatInputBarConfiguration.Enabled = chat.NativeVisible
+		end)
+	end
+	local function refresh()
+		captureButton.Text = chat.Capture and "CAPTURE: ON" or "CAPTURE: OFF"
+		captureButton.BackgroundColor3 = chat.Capture and colors.AccentSoft or colors.Surface
+		nativeButton.Text = chat.NativeVisible and "ROBLOX CHAT: SHOW" or "ROBLOX CHAT: HIDE"
+		nativeButton.BackgroundColor3 = chat.NativeVisible and colors.AccentSoft or colors.Surface
+	end
+	connect(captureButton.Activated, function()
+		if chat.Capture then add("SYSTEM", nil, "Chat log capture paused.", true) end
+		chat.Capture = not chat.Capture
+		if chat.Capture then add("SYSTEM", nil, "Chat log capture resumed.", true) end
+		refresh()
+	end)
+	connect(nativeButton.Activated, function()
+		chat.NativeVisible = not chat.NativeVisible
+		applyNative();refresh()
+	end)
+	connect(clearButton.Activated, function()
+		for _, label in ipairs(chat.Entries) do label:Destroy() end
+		table.clear(chat.Entries)
+		countLabel.Text = "0 / " .. chat.Max
+	end)
+	-- Only re-assert while hidden: games re-enable chat on respawn or menus.
+	connect(RunService.Heartbeat, function(deltaTime)
+		chat.Elapsed += deltaTime
+		if chat.Elapsed >= 1 then
+			chat.Elapsed = 0
+			if not chat.NativeVisible then applyNative() end
+		end
+	end)
+	controller.RegisterCleanup(function()
+		if chat.NativeVisible then return end
+		if type(previousCore) == "boolean" then pcall(StarterGui.SetCoreGuiEnabled, StarterGui, Enum.CoreGuiType.Chat, previousCore) end
+		pcall(function()
+			if type(previousWindow) == "boolean" then TextChatService.ChatWindowConfiguration.Enabled = previousWindow end
+			if type(previousInput) == "boolean" then TextChatService.ChatInputBarConfiguration.Enabled = previousInput end
+		end)
+	end)
+	if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+		connect(TextChatService.MessageReceived, function(chatMessage)
+			local source = chatMessage.TextSource
+			local target = source and Players:GetPlayerByUserId(source.UserId)
+			local channel = chatMessage.TextChannel and chatMessage.TextChannel.Name or ""
+			channel = channel == "RBXGeneral" and "" or channel:match("^RBXWhisper") and "Whisper" or channel:match("^RBXTeam") and "Team" or channel:gsub("^RBX", "")
+			if target then add(target.DisplayName, target.Name, chatMessage.Text, false, channel)
+			else add("SYSTEM", nil, chatMessage.Text, true, channel) end
+		end)
+	else
+		local function bindChat(target)
+			connect(target.Chatted, function(message) add(target.DisplayName, target.Name, message, false) end)
+		end
+		for _, target in ipairs(Players:GetPlayers()) do bindChat(target) end
+		connect(Players.PlayerAdded, bindChat)
+	end
+	refresh()
+	add("SYSTEM", nil, "Chat logger active.", true)
 end
-for _, target in ipairs(Players:GetPlayers()) do bindChat(target) end
-connect(Players.PlayerAdded, bindChat)
 
 selectTab("Home")
 print("[Anomaly] Universal profile loaded", game.GameId, game.PlaceId)

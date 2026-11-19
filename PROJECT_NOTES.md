@@ -13,6 +13,7 @@ All adapters use the shared UniversalHub controller and UI helpers. Hunter X Ent
 | Auto | Implemented game-specific automation |
 | Player & NPC ESP | Available overlay controls |
 | Servers | Server navigation |
+| Chat Logs | Every profile (2026-11-19, ported from GohanHub): chat messages this client receives, newest 100, channel tag (Team/Whisper), capture on/off, show/hide Roblox chat, clear; built in `src/UniversalHub.lua`. Sends nothing |
 | Recorders | Activity recordings and their Start / Stop + Save / Copy controls |
 | Settings | Fingerprint discovery, preferences, reload and unload |
 

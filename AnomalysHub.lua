@@ -3421,7 +3421,7 @@ controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
 
 end)()
 ;(function()
--- Combat page v15 / diagnostics v7: NPC hits 3-5 skipped (SP-031); bounded PvP approach recheck; baseline timings retained.
+-- Combat page v15 / diagnostics v7: NPC hits 3-4 skipped, NPC hit 5 seed 0 trial (SP-031); bounded PvP approach recheck; player timings unchanged.
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -3439,10 +3439,13 @@ local ui=controller.UI
 -- SP-T034: +30 ms hit-3 trial showed no improvement; restore its zero-delay baseline.
 -- Client observations, not server parry-window measurements; diagnose eligibility before further tuning.
 local attacks={['114493250337466']=.04,['84394230178792']=.04,['95937874840716']=0,['139487903747364']=0,['131649056441662']=.04}
--- NPC hits 3-5 are not parried (SP-031). Across 900 NPC swings a counter needed F ~160-180 ms before impact (ping ~110 ms); hits 3/4 land
+-- NPC hits 3-4 are not parried (SP-031). Across 900 NPC swings a counter needed F ~160-180 ms before impact (ping ~110 ms); hits 3/4 land
 -- only ~116/85 ms after their animation is seen, so even an immediate press countered 15%/8% of them, and a failed parry costs a 5 s
 -- cooldown that blocked the next combo's hit 1 (71% counters). A counter on hit 1 or 2 always ended the NPC's combo.
-local npcLateHits={['95937874840716']=3,['139487903747364']=4,['131649056441662']=5}
+local npcLateHits={['95937874840716']=3,['139487903747364']=4}
+-- NPC hit 5 lands ~184 ms after it is seen, as slow as hits 1/2; its 0.04 seed left only ~135 ms of lead (4/10 counters).
+-- Trial: press NPC hit 5 immediately (~180 ms lead, the band where 65/92 countered). Player hit 5 keeps its seed.
+local npcHit5='131649056441662'
 local enabled,closed=false,false
 local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local sendingAttempt
@@ -3598,7 +3601,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=all_five timingTrial=baseline_state_capture range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcHits=1-2 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -3750,7 +3753,7 @@ parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. NPCs: hits 1-2 only (v15). Players: all five hits. Baseline timing; bounded PvP range recheck."},card)
+ Text="Off. NPCs: hits 3-4 skipped, hit 5 pressed at once (v15). Players: all five hits, baseline timing; bounded PvP range recheck."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -3831,6 +3834,7 @@ local function observe(model,track)
  local allowed,targetReason=targetAllowed(model)
  if not allowed then skip(targetReason,"stage=observe "..detail);return end
  if npcLateHits[id] and targetKind(model)=="NPC" then skip("npc_late_hit","stage=observe hit="..npcLateHits[id].." "..detail);return end
+ if id==npcHit5 and targetKind(model)=="NPC" then delay=math.max(0,settings.TimingOffsetMs/1000);detail=detail.." trial=npc_hit5_seed0" end
  local valid,reason,geometry=threat(model)
  local rangeWait=false
  -- Only fresh player swings just outside range may wait briefly for entry. The actual
@@ -4158,7 +4162,7 @@ local function update(dt)
    end
   end
  end
- status.Text=string.format("AUTO PARRY v15 · NPC hits 1-2 · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("AUTO PARRY v15 · NPC hits 3-4 skipped · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)

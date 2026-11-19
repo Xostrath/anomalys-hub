@@ -4005,6 +4005,7 @@ end)()
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.
 -- v16.3 (SP-039): heavy cues ignore the release track stopping early and may wait out the 0.5 s post-counter cooldown.
+-- v16.4 (SP-041): range 12 for every NPC (not just your Shadow); heavy cues may defer to 0.62 s.
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -4195,7 +4196,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=hits_1_2_5 timingTrial=shared_hit5_seed0 range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true shadowRange=12 npcHeavyTrial=102483335944327@260/320/380ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -4231,10 +4232,14 @@ local function targetKind(model)
 end
 -- Your own Inner World Shadow lunges in: 54 of 57 hit 1/2/5 swings it started 8-12 studs away still hit you (SP-036).
 local SHADOW_RANGE=12
+-- v16.4 (SP-041): every NPC gets range 12. Thugs lunge too: 11 of 16 hit 1/2/5 swings they started 8-12 studs away landed.
 local function cueRange(model)
- if model and model.Name=="Shadow" and targetKind(model)=="NPC" then
-  local owner=model:GetAttribute("Player")
-  if owner==nil or owner==player.Name then return math.max(settings.Range,SHADOW_RANGE)end
+ if model and targetKind(model)=="NPC" then
+  if model.Name=="Shadow" then
+   local owner=model:GetAttribute("Player")
+   if owner~=nil and owner~=player.Name then return settings.Range end
+  end
+  return math.max(settings.Range,SHADOW_RANGE)
  end
  return settings.Range
 end
@@ -4466,7 +4471,7 @@ local function observe(model,track)
  seen[track]=now
  if #pending>=8 then skip("queue_full",detail);return end
  table.insert(pending,{Model=model,Track=track,Id=id,Serial=serial,At=rangeWait and now+.02 or now+delay,
-  DueAt=now+delay,SeenAt=now,Expires=now+math.max(.25,delay+.1,id==npcHeavy and .48 or 0),Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0,Range=range,
+  DueAt=now+delay,SeenAt=now,Expires=now+math.max(.25,delay+.1,id==npcHeavy and .65 or 0),Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0,Range=range,
   Heavy=id==npcHeavy or nil})
  log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
  if rangeWait then log("RANGE_WAIT","windowMs=80 marginStuds=3 stepMs=20 "..detail.." "..geometry)end
@@ -4750,8 +4755,8 @@ local function update(dt)
    end
    reason=reason or not valid and geometryReason
    if not reason and now<cooldownUntil then
-    -- Heavy cues may wait out the 0.5 s post-counter cooldown until 0.38 s after the release was seen (SP-039).
-    if (cooldownUntil-now<=.08 and cooldownUntil<cue.Expires or cue.Heavy and cooldownUntil<=cue.SeenAt+.38) and cue.Deferrals<4 then
+    -- Heavy cues may wait out the 0.5 s counter cooldown until 0.62 s after the release was seen (SP-039/041): bandits heavy right
+    if (cooldownUntil-now<=.08 and cooldownUntil<cue.Expires or cue.Heavy and cooldownUntil<=cue.SeenAt+.62) and cue.Deferrals<4 then
      cue.Deferrals+=1;cue.At=cooldownUntil
      log("DEFER","reason=counter_cooldown untilLocal="..cue.At.." "..detail)
      continue

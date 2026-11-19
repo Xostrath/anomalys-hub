@@ -1188,3 +1188,26 @@ The PVP (Players) toggle still controls player inputs; no settings file is rewri
 - **Glitch (user report + capture):** after the Reward request the server never answered — no remote, no `DataUpdated`, the Mission window stays at 10/10 with its timer running, and the spill prompt keeps appearing (run 1: user quit with Cancel ×5; run 3: stuck 90 s). The inventory label read Zeni 420 in runs 1–2 and **620 in run 3**, so one +200 payout happened between recordings.
 - **Employment:** in run 2 the user spoke to `Workspace.NPCs.Tilent` ("Speak") → "You accepting people for jobs?" → "want to work here?" → "Sure" (`Requests.Dialogue:FireServer({exit=false, choice=...})`). Trello says Tilent gives the Food Industry job; the "Floor Staff" quest comes from a different NPC, Thlentil. Whether pay needs this employment is **unknown**.
 - Recorder fix (v1.1 source): `DataUpdated` was truncated at 24 fields, so Zeni was never captured; money/job/quest fields of incoming data are now logged as `VALUE DATA`.
+
+## SP-041 — Bandit (Thug) fight: own attacks lock the counter; NPC range 12 for all (2026-11-19, Claude)
+
+**User report:** "too inconsistent… letting too many hits stack before it even thinks of parrying… even though I'm fighting multiple bandits… they attack one at a time."
+
+**Evidence (Verified from capture):** history 1795120360 (149 s, 3 Thugs, user fighting manually; v16.3): 35 presses, 20 counters, 74 damage events, 71 `Blunt`.
+
+| Hit | Swings | Pressed | Counters | Hits taken | Main skips |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 43 | 16 | 7 | 15 | out_of_range 17, counter_cooldown 4 |
+| 2 | 27 | 12 | 6 | 18 | out_of_range 5, attacker_facing 4 |
+| 3 | 16 | 0 | 0 | 13 | npc_late_hit (by design) |
+| 4 | 12 | 0 | 0 | 12 | npc_late_hit (by design) |
+| 5 | 9 | 7 | 7 | 2 | — |
+
+- **Your own attacks block the counter:** hit 1/2 presses with your own M1 sent < 150 ms before: 0/5 counters; 150–300 ms: 0/5; 300–500 ms: 2/3; 500–1,000 ms: 5/8; > 1 s: 5/7. Same pattern as the Shadow farm (SP-032). The pressed hit-2 failures (7 `Blunt` at 167–200 ms lead) are mostly this.
+- **Heavies:** 7 heavy cues, all skipped `counter_cooldown`: each time the bandit started its heavy release **at the moment your own combo ended** — `CooldownNT` Counter 0.5 s and ZVanish 2 s arrive ~0.5 ms before the release is seen, right after your last `HitOut`. Their heavy then landed 218–733 ms after it was seen.
+- **Out of range:** Thug hit 1/2/5 swings started 8–10 studs away landed 6/9, 10–12 studs 5/7 (they lunge, like the Shadow).
+- `Counter duration=5` notices: 3 in the run.
+
+**Implemented / untested live — Combat page v16.4:** every NPC uses range 12 (another player's Shadow stays at 8); header config `npcRange=12`. Heavy cues may defer through the counter cooldown until 0.62 s after the release is seen (expiry 0.65 s). Players unchanged.
+
+**Hard limits (game rules, not fixable by timing):** a counter cannot happen within ~300 ms after your own M1, nor during the 0.5 s counter cooldown that follows your own finished combo; NPC hits 3–4 land ~0.1 s after they appear.

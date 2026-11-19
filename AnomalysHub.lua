@@ -4003,7 +4003,7 @@ controller.RegisterCleanup(function()stop("Unloaded.")end)
 
 end)()
 ;(function()
--- Sparkling Auto Job v1.1 (SP-042). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
+-- Sparkling Auto Job v1.2 (SP-042). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
 -- Evidence (Job Recorder, SP-040, 2026-11-19): a job is taken from a "Take Quest" prompt (Floor Staff: Workspace.NPCs.Thlentil;
 -- Scientific Engineer: Workspace.Map.Model.Model.Paperworks), which creates PlayerGui.Mission ("Progress: a/b"). Floor Staff: one
 -- "Spill" prompt under Workspace.Quest.Spills moves after each wipe; progress rises ~2.2 s after the prompt; at 10/10 the game sends
@@ -4035,7 +4035,7 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- pcall(writefile,path,"SPARKLING AUTO JOB v1.1 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop, PROGRESS = window text,"
+ pcall(writefile,path,"SPARKLING AUTO JOB v1.2 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop, PROGRESS = window text,"
   .." DONE = job finished (pay arrives from the game), QUIT = pressed [ Quit ], ZENI = inventory label.\n"..table.concat(state.Lines,"\n"))
 end
 
@@ -4150,23 +4150,53 @@ local function usePrompt(humanoid,root,prompt,now,label)
  log(string.format("%s %s at %.1f studs ok=%s",label,prompt:GetFullName():sub(1,120),distance,tostring(ok)))
  return ok
 end
+-- v1.1 live run: ten clicks at the button's centre (IgnoreGuiInset ScreenGui, inset 58) never pressed Restart Quest's [ Yes ].
+-- Presses now rotate through the click at the centre, the centre shifted up/down by the top-bar inset, and the button's own
+-- click handlers (getconnections); whichever makes the box go away is kept for later presses (logged as PRESS_WORKED).
+local METHODS={"click","click-inset","click+inset","handlers"}
+local function clickAt(x,y)
+ local ok=pcall(function()vim:SendMouseButtonEvent(x,y,0,true,game,0)end)
+ if ok then table.insert(state.Held,{Mouse=true,X=x,Y=y,At=os.clock()+.06})end
+ return ok
+end
+local function fireHandlers(object)
+ if type(getconnections)~="function" then return false,"no getconnections" end
+ for _,name in ipairs({"Activated","MouseButton1Click","MouseButton1Down"})do
+  local got,list=pcall(getconnections,object[name])
+  if got and type(list)=="table" and #list>0 then
+   local fired=0
+   for _,connection in ipairs(list)do
+    if pcall(function()connection:Fire()end) then fired+=1
+    elseif pcall(function()connection.Function()end) then fired+=1 end
+   end
+   return fired>0,name.." x"..fired
+  end
+ end
+ return false,"no handlers"
+end
 local function clickButton(object)
+ state.PressCount=(state.PressCount or 0)+1
+ local method=state.GoodMethod or METHODS[(state.PressCount-1)%#METHODS+1]
  local inset=guiService:GetGuiInset()
+ local owner=object:FindFirstAncestorWhichIsA("ScreenGui")
  local x=object.AbsolutePosition.X+object.AbsoluteSize.X/2
  -- AbsolutePosition excludes the top bar unless the ScreenGui ignores the inset.
- local owner=object:FindFirstAncestorWhichIsA("ScreenGui")
  local y=object.AbsolutePosition.Y+object.AbsoluteSize.Y/2+((owner and owner.IgnoreGuiInset) and 0 or inset.Y)
+ local detail=string.format("method=%s button=(%d,%d %dx%d) inset=%d ignoreInset=%s",method,object.AbsolutePosition.X,object.AbsolutePosition.Y,
+  object.AbsoluteSize.X,object.AbsoluteSize.Y,inset.Y,tostring(owner and owner.IgnoreGuiInset))
+ state.LastPress={Method=method,At=os.clock()}
+ if method=="handlers" then
+  local ok,what=fireHandlers(object)
+  return ok,detail.." "..tostring(what)
+ end
+ if method=="click-inset" then y-=inset.Y elseif method=="click+inset" then y+=inset.Y end
  local window=ui.Window
  if ui.Gui.Enabled and window.Visible then
   local left,top=window.AbsolutePosition.X,window.AbsolutePosition.Y+inset.Y
-  if x>=left and x<=left+window.AbsoluteSize.X and y>=top and y<=top+window.AbsoluteSize.Y then return nil end
+  if x>=left and x<=left+window.AbsoluteSize.X and y>=top-inset.Y and y<=top+window.AbsoluteSize.Y then return nil end
  end
- local ok=pcall(function()vim:SendMouseButtonEvent(x,y,0,true,game,0)end)
- if ok then table.insert(state.Held,{Mouse=true,X=x,Y=y,At=os.clock()+.06})end
- -- ok only means the input call did not error; the geometry shows whether the click could land on the button.
- local screen=object:FindFirstAncestorWhichIsA("ScreenGui")
- return ok,string.format("click=(%d,%d) button=(%d,%d %dx%d) inset=%d ignoreInset=%s",x,y,object.AbsolutePosition.X,object.AbsolutePosition.Y,
-  object.AbsoluteSize.X,object.AbsoluteSize.Y,inset.Y,tostring(screen and screen.IgnoreGuiInset))
+ -- ok only means the input call did not error; whether it pressed the button shows in PRESS_WORKED.
+ return clickAt(x,y),detail..string.format(" click=(%d,%d)",x,y)
 end
 local function resetJob(now)
  state.DoneAt=nil;state.QuitTries=0;state.MinigameSeen=false;state.MinigameDone=false;state.MinigameStart=nil
@@ -4204,7 +4234,13 @@ local function step(now)
  local game1=minigame()
  local yes=restartYes()
  -- Which of these clears a finished window is not known yet (SP-042); log every change.
- if (yes~=nil)~=state.RestartShown then state.RestartShown=yes~=nil;log("RESTART_BOX "..(yes and "shown" or "gone").." lastAction="..state.LastAction)end
+ if (yes~=nil)~=state.RestartShown then
+  state.RestartShown=yes~=nil;log("RESTART_BOX "..(yes and "shown" or "gone").." lastAction="..state.LastAction)
+  -- The box lasts ~9 s on its own; gone within 1.2 s of a press means that press worked.
+  if not yes and state.LastPress and now-state.LastPress.At<1.2 and not state.GoodMethod then
+   state.GoodMethod=state.LastPress.Method;log("PRESS_WORKED method="..state.GoodMethod)
+  end
+ end
  if not job and state.MissionGui then
   log(string.format("WINDOW gone sinceDone=%s lastAction=%s",state.DoneAt and string.format("%.1f",now-state.DoneAt) or "not done",state.LastAction))
   state.MissionGui=nil

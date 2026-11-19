@@ -3421,6 +3421,182 @@ controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
 
 end)()
 ;(function()
+-- Sparkling fatigue and injury data v1 (SP-033). Recorder only: finds where fatigue and injuries live, which client scripts read them,
+-- and whether a local value change sticks or snaps back, before any Hunter X Enter style hold is built. Sends no requests.
+-- Evidence so far: Character.Fatigue (NumberValue, 0-100, +~0.0004/s idle) and Character.<Part>Inj NumberValues with @Minimum=0
+-- (profile scan 2026-11-17); KiHud.Stage.limbs shows the body figure and FatiguePercent. No client request carrying fatigue
+-- has been seen in the parry captures. Trello: 90%+ fatigue halves damage and stops PL gain; head injuries blur vision,
+-- arm injuries lower damage, leg injuries lower speed; N (Sleep) and hospital beds clear them.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local players=game:GetService("Players")
+local lighting=game:GetService("Lighting")
+local player=players.LocalPlayer
+local ui=controller.UI
+if not ui.Pages.Recorders then return end
+
+local path="AnomalyHub/universal/sparkling_body_status_latest.txt"
+local card=ui.Card(ui.Pages.Recorders,"SPARKLING FATIGUE & INJURY DATA","Take a few hits first so a limb shows injury, then capture. Briefly sets your fatigue and injury values to 0 on your screen only to see if the server puts them back. Sends no requests.",210)
+card.LayoutOrder=35
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,80),BackgroundTransparency=1,
+ Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Takes about 4 seconds. Run it once healthy and once with red limbs if you can."},card)
+local busy=false
+
+local function relevant(name)
+ name=name:lower()
+ for _,word in ipairs({"fatigue","inj","limb","bleed","burn","cripple","sunder","blur","tired","exhaust","sleep","rest"})do
+  if name:find(word,1,true)then return true end
+ end
+ return false
+end
+local function short(value)return tostring(value):sub(1,120)end
+local function source(fn)
+ local ok,text=pcall(function()return debug.info(fn,"s")end)
+ return ok and tostring(text) or "?"
+end
+
+local function capture()
+ if busy or controller.IsUnloaded()then return end
+ busy=true;status.Text="Capturing..."
+ local lines={"SPARKLING FATIGUE & INJURY DATA v1","place="..game.PlaceId.." universe="..game.GameId,
+  "WRITE_TEST sets each value to its minimum locally for 3 s; REVERTED means the server (or a game script) put it back.",
+  "A value that stays changed only changes this client; it does not prove the server's fatigue/injury effects stopped."}
+ local function log(s)if #lines<3000 then table.insert(lines,s)end end
+ local ok,err=pcall(function()
+  local character=player.Character
+  local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+  if not character or not humanoid then error("no character")end
+  local values={}
+  -- Values and attributes on the player, character and humanoid.
+  for _,root in ipairs({player,character,humanoid})do
+   for key,value in pairs(root:GetAttributes())do
+    if relevant(key)then log("ATTRIBUTE "..root:GetFullName().."@"..key.." ["..typeof(value).."]="..short(value))end
+   end
+  end
+  for _,object in ipairs(character:GetDescendants())do
+   if object:IsA("ValueBase") and relevant(object.Name)then
+    local attributes={}
+    for key,value in pairs(object:GetAttributes())do table.insert(attributes,"@"..key.."="..short(value))end
+    log("VALUE "..object:GetFullName().." ["..object.ClassName.."]="..short(object.Value).." "..table.concat(attributes," "))
+    if object:IsA("NumberValue") or object:IsA("IntValue") then table.insert(values,object)end
+   end
+  end
+  for _,object in ipairs(player:GetChildren())do
+   if object:IsA("ValueBase") and relevant(object.Name)then log("VALUE "..object:GetFullName().." ["..object.ClassName.."]="..short(object.Value))end
+  end
+  -- Movement and screen effects that injuries could drive.
+  log(string.format("HUMANOID walkSpeed=%s jumpPower=%s jumpHeight=%s health=%.1f/%.1f",short(humanoid.WalkSpeed),short(humanoid.JumpPower),
+   short(humanoid.JumpHeight),humanoid.Health,humanoid.MaxHealth))
+  local function effects()
+   local found={}
+   for _,root in ipairs({lighting,workspace.CurrentCamera})do
+    for _,object in ipairs(root:GetChildren())do
+     if object:IsA("PostEffect")then
+      local detail=object:IsA("BlurEffect") and ("size="..object.Size) or object:IsA("ColorCorrectionEffect") and
+       string.format("saturation=%.2f contrast=%.2f brightness=%.2f",object.Saturation,object.Contrast,object.Brightness) or
+       object:IsA("DepthOfFieldEffect") and string.format("far=%.2f near=%.2f",object.FarIntensity,object.NearIntensity) or ""
+      table.insert(found,object:GetFullName().."["..object.ClassName.."] enabled="..tostring(object.Enabled).." "..detail)
+     end
+    end
+   end
+   return table.concat(found," | ")
+  end
+  log("EFFECTS "..effects())
+  -- The HUD body figure and fatigue label.
+  local gui=player:FindFirstChildOfClass("PlayerGui")
+  local limbs=gui and gui:FindFirstChild("KiHud")
+  limbs=limbs and limbs:FindFirstChild("Stage")
+  limbs=limbs and limbs:FindFirstChild("limbs")
+  local percent=limbs and limbs:FindFirstChild("FatiguePercent")
+  if limbs then
+   for _,object in ipairs(limbs:GetDescendants())do
+    if object:IsA("GuiObject") and object.Name~="PixelText" then
+     local extra=""
+     if object:IsA("ImageLabel") or object:IsA("ImageButton") then
+      extra=string.format(" image=%s color=%s transparency=%.2f",object.Image,tostring(object.ImageColor3),object.ImageTransparency)
+     elseif object:IsA("TextLabel") then extra=" text="..string.format("%q",object.Text:sub(1,40))end
+     log("HUD "..object:GetFullName().." ["..object.ClassName.."] visible="..tostring(object.Visible).." bg="..tostring(object.BackgroundColor3)..extra)
+    end
+   end
+  else log("HUD KiHud.Stage.limbs unavailable")end
+  -- Client scripts listening to each value (names only; nothing is called).
+  for _,object in ipairs(values)do
+   if type(getconnections)=="function"then
+    local got,list=pcall(getconnections,object.Changed)
+    if got and type(list)=="table"then
+     local names={}
+     for _,connection in ipairs(list)do
+      local fn
+      pcall(function()fn=connection.Function end)
+      table.insert(names,type(fn)=="function" and source(fn) or "?")
+     end
+     log("LISTENERS "..object.Name.." changed="..#list.." "..table.concat(names," ; "))
+    end
+   end
+  end
+  if type(getconnections)~="function"then log("LISTENERS unavailable (no getconnections)")end
+  local scripts={}
+  for _,root in ipairs({character,gui,player:FindFirstChildOfClass("PlayerScripts")})do
+   if root then for _,object in ipairs(root:GetDescendants())do
+    if (object:IsA("LocalScript") or object:IsA("ModuleScript")) and relevant(object.Name)then table.insert(scripts,object:GetFullName())end
+   end end
+  end
+  log("SCRIPTS "..table.concat(scripts," ; "))
+  -- Local write test.
+  local tests={}
+  for _,object in ipairs(values)do
+   local minimum=tonumber(object:GetAttribute("Minimum")) or 0
+   local original=object.Value
+   if original>minimum+.01 then
+    local wrote=pcall(function()object.Value=minimum end)
+    table.insert(tests,{Object=object,Original=original,Target=minimum,Wrote=wrote,Back=nil})
+    log(string.format("WRITE_TEST %s original=%.4f set=%.4f ok=%s",object.Name,original,minimum,tostring(wrote)))
+   end
+  end
+  if #tests==0 then log("WRITE_TEST skipped: every value is already at its minimum")end
+  local started=os.clock()
+  local nextSample=0
+  while os.clock()-started<3 and #tests>0 do
+   task.wait()
+   local now=os.clock()-started
+   for _,test in ipairs(tests)do
+    if test.Back==nil and math.abs(test.Object.Value-test.Target)>.001 then
+     test.Back=now
+     log(string.format("REVERTED %s after %.2f s to %.4f",test.Object.Name,now,test.Object.Value))
+    end
+   end
+   if now>=nextSample then
+    nextSample=now+.5
+    local parts={}
+    for _,test in ipairs(tests)do table.insert(parts,string.format("%s=%.3f",test.Object.Name,test.Object.Value))end
+    log(string.format("SAMPLE %.2f %s walkSpeed=%s hud=%s effects=%s",now,table.concat(parts," "),short(humanoid.WalkSpeed),
+     percent and percent:IsA("TextLabel") and percent.Text or "?",effects()))
+   end
+  end
+  -- Put back anything that stayed at the test value.
+  for _,test in ipairs(tests)do
+   if test.Back==nil then
+    pcall(function()if math.abs(test.Object.Value-test.Target)<=.001 then test.Object.Value=test.Original end end)
+    log(string.format("STAYED %s for 3 s; restored to %.4f",test.Object.Name,test.Original))
+   end
+  end
+  local reverted,stayed=0,0
+  for _,test in ipairs(tests)do if test.Back then reverted+=1 else stayed+=1 end end
+  log("END tested="..#tests.." reverted="..reverted.." stayed="..stayed)
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  local saved=type(writefile)=="function" and pcall(writefile,path,table.concat(lines,"\n"))
+  status.Text=string.format("%s Tested %d values: %d put back by the game, %d stayed.",saved and "Saved." or "Save failed.",#tests,reverted,stayed)
+ end)
+ busy=false
+ if not ok then status.Text="Capture failed: "..tostring(err):sub(1,160)end
+end
+local button=ui.Button(card,"Capture Fatigue & Injury Data",14,72,180,function()task.spawn(capture)end,ui.Colors.AccentSoft)
+button.Size=UDim2.new(1,-28,0,34)
+
+end)()
+;(function()
 -- Combat page v15 / diagnostics v7: NPC hits 3-4 skipped, NPC hit 5 seed 0 trial (SP-031); bounded PvP approach recheck; player timings unchanged.
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared

@@ -29,6 +29,7 @@ Last reviewed: 2026-11-19. This is the initial consolidated handoff from the ava
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
 | Combat page v11 (SP-T030) | Normal Auto Parry controls; no temporary single-hit filters | 174 mocked assertions and compilation passed; all-hit coverage/cleanup live-verified in SP-T031 | Preserve target context and distinguish conflicted counter receipts from automatic results |
 | Parry diagnostics v7 | Adds RANGE_WAIT/CHECK/ENTERED to existing request/state/outcome records | v6 state snapshots verified live in SP-T035; new geometry trace mocked in SP-T036 | Range entry is not a successful parry; live recovery outcomes outstanding |
+| Fatigue & injury data (SP-033) | Recorders card (`src/SparklingBodyStatus.lua`): dumps Fatigue/`<Part>Inj` values, listeners, HUD figure, screen effects; 3 s local write-to-minimum test | Implemented / untested live; compiles | Does the client own any of it (HxE-style hold possible), or is it all server-side? |
 
 ## Sources and capture workflow
 
@@ -49,6 +50,7 @@ Use the existing **Settings → Capture Fingerprint** first. It inventories clie
 | Fingerprint | Settings; `remote_fingerprint_10771972206.txt` | Place matters; infrastructure and duplicate client objects are included |
 | Manual combat | Recorders → Sparkling Combat Recorder; `sparkling_combat_capture.txt` plus `sparkling_combat_<timestamp>_<nonce>.txt` | 120 seconds, 16,000 lines / 4 MB; saves every 5 seconds; up to 6 nearby actors within 100 studs |
 | ESP sources | Recorders → Sparkling ESP Data; `sparkling_esp_data_latest.txt` | Bounded explicit source discovery; needed before claiming race/power/max-Ki accuracy |
+| Fatigue & injuries | Recorders → Sparkling Fatigue & Injury Data; `sparkling_body_status_latest.txt` | About 4 s; local values are set to their minimum for 3 s and restored if the game does not put them back. Client-only change; not proof of server effect |
 | Auto-parry diagnostics | Enable Auto Parry; Recorders → Sparkling Parry Diagnostics → Save Log / Copy Log; disabling Auto Parry finalizes | `sparkling_auto_parry_latest.txt` plus `sparkling_auto_parry_<timestamp>_<GUID>.txt`; 12,000 event lines / 3 MB, 2,048 bytes per line; saves every 5 seconds |
 
 The manual recorder stops auto parry before starting. Auto parry refuses to start while a manual combat recording is active. This preserves one owner of the shared hooks and keeps manual evidence separate from generated inputs.
@@ -1055,3 +1057,19 @@ The first Shadow run (Unix 1795076236) similarly has Counter duration=5 at 51.64
 **Auto Shadow Farm second run (user, 2026-11-19):** ~39 min, PowerLevel 2,202 → 23,634, one kick-out (re-entered in 2.5 s). The `@Player` owner filter was active. Verified live.
 
 **Next:** none required. If kick-outs become a problem, consider pausing punches for ~300 ms when the Shadow starts a hit-1 swing; not built.
+
+## SP-033 — Fatigue and injuries: where they live; HxE-style hold not built yet (2026-11-19, Claude)
+
+**Request (user):** a fatigue and injury block like Hunter X Enter's Infinite Stamina.
+
+**Why the HxE approach does not transfer directly (source + capture inspection):** HxE stamina is owned by the client (`_G.StaminaSystem` upvalue) and the server trusted a client `ConsumeStamina` request (HXE-001). Sparkling differs:
+- `Character.Fatigue` is a NumberValue (0–100). In the parry captures it rises ~0.00035 per sample at idle, in ~1 s steps, with no jumps from hits (1.13→1.21 over one 31-min Shadow-farm detail window; 1.78→1.87 in the next). Fatigue is not limiting the Shadow farm (Trello: penalties start at 80%, PL gain stops at 90–95%).
+- Injuries are `Character.<Part>Inj` NumberValues with `@Minimum=0` (profile scan 2026-11-17: TorsoInj 13.6, LeftArmInj 28.0, RightLegInj 12.9), plus `Character@LimbPiecesWatched=true`. The HUD figure is `PlayerGui.KiHud.Stage.limbs` (LimbBody/LimbHaze images, LimbPercent, FatiguePercent "6%").
+- No client request carrying fatigue or injury appears in the parry captures so far (their hooks cover `Requests.*`; not proof of full coverage).
+- Trello: fatigue rises from landing M1/M2, taking damage and using skills; 90%+ halves damage, raises damage taken, nerfs movement/counter window and stops PL gain. Head injuries affect regeneration and blur vision, arm injuries lower damage, leg injuries lower speed. N (Sleep) lowers fatigue to 0%; hospital beds clear both.
+
+**Expected:** server-side effects (damage, PL gain, regeneration) cannot be blocked from the client. Possible client-side pieces: the head-injury blur and the leg-injury speed (if a LocalScript sets WalkSpeed from the local value), and the HUD display.
+
+**Implemented / untested live — Fatigue & Injury Data v1 (Recorders):** dumps matching values/attributes on player, character and humanoid; humanoid WalkSpeed/Jump; PostEffects in Lighting and the camera; the KiHud limbs figure (image ids, colors, text); `getconnections` listener sources for each value's Changed; names of matching LocalScripts/ModuleScripts. Then sets each value above its minimum to the minimum locally for 3 s, logging `REVERTED` (game put it back) or `STAYED` (restored by the recorder), with samples of WalkSpeed, HUD % and effects.
+
+**Next:** user captures once with injured limbs. If values revert at once → server-owned; offer Auto Sleep (N) at a fatigue threshold instead. If they stay and the blur/speed follow → build a local hold for those parts only, and say plainly that server effects remain.

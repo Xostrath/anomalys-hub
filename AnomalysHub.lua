@@ -4656,6 +4656,7 @@ end)()
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.
 -- v16.3 (SP-039): heavy cues ignore the release track stopping early and may wait out the 0.5 s post-counter cooldown.
 -- v16.4 (SP-041): range 12 for every NPC (not just your Shadow); heavy cues may defer to 0.62 s.
+-- v16.5 (SP-049): Warrior Clan Rogue combo mapped for NPCs (hits 2, 3, 5 pressed; 1 and 4 too fast).
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -4690,6 +4691,15 @@ local npcHeavy='102483335944327'
 local HEAVY_DELAYS={.26,.32,.38}
 local heavyTrial=0
 attacks[npcHeavy]=0
+-- Warrior Clan Rogue combo (SP-049, history 1795127425, 2 rogues, 52 hits taken, none mapped). Order from same-actor sequences:
+-- hit1 78875817992139 -> hit2 120572377399879 -> hit3 119528335719333 -> hit4 92958519453859 -> hit5 80105885088261 (all seen at
+-- phase 0, speed 1.15). Attacker HitOut a median 117 / 201 / 151 / 84 / 270 ms after the swing is seen. A counter needs ~150+ ms
+-- of lead, so hits 1 and 4 are skipped like the standard combo's hits 3-4; hit 2 and 3 press at once, hit 5 after 80 ms.
+-- NPCs only for now (players using this style stay unmapped).
+local rogueHits={['78875817992139']=1,['120572377399879']=2,['119528335719333']=3,['92958519453859']=4,['80105885088261']=5}
+attacks['120572377399879']=0;attacks['119528335719333']=0;attacks['80105885088261']=.08
+attacks['78875817992139']=0;attacks['92958519453859']=0
+lateHits['78875817992139']=1;lateHits['92958519453859']=4
 local enabled,closed=false,false
 local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local windowFocused=true
@@ -4846,7 +4856,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=hits_1_2_5 timingTrial=shared_hit5_seed0 range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms;skip1,4 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -5091,6 +5101,8 @@ local function observe(model,track)
  if delay==nil then skip("unmapped_animation",detail);return end
  local allowed,targetReason=targetAllowed(model)
  if not allowed then skip(targetReason,"stage=observe "..detail);return end
+ if rogueHits[id] and targetKind(model)~="NPC" then skip("unmapped_animation",detail.." rogueStyle=player");return end
+ if rogueHits[id] then detail=detail.." style=rogue hit="..rogueHits[id] end
  if lateHits[id] then skip(targetKind(model)=="NPC" and "npc_late_hit" or "player_late_hit","stage=observe hit="..lateHits[id].." "..detail);return end
  if id==immediateHit5 then delay=math.max(0,settings.TimingOffsetMs/1000);detail=detail.." trial="..(targetKind(model)=="NPC" and "npc_hit5_seed0" or "player_hit5_seed0") end
  if id==npcHeavy then

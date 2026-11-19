@@ -1346,3 +1346,11 @@ Both other characters expose direct Fatigue, all six injury values, Shield with 
 **Test plan:** check Varrik, do one activity only (e.g. 15 min Shadow farm), check again; repeat for NPC fights, jobs and a queue. Each check costs 5,000 Zeni.
 
 **Result — second Varrik check (user, 2026-11-19 15:25; Verified from `sparkling_cexp_history.txt`):** CEXP **1,808 → 1,808 (no change)** over 43 min. In the tracked last 18 min: 16.7 min in the Inner World, 943 hits landed (all on the Shadow), 238 hits taken, 205 counters, +18,999 Power Level, no other fights, no jobs. **The Shadow farm gives Power Level but no CEXP.** CEXP must come from other sources (Trello: queues, fighting other players/NPCs, quests) — next checks should isolate NPC fights, PvP and a queue.
+
+## SP-049 — Warrior Clan Rogue combo mapped (2026-11-19, Claude)
+
+**User:** "new animations for AP."
+
+**Evidence (Verified from capture):** history 1795127425 (97 s, two `Warrior Clan Rogue` NPCs, v16.4): 1 press, 52 damage events, 426 `unmapped_animation` skips — their combo uses different animations. Same-actor order: **hit 1 `78875817992139` → hit 2 `120572377399879` → hit 3 `119528335719333` → hit 4 `92958519453859` → hit 5 `80105885088261`** (A→B 450 ms, B→C 583, C→E 515, E→D 384 median), all seen at phase 0, speed 1.15. Attacker `HitOut` after the swing is seen (median, min): hit 1 117 (102), hit 2 201 (183), hit 3 151 (149), hit 4 84 (84), hit 5 270 (266). They also use the shared heavy (`88670347816269` → `102483335944327`). The user's own manual presses produced 7 Counter Parry and 1 Perfect Counter in the run.
+
+**Implemented / untested live — Combat page v16.5:** for NPCs, rogue hit 2 and hit 3 press at once (~200 / ~150 ms lead), hit 5 after 80 ms (~190 ms lead); hits 1 and 4 are skipped as `npc_late_hit` (too fast at ~100 ms ping, like the standard combo's hits 3–4). CUE lines carry `style=rogue hit=N`; header config adds `npcRogue=hit2,hit3@0,hit5@80ms;skip1,4`. Players using this style stay unmapped (`rogueStyle=player`). Hit 3's ~150 ms lead is at the edge of the window; expect ~50% there.

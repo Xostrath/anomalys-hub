@@ -1366,3 +1366,11 @@ Both other characters expose direct Fatigue, all six injury values, Shield with 
 **Implemented / untested live — Combat page v16.6:** rogue heavy pressed at a fixed 0.30 s (~120 ms before its hit; NPCs only; header `heavy@300ms`). Heavy cues defer through the counter cooldown only if it ends by 0.40 s (was 0.62), expiry 0.45 s.
 
 **CEXP tracker fix:** v1 lost its saved counters on every hub reload (`local got,data=ok and pcall(...)` keeps only pcall's first result), so the counts restarted at 15:34 when the hub was re-run; the rogue fight at 15:30–15:32 is missing from the next history line. Fixed; counters now carry over reloads.
+
+## SP-051 — Rogue heavy: 5/5 Perfect Counters; facing exemption; the shared heavy is two hits (2026-11-19, Claude)
+
+**Evidence (Verified from captures):** histories 1795128100 (11 min, 6 rogues + 2 players) and 1795128862 (9 min), v16.6.
+- **Rogue heavy `126361551838373` pressed at 0.30 s: 5 / 5 `Perfect Counter!`** (receipts 99–132 ms after the press), each followed by `Counter duration=5`. Not pressed: 6 skipped for `attacker_facing`/`self_facing` (4 of them hit us ~418 ms in), 2 `track_stopped` (no hit followed — interrupted), 1 out of range.
+- **Shared heavy `102483335944327`:** in all 15 releases the game sent `CooldownNT` Counter 0.5 s at the very moment the release was seen (0 ± 1 ms) — releasing this heavy locks your counter for 0.5 s (supersedes SP-041/050's reading that the lock came from the user's own combo). It also lands **two hits**: the first ~230–560 ms after the release, the second ~750–850 ms (six pairs, e.g. 248/799, 349/848, 334/748, 314/781, 299/749, 298/799). The user's own F presses 150–200 ms before the second hit gave `Blunt` (2) and `BlockEffect` (1); none countered. How to beat it is still unknown (asked the user: tap during the wind-up, hold F, or another key).
+
+**Implemented / untested live — Combat page v16.7:** the rogue heavy no longer requires attacker or self facing (heavies turn and lunge); range, line of sight and other gates still apply.

@@ -4659,6 +4659,8 @@ end)()
 -- v16.3 (SP-039): heavy cues ignore the release track stopping early and may wait out the 0.5 s post-counter cooldown.
 -- v16.4 (SP-041): range 12 for every NPC (not just your Shadow); heavy cues may defer to 0.62 s.
 -- v16.5 (SP-049): Warrior Clan Rogue combo mapped for NPCs (hits 2, 3, 5 pressed; 1 and 4 too fast).
+-- v16.6 (SP-050): rogue heavy pressed at 0.30 s; heavy defer cut to 0.40 s (presses at 0.5 s landed after the hit).
+-- v16.7 (SP-051): rogue heavy ignores the facing checks (5/5 pressed were Perfect Counters; 6 skipped for facing hit us).
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -4988,7 +4990,7 @@ local function logLosObject(instance,excluded,kind)
  log("LOS_OBJECT",detail)
 end
 
-local function threat(model,rangeLimit)
+local function threat(model,rangeLimit,anyFacing)
  if not model or not model:IsDescendantOf(workspace)then return false,"actor_unloaded",""end
  local char=player.Character
  local root=roots(char)
@@ -5002,8 +5004,8 @@ local function threat(model,rangeLimit)
  local selfDot=root.CFrame.LookVector:Dot(-direction)
  local detail=string.format("distance=%.3f vertical=%.3f attackerDot=%.3f selfDot=%.3f",distance,delta.Y,attackerDot,selfDot)
  if distance>(rangeLimit or settings.Range) then return false,"out_of_range",detail end
- if attackerDot<.2 then return false,"attacker_facing",detail end
- if selfDot<0 then return false,"self_facing",detail end
+ -- Heavies turn and lunge as they swing (SP-051): facing is not required for them.
+ if selfDot<0 and not anyFacing then return false,"self_facing",detail end
  local params=RaycastParams.new()
  params.FilterType=Enum.RaycastFilterType.Exclude
  params.FilterDescendantsInstances={char,model}
@@ -5119,7 +5121,7 @@ local function observe(model,track)
   detail=detail.." trial=npc_heavy heavyDelayMs="..math.floor(HEAVY_DELAYS[heavyTrial]*1000)
  end
  local range=cueRange(model)
- local valid,reason,geometry=threat(model,range)
+ local anyFacing=id==rogueHeavy or nil
  local rangeWait=false
  -- Fresh swings just outside range may wait briefly for entry (players since v14; NPCs too since SP-036,
  -- since grunts also close in mid-swing). The input gate still uses the cue's range.
@@ -5141,7 +5143,7 @@ local function observe(model,track)
  if #pending>=8 then skip("queue_full",detail);return end
  table.insert(pending,{Model=model,Track=track,Id=id,Serial=serial,At=rangeWait and now+.02 or now+delay,
   DueAt=now+delay,SeenAt=now,Expires=now+math.max(.25,delay+.1,id==npcHeavy and .45 or 0),Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0,Range=range,
-  Heavy=id==npcHeavy or nil})
+  Heavy=id==npcHeavy or nil,AnyFacing=anyFacing})
  log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
  if rangeWait then log("RANGE_WAIT","windowMs=80 marginStuds=3 stepMs=20 "..detail.." "..geometry)end
 end
@@ -5392,7 +5394,7 @@ local function update(dt)
  for i=#pending,1,-1 do
   local cue=pending[i]
   if now>=cue.At then
-   local valid,geometryReason,geometry=threat(cue.Model,cue.Range)
+   local valid,geometryReason,geometry=threat(cue.Model,cue.Range,cue.AnyFacing)
    local allowed,targetReason=targetAllowed(cue.Model)
    local manualF=input:IsKeyDown(Enum.KeyCode.F)
    local detail=string.format("cue=%d actor=%s age=%.4f scheduledLate=%.4f held=%s pulseRemaining=%.4f counterRemaining=%.4f inputF=%s %s %s",

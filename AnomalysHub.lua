@@ -3731,6 +3731,262 @@ button.Size=UDim2.new(1,-28,0,34)
 
 end)()
 ;(function()
+-- Sparkling Job Recorder v1 (SP-040). Read-only capture of doing a job by hand, to prepare an Auto Job. Sends nothing.
+-- Trello: jobs come from NPCs (Tilent = Food, Rosa/Auber/Bink = Tech, Sebastian = Environmental); level 1 tasks are Clean Spills,
+-- Capsule Minigame 1 (click a button fast) and Scrub Dirt; 50 Zeni each at level 1. How tasks are given, shown and completed is unknown.
+-- Records: every ReplicatedStorage remote (IN, and OUT/RETURN through the shared hooks), proximity prompts, mouse/key presses with what
+-- is under the cursor, new on-screen text and buttons, job-looking objects added to the world, money/job values, and your position.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local players=game:GetService("Players")
+local rs=game:GetService("ReplicatedStorage")
+local input=game:GetService("UserInputService")
+local prompts=game:GetService("ProximityPromptService")
+local player=players.LocalPlayer
+local ui=controller.UI
+if not ui.Pages.Recorders then return end
+
+local LATEST="AnomalyHub/universal/sparkling_job_latest.txt"
+local MAX_LINES,MAX_SECONDS=20000,600
+-- Remotes that fire constantly in combat; logged at most twice a second each so job traffic is not buried.
+local NOISY={StopDash=true,Effects=true,Cooldown=true,CooldownNT=true}
+local rec={Active=false}
+local card=ui.Card(ui.Pages.Recorders,"SPARKLING JOB RECORDER","Start, take a job from its NPC and do a few tasks normally, then Stop. Records what the game shows and sends so an Auto Job can be built. Sends nothing.",196)
+card.LayoutOrder=33
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,66),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Ready. Turn Auto Parry off first (it shares the request hooks). Up to 10 minutes. Output: sparkling_job_latest.txt"},card)
+local button
+
+local function sample(item,depth)
+ depth=depth or 0
+ local kind=typeof(item)
+ if kind=="string" then return string.format("%q",item:sub(1,300))end
+ if kind=="Instance" then return item:GetFullName():sub(1,160)end
+ if kind=="Vector3" then return string.format("(%.1f,%.1f,%.1f)",item.X,item.Y,item.Z)end
+ if kind=="CFrame" then return string.format("CF(%.1f,%.1f,%.1f)",item.X,item.Y,item.Z)end
+ if kind=="table" then
+  if depth>=3 then return "{...}"end
+  local parts,n={},0
+  pcall(function()
+   for key,value in next,item do
+    n+=1;if n>24 then table.insert(parts,"...");break end
+    table.insert(parts,tostring(key):sub(1,40).."="..sample(value,depth+1))
+   end
+  end)
+  return "{"..table.concat(parts,", ").."}"
+ end
+ return tostring(item):sub(1,120)
+end
+local function log(text)
+ if not rec.Active then return end
+ if #rec.Lines>=MAX_LINES then rec.Limited=true;return end
+ table.insert(rec.Lines,string.format("%.3f %s",os.clock()-rec.Started,text))
+end
+local function save()
+ if not rec.Lines then return false end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ local text="SPARKLING JOB RECORDER v1 // READ ONLY\nplace="..game.PlaceId.." universe="..game.GameId
+  .."\nIN = server->you remote. OUT/RETURN = your game's own request and its reply (shared hook). PROMPT = proximity prompt. CLICK/KEY = your input,"
+  .." with the 3D object under the mouse and the screen objects under the cursor. GUI = new visible on-screen text or button. WORLD = job-looking object added."
+  .." VALUE = money/job value. POS = your position every 2 s.\n"..table.concat(rec.Lines,"\n")..(rec.Limited and "\nLINE LIMIT REACHED" or "")
+ if type(writefile)~="function" then return false end
+ local ok=pcall(writefile,LATEST,text)
+ if rec.Archive then pcall(writefile,rec.Archive,text)end
+ return ok
+end
+local function jobWord(name)
+ name=tostring(name):lower()
+ for _,word in ipairs({"job","spill","dirt","garbage","trash","grocer","deliver","capsule","clean","scrub","mop","cat","lloyd","cook","food","chef","task","work","zeni","money","cash","industry","customer","order","package","box","bag"})do
+  if name:find(word,1,true)then return true end
+ end
+ return false
+end
+local function stop(reason)
+ if not rec.Active then return end
+ log("STOP "..reason)
+ local lines=#rec.Lines
+ local saved=save()
+ rec.Active=false
+ for _,connection in ipairs(rec.Connections)do pcall(function()connection:Disconnect()end)end
+ if rec.StopHooks then pcall(rec.StopHooks)end
+ status.Text=(saved and "Saved " or "Save failed for ")..lines.." lines to sparkling_job_latest.txt. "..reason
+ button.Text="Start Job Recorder"
+end
+local function connect(signal,callback)
+ table.insert(rec.Connections,signal:Connect(function(...)
+  if not rec.Active then return end
+  local ok,err=pcall(callback,...)
+  if not ok then log("CALLBACK_ERROR "..tostring(err):sub(1,200))end
+ end))
+end
+local function where(object)
+ local part=object and (object:IsA("BasePart") and object or object:FindFirstAncestorWhichIsA("BasePart"))
+ return part and sample(part.Position) or "?"
+end
+local function watchValue(object,label)
+ local function report(kind)log("VALUE "..kind.." "..label.." = "..sample(object.Value))end
+ report("INITIAL")
+ connect(object.Changed,function()report("CHANGED")end)
+end
+local function watchAttributes(object,label)
+ for key,value in pairs(object:GetAttributes())do if jobWord(key) or key:lower():find("level",1,true) or key:lower():find("exp",1,true)then log("VALUE INITIAL "..label.."@"..key.." = "..sample(value))end end
+ connect(object.AttributeChanged,function(key)
+  if jobWord(key) or key:lower():find("level",1,true) or key:lower():find("exp",1,true)then log("VALUE CHANGED "..label.."@"..key.." = "..sample(object:GetAttribute(key)))end
+ end)
+end
+local function guiText(object)
+ local text=(object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox")) and object.Text or ""
+ return text
+end
+local function watchGui(object)
+ if object:IsDescendantOf(ui.Gui) or not object:IsA("GuiObject")then return end
+ local isButton=object:IsA("GuiButton")
+ local text=guiText(object)
+ if not isButton and text=="" then return end
+ if rec.GuiSeen>=1500 then return end
+ rec.GuiSeen+=1
+ log("GUI NEW "..object.ClassName.." "..object:GetFullName():sub(1,200).." visible="..tostring(object.Visible).." text="..string.format("%q",text:sub(1,160)))
+ if object:IsA("TextLabel") or object:IsA("TextButton") then
+  connect(object:GetPropertyChangedSignal("Text"),function()
+   if rec.TextChanges<4000 then rec.TextChanges+=1;log("GUI TEXT "..object:GetFullName():sub(1,200).." = "..string.format("%q",object.Text:sub(1,160)))end
+  end)
+ end
+ connect(object:GetPropertyChangedSignal("Visible"),function()
+  if rec.TextChanges<4000 then rec.TextChanges+=1;log("GUI VISIBLE "..object:GetFullName():sub(1,200).." = "..tostring(object.Visible))end
+ end)
+end
+local function underCursor(x,y)
+ local gui=player:FindFirstChildOfClass("PlayerGui")
+ if not gui then return ""end
+ local names={}
+ local ok,list=pcall(function()return gui:GetGuiObjectsAtPosition(x,y)end)
+ if ok then for index,object in ipairs(list)do if index>4 then break end;table.insert(names,object:GetFullName():sub(1,120))end end
+ return table.concat(names," | ")
+end
+local function start()
+ if rec.Active then stop("Stopped.");return end
+ local stamp=os.time()
+ rec={Active=true,Started=os.clock(),Lines={},Connections={},GuiSeen=0,TextChanges=0,Noisy={},WorldSeen=0,
+  Archive="AnomalyHub/universal/sparkling_job_"..stamp..".txt"}
+ button.Text="Stop Job Recorder"
+ log("START unix="..stamp)
+ -- Incoming: every RemoteEvent in ReplicatedStorage.
+ local count=0
+ for _,object in ipairs(rs:GetDescendants())do
+  if object:IsA("RemoteEvent")then
+   count+=1
+   local path=object:GetFullName()
+   connect(object.OnClientEvent,function(...)
+    if NOISY[object.Name]then
+     local now=os.clock()
+     if now<(rec.Noisy[object] or 0) then return end
+     rec.Noisy[object]=now+.5
+    end
+    log("IN "..path.." "..sample(table.pack(...)))
+   end)
+  end
+ end
+ log("COVERAGE incoming RemoteEvents="..count)
+ -- Outgoing requests and replies, through the hooks the combat recorder owns.
+ if type(controller.BeginSparklingRemoteObservation)=="function"then
+  local targets={}
+  for _,object in ipairs(rs:GetDescendants())do
+   if object:IsA("RemoteEvent") or object:IsA("RemoteFunction")then targets[object]=object:GetFullName()end
+  end
+  local stopHooks,detail=controller.BeginSparklingRemoteObservation(targets,function(remote,direction,args,started,id,result,path)
+   if rec.Active then log(direction.." "..tostring(path).." call="..id.." args="..sample(args)..(result and (" result="..sample(result)) or ""))end
+  end)
+  rec.StopHooks=stopHooks
+  log("COVERAGE outgoing: "..tostring(detail))
+  if not stopHooks then status.Text="Outgoing requests not recorded: "..tostring(detail)..". Everything else is."end
+ else log("COVERAGE outgoing: shared hooks unavailable")end
+ -- Proximity prompts.
+ local function promptInfo(prompt)
+  return string.format("%s action=%q object=%q hold=%.2f at=%s",prompt:GetFullName():sub(1,160),prompt.ActionText,prompt.ObjectText,prompt.HoldDuration,where(prompt.Parent))
+ end
+ connect(prompts.PromptShown,function(prompt)log("PROMPT SHOWN "..promptInfo(prompt))end)
+ connect(prompts.PromptHidden,function(prompt)log("PROMPT HIDDEN "..prompt:GetFullName():sub(1,160))end)
+ connect(prompts.PromptButtonHoldBegan,function(prompt)log("PROMPT HOLD_BEGAN "..promptInfo(prompt))end)
+ connect(prompts.PromptTriggered,function(prompt)log("PROMPT TRIGGERED "..promptInfo(prompt))end)
+ -- Your input (not while typing).
+ local mouse=player:GetMouse()
+ connect(input.InputBegan,function(object,processed)
+  if input:GetFocusedTextBox()then return end
+  local kind=object.UserInputType
+  if kind==Enum.UserInputType.MouseButton1 or kind==Enum.UserInputType.MouseButton2 then
+   local p=object.Position
+   local target=mouse.Target
+   log(string.format("CLICK %s processed=%s screen=(%d,%d) target=%s hit=%s gui=[%s]",kind.Name,tostring(processed),p.X,p.Y,
+    target and target:GetFullName():sub(1,160) or "none",sample(mouse.Hit.Position),underCursor(p.X,p.Y)))
+  elseif kind==Enum.UserInputType.Keyboard then
+   log("KEY "..object.KeyCode.Name.." processed="..tostring(processed))
+  end
+ end)
+ -- Screen: buttons and text, existing and new.
+ local gui=player:FindFirstChildOfClass("PlayerGui")
+ if gui then
+  for _,object in ipairs(gui:GetDescendants())do watchGui(object)end
+  connect(gui.DescendantAdded,watchGui)
+  for _,screen in ipairs(gui:GetChildren())do
+   if screen:IsA("ScreenGui")then connect(screen:GetPropertyChangedSignal("Enabled"),function()log("GUI SCREEN "..screen.Name.." enabled="..tostring(screen.Enabled))end)end
+  end
+  connect(gui.ChildAdded,function(screen)log("GUI SCREEN_ADDED "..screen.Name.." class="..screen.ClassName)end)
+ end
+ -- World: job-looking objects as they appear or go, plus billboards and highlights (often used as task markers).
+ connect(workspace.DescendantAdded,function(object)
+  if rec.WorldSeen>=3000 then return end
+  local marker=object:IsA("BillboardGui") or object:IsA("Highlight") or object:IsA("Beam") or object:IsA("ProximityPrompt") or object:IsA("ClickDetector")
+  if marker or ((object:IsA("BasePart") or object:IsA("Model")) and jobWord(object.Name))then
+   rec.WorldSeen+=1
+   log("WORLD ADDED "..object.ClassName.." "..object:GetFullName():sub(1,200).." at="..where(object))
+  end
+ end)
+ connect(workspace.DescendantRemoving,function(object)
+  if rec.WorldSeen<3000 and (object:IsA("BasePart") or object:IsA("Model")) and jobWord(object.Name)then
+   rec.WorldSeen+=1;log("WORLD REMOVED "..object.ClassName.." "..object:GetFullName():sub(1,200))
+  end
+ end)
+ for _,object in ipairs(workspace:GetDescendants())do
+  if rec.WorldSeen>=600 then log("LIMIT initial world scan 600");break end
+  if object:IsA("ProximityPrompt") or object:IsA("ClickDetector") or ((object:IsA("Model") or object:IsA("BasePart")) and jobWord(object.Name))then
+   rec.WorldSeen+=1
+   log("WORLD EXISTING "..object.ClassName.." "..object:GetFullName():sub(1,200).." at="..where(object)
+    ..(object:IsA("ProximityPrompt") and (" action="..string.format("%q",object.ActionText).." object="..string.format("%q",object.ObjectText)) or ""))
+  end
+ end
+ rec.WorldSeen=0
+ -- Money and job values on you and your character.
+ for _,root in ipairs({player,player.Character})do
+  if root then
+   watchAttributes(root,root==player and "Player" or "Character")
+   for _,object in ipairs(root:GetDescendants())do
+    if object:IsA("ValueBase") and (jobWord(object.Name) or object.Name:lower():find("level",1,true))then watchValue(object,object:GetFullName():sub(1,160))end
+   end
+  end
+ end
+ status.Text="Recording. Take a job and do a few tasks, then press Stop (auto-stops after 10 minutes)."
+ task.spawn(function()
+  local started=rec.Started
+  local nextSave=0
+  while rec.Active and rec.Started==started do
+   task.wait(2)
+   if not (rec.Active and rec.Started==started) then break end
+   local root=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+   if root then log("POS "..sample(root.Position))end
+   if os.clock()>=nextSave then nextSave=os.clock()+5;save()end
+   if os.clock()-started>MAX_SECONDS then stop("Auto-stopped after 10 minutes.")end
+  end
+ end)
+end
+button=ui.Button(card,"Start Job Recorder",14,72,180,start,ui.Colors.AccentSoft)
+button.Size=UDim2.new(1,-28,0,34)
+controller.Connect(player.OnTeleport,function()stop("Teleporting.")end)
+controller.RegisterCleanup(function()stop("Unloaded.")end)
+
+end)()
+;(function()
 -- Combat page v16 / diagnostics v7: shared NPC/player policy at user request (SP-034); hits 3-4 skipped, hit 5 seed 0.
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.

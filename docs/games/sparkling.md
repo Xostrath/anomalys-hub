@@ -50,6 +50,7 @@ Use the existing **Settings → Capture Fingerprint** first. It inventories clie
 | Fingerprint | Settings; `remote_fingerprint_10771972206.txt` | Place matters; infrastructure and duplicate client objects are included |
 | Manual combat | Recorders → Sparkling Combat Recorder; `sparkling_combat_capture.txt` plus `sparkling_combat_<timestamp>_<nonce>.txt` | 120 seconds, 16,000 lines / 4 MB; saves every 5 seconds; up to 6 nearby actors within 100 studs |
 | ESP sources | Recorders → Sparkling ESP Data; `sparkling_esp_data_latest.txt` | Bounded explicit source discovery; needed before claiming race/power/max-Ki accuracy |
+| Jobs | Recorders → Sparkling Job Recorder; `sparkling_job_latest.txt` + `sparkling_job_<unix>.txt` | Up to 10 min; needs Auto Parry off for outgoing requests; read-only (SP-040) |
 | Fatigue & injuries | Recorders → Sparkling Fatigue & Injury Data; `sparkling_body_status_latest.txt` | About 4 s; local values are set to their minimum for 3 s and restored if the game does not put them back. Client-only change; not proof of server effect |
 | Auto-parry diagnostics | Enable Auto Parry; Recorders → Sparkling Parry Diagnostics → Save Log / Copy Log; disabling Auto Parry finalizes | `sparkling_auto_parry_latest.txt` plus `sparkling_auto_parry_<timestamp>_<GUID>.txt`; 12,000 event lines / 3 MB, 2,048 bytes per line; saves every 5 seconds |
 
@@ -1169,3 +1170,13 @@ The PVP (Players) toggle still controls player inputs; no settings file is rewri
 - **Hit-3 predictability (impact receipt of hit 3, p10–p90 spread):** from hit-2 start: Grunt 302 ms, Thug 195, Shadow 150; from hit-2 HitOut: Grunt 169 (235 within 6 studs), Thug 141–160, Shadow 119–132; from hit-2 ANIM_STOP: 133–548. **No reference is tight enough for grunts** (go threshold ~120 ms), so a predictive hit-3 press is not built. Hits 3–4 remain a hard limit against grunts at ~100 ms ping.
 
 **Implemented / untested live — Combat page v16.3:** heavy cues are exempt from the `track_stopped` gate, expire at 0.48 s, and may defer through the 0.5 s post-counter cooldown if it ends by 0.38 s after the release was seen. Analysis script note: count `Perfect Counter!` as a heavy outcome.
+
+## SP-040 — Job Recorder (2026-11-19, Claude)
+
+**Request (user):** an auto job recorder (record jobs so Auto Job can be built).
+
+**Trello (player wiki, not verified in game):** jobs are taken from NPCs — Tilent (Cafe Shop, Central City) = Food Industry; Rosa (Capsule Corp), Auber (Vegeta, Celer Village), Bink (Eter, Sapian City) = Technological Industry; Sebastian (Central City) = Environmental Industry. Level 1 tasks: Clean Spills / Capsule Minigame 1 (click a button as fast as you can) / Scrub Dirt; level 2: Deliver Groceries / Capsule Minigame 2 (click fast for 60 s) / Collect Garbage; level 3: cook (spin the mouse) / osu-style minigame / Find Lloyd Cat. 50 / 100 / 300 Zeni per job; ~400 jobs to level 2 and ~800 more to level 3. Hard Worker doubles job EXP; Charismatic doubles job money.
+
+**Implemented / untested live — Recorders → Sparkling Job Recorder (`src/SparklingJobRecorder.lua`):** read-only, up to 10 min / 20,000 lines, saves every 5 s to `sparkling_job_latest.txt` plus `sparkling_job_<unix>.txt`. Records: every ReplicatedStorage RemoteEvent IN (StopDash/Effects/Cooldown/CooldownNT limited to 2/s each), OUT/RETURN through the shared hooks (refused while Auto Parry owns them), proximity prompts (shown/hold/triggered with action/object text and position), mouse clicks with the 3D target and the screen objects under the cursor, keys (not while typing), visible on-screen text/buttons (new, text and visibility changes), job-looking world objects and markers (BillboardGui/Highlight/Beam/ProximityPrompt/ClickDetector) added or removed, money/job/level values and attributes on you and your character, and your position every 2 s.
+
+**Next:** user records one job type (a few tasks); then identify how a task is given, where it is, what completes it and what pays.

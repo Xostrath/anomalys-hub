@@ -169,6 +169,18 @@ SP-T005 local-clock details: attempts at 2609.3927 (`84394230178792`), 2609.8081
     - Logs PROMPT/PRESS/REPEAT/CHANGE/SESSION to `sparkling_auto_meditation_latest.txt`. CHANGE records other prompt properties, to find a cleaner new-prompt signal.
   - **Reference:** Hunter X Enter training key macros; Beyond Nen Auto Meditation (which used server prompt events, not available here).
   - Implemented / untested live.
+  - **2026-11-19 — Verified live** (`sparkling_auto_meditation_latest.txt`): ~91 s session, every prompt answered (W/A/S/D and 4 repeats), stopped only when chat opened. Cleaner new-prompt signal found: the prompt's `TextColor3` turns white (1,1,1) when a new letter is shown and green (0,1,0) after a correct press, so a repeated letter is detectable from the white flash instead of the 1.05 s timer. Not yet switched over.
+- 2026-11-19 — Auto Shadow Farm v1 (SP-A002, `src/SparklingAutoShadow.lua`). Auto tab, new "Auto Farm" section above Auto Training.
+  - **Evidence (Auto Parry diagnostics histories 1795076236 / 1795076353, place `135537125271116`):**
+    - J sends `Requests.Action("MeditationTrain")`. `Workspace.Live.Shadow` (NPC) appears ~0.2 s later about 20 studs away, and other players drop out of the 30-stud watch range. No teleport.
+    - A second J sends the same action and removes the Shadow, so **J toggles** the Inner World.
+    - The Shadow stayed for the whole fight (no win/respawn seen). PowerLevel rose while fighting/charging (e.g. 35 → 50).
+    - M1 sends `Action("MouseButton1")` with no aim argument (M2 carries a direction vector), so punches follow the character's facing.
+  - **User:** you take no damage, but enough hits kick you out; the farm should re-enter. Auto Parry should run alongside (user choice). M1 only for v1.
+  - **Trello:** the Inner World needs Meditation Type; "to farm solo you can mindlessly fight your shadow". The Gravity Chamber's L also spawns a fightable Shadow for any type (not used yet).
+  - **Behaviour:** finds the nearest `Live` model named Shadow (≤400 studs). If none for 2.5 s, presses J (every 6 s, stops after 3 tries with no Shadow). Walks to it with `Humanoid:MoveTo`, faces it within 12 studs, clicks M1 every 0.3 s within 6 studs. The click is placed outside the hub window. Pauses while chat/menu is open; stops on death, character change, teleport.
+  - **Unknowns it logs** (`sparkling_auto_shadow_latest.txt`): the Shadow's fields on first sighting (looking for an owner tag, in case another player's Shadow shares the name), ENTER/GONE (kick-outs), POWER every 10 s.
+  - Implemented / untested live.
 - 2026-11-17 — CEXP Finder v1 (SP-V011). The user's main reason for the Visuals tab is CEXP, which the client profile doesn't contain.
   - New **Recorders → Sparkling CEXP Finder**: start, talk to Varrik (and the Title Master), stop; auto-stops after 3 min. Output: `sparkling_cexp_capture_latest.txt`.
   - It logs every ReplicatedStorage RemoteEvent's incoming payloads, outgoing FireServer/InvokeServer calls **with their replies**, new or changed numeric text in PlayerGui and Workspace (NPC billboards), and TextChatService messages. It sends nothing.

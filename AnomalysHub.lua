@@ -367,6 +367,7 @@ end
 for _, name in ipairs({"Home", "General", "ESP", "Servers", "Settings"}) do makePage(name) end
 if env.__AnomalyDetectedProfile == "BeyondNen" then makePage("Auto") end
 if env.__AnomalyDetectedProfile == "HunterXEnter" or env.__AnomalyDetectedProfile == "Sparkling" then makePage("Auto") end
+
 -- Sparkling: Auto holds training (Auto Meditation); Auto Parry lives on Combat.
 if env.__AnomalyDetectedProfile == "Sparkling" then makePage("Combat"); makePage("Visuals") end
 if env.__AnomalyDetectedProfile == "HunterXEnter" or env.__AnomalyDetectedProfile == "Sparkling" then makePage("Recorders") end
@@ -3218,6 +3219,200 @@ controller.Connect(run.Heartbeat,function()
  end
  local value=mind()
  status.Text=string.format("Meditating. Presses: %d · sessions: %d%s",state.Presses,state.Sessions,value and (" · Ki "..value.." / "..CAP) or "")
+end)
+controller.Connect(player.OnTeleport,function()stop("Teleporting.")end)
+controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
+
+end)()
+;(function()
+-- Sparkling Auto Shadow Farm v1 (SP-A002). Fights your Shadow in the Inner World with normal key and mouse input; sends no game requests itself.
+-- Evidence (Auto Parry diagnostics, 2026-11-19, place 135537125271116): J sends Action("MeditationTrain") and Workspace.Live.Shadow appears
+-- ~0.2s later about 20 studs away; a second J sends the same action and removes it, so J toggles the Inner World. The Shadow stayed for the
+-- whole recorded fight (no win or respawn seen). User: you take no damage, but enough hits kick you out, so the farm re-enters with J.
+-- M1 sends Action("MouseButton1") with no aim argument, so punches follow the character's facing. Trello: Inner World needs Meditation Type.
+-- Defense is left to Auto Parry (Combat page). Reference: Auto Meditation's tap/release pattern and Hunter X Enter Auto Fish's archive logs.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local players=game:GetService("Players")
+local player=players.LocalPlayer
+local input=game:GetService("UserInputService")
+local guiService=game:GetService("GuiService")
+local run=game:GetService("RunService")
+local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
+local ui=controller.UI
+local page=ui.Pages.Auto
+if not page then return end
+
+local SEARCH,REACH=400,5
+local path="AnomalyHub/universal/sparkling_auto_shadow_latest.txt"
+local state={Enabled=false,Closed=false,Lines={},Held={},Seen={}}
+
+local function log(text)
+ if #state.Lines>=1500 then table.remove(state.Lines,1)end
+ table.insert(state.Lines,string.format("%.3f %s",os.clock(),text))
+end
+local function save()
+ if type(writefile)~="function" then return end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ pcall(writefile,path,"SPARKLING AUTO SHADOW FARM v1 // key and mouse input only\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
+  .." SHADOW = the Shadow's fields (looking for an owner tag), POWER = your PowerLevel, PAUSE = chat/menu open.\n"..table.concat(state.Lines,"\n"))
+end
+
+local section=ui.Section(page,"Auto Farm",96,true)
+section.Frame.LayoutOrder=-60
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,32),Size=UDim2.new(1,-28,0,58),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Off. Enters the Inner World with J, walks to your Shadow and punches (M1). Turn Auto Parry on for defense. Needs Meditation Type."},section.Body)
+local button
+
+local function release(item)
+ if item.Mouse then pcall(function()vim:SendMouseButtonEvent(item.X,item.Y,0,false,game,0)end)
+ else pcall(function()vim:SendKeyEvent(false,item.Key,false,game)end)end
+end
+local function releaseAll()
+ for _,item in ipairs(state.Held)do release(item)end
+ table.clear(state.Held)
+end
+local function tap(key)
+ local ok=pcall(function()vim:SendKeyEvent(true,key,false,game)end)
+ if ok then table.insert(state.Held,{Key=key,At=os.clock()+.06})end
+ return ok
+end
+-- Click below or beside the hub window so the punch reaches the game instead of the hub.
+local function clickPoint()
+ local size=workspace.CurrentCamera.ViewportSize
+ local x,y=size.X/2,size.Y*.75
+ local window=ui.Window
+ if ui.Gui.Enabled and window.Visible then
+  local inset=guiService:GetGuiInset()
+  local left,top=window.AbsolutePosition.X,window.AbsolutePosition.Y+inset.Y
+  local right,bottom=left+window.AbsoluteSize.X,top+window.AbsoluteSize.Y
+  if x>=left and x<=right and y>=top and y<=bottom then
+   if size.Y-bottom>40 then y=(bottom+size.Y)/2
+   elseif size.X-right>40 then x=(right+size.X)/2
+   elseif left>40 then x=left/2
+   else return nil end
+  end
+ end
+ return x,y
+end
+local function click()
+ local x,y=clickPoint()
+ if not x then return nil end
+ local ok=pcall(function()vim:SendMouseButtonEvent(x,y,0,true,game,0)end)
+ if ok then table.insert(state.Held,{Mouse=true,X=x,Y=y,At=os.clock()+.05})end
+ return ok
+end
+local function stop(reason)
+ if not state.Enabled then return end
+ state.Enabled=false;releaseAll()
+ button.Text="Auto Shadow Farm: OFF"
+ status.Text=string.format("%s Entries: %d, kicked out: %d, punches: %d.",reason,state.Entries,state.Kicks,state.Clicks)
+ log("STOP "..reason);save()
+end
+-- Every Live model named Shadow, nearest first. Another player's Shadow may share the name; the first sighting logs its fields to find an owner tag.
+local function findShadow(root)
+ local live=workspace:FindFirstChild("Live")
+ if not live then return nil end
+ local best,bestDistance,count=nil,nil,0
+ for _,model in ipairs(live:GetChildren())do
+  local part=model.Name=="Shadow" and model:IsA("Model") and not players:GetPlayerFromCharacter(model) and model:FindFirstChild("HumanoidRootPart")
+  if part and part:IsA("BasePart") then
+   local distance=(part.Position-root.Position).Magnitude
+   if distance<=SEARCH then
+    count+=1
+    if not best or distance<bestDistance then best,bestDistance=model,distance end
+   end
+  end
+ end
+ return best,bestDistance,count
+end
+local function describe(model)
+ if state.Seen[model] then return end
+ state.Seen[model]=true
+ local parts={}
+ for key,value in pairs(model:GetAttributes())do table.insert(parts,"@"..key.."="..tostring(value):sub(1,40))end
+ for _,child in ipairs(model:GetChildren())do
+  if child:IsA("ValueBase") then table.insert(parts,child.Name.."="..tostring(child.Value):sub(1,40))end
+ end
+ local humanoid=model:FindFirstChildOfClass("Humanoid")
+ log("SHADOW fields "..(humanoid and string.format("health=%.0f/%.0f ",humanoid.Health,humanoid.MaxHealth) or "")..table.concat(parts," "):sub(1,600))
+end
+local function power(character)
+ local value=character and character:FindFirstChild("PowerLevel")
+ return value and value:IsA("ValueBase") and tonumber(value.Value) or nil
+end
+local function toggle()
+ if state.Closed then return end
+ if state.Enabled then stop("Off.");return end
+ if not vim then status.Text="Key input is unavailable in this executor.";return end
+ local character=player.Character
+ local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+ if not humanoid or humanoid.Health<=0 then status.Text="Wait until your character is alive.";return end
+ state.Enabled=true;state.Lines={};state.Character=character;state.Entries=0;state.Kicks=0;state.Clicks=0;state.Tries=0
+ state.InWorld=false;state.MissingSince=nil;state.NextJ=0;state.NextMove=0;state.NextClick=0;state.NextPower=0;state.NextSave=0;state.Paused=false
+ table.clear(state.Seen)
+ button.Text="Auto Shadow Farm: ON";status.Text="On."
+ log("START power="..tostring(power(character)))
+end
+button=ui.Checkbox(section.Body,"Auto Shadow Farm","Auto Shadow Farm: OFF",toggle)
+button.Position=UDim2.fromOffset(14,0)
+
+controller.Connect(run.Heartbeat,function()
+ local now=os.clock()
+ for index=#state.Held,1,-1 do
+  local item=state.Held[index]
+  if now>=item.At then release(item);table.remove(state.Held,index)end
+ end
+ if state.Closed or not state.Enabled then return end
+ local character=player.Character
+ local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+ local root=character and character:FindFirstChild("HumanoidRootPart")
+ if character~=state.Character or not humanoid or humanoid.Health<=0 or not root then stop("Character changed or died.");return end
+ if input:GetFocusedTextBox() or guiService.MenuIsOpen then
+  if not state.Paused then state.Paused=true;releaseAll();log("PAUSE chat or menu")end
+  status.Text="Paused while chat or the Roblox menu is open."
+  return
+ end
+ if state.Paused then state.Paused=false;log("RESUME")end
+ if now>=state.NextPower then state.NextPower=now+10;log("POWER "..tostring(power(character)))end
+ if now>=state.NextSave then state.NextSave=now+10;save()end
+ local shadow,distance,count=findShadow(root)
+ if not shadow then
+  if state.InWorld then state.InWorld=false;state.Kicks+=1;log("GONE Shadow vanished (kicked out or the fight ended)");save()end
+  state.MissingSince=state.MissingSince or now
+  -- J toggles the Inner World, so it is only pressed after the Shadow has been missing for a while.
+  if now-state.MissingSince>=2.5 and now>=state.NextJ then
+   if state.Tries>=3 then stop("Pressed J 3 times and no Shadow appeared. The Inner World needs Meditation Type.");return end
+   state.NextJ=now+6;state.Tries+=1
+   if tap(Enum.KeyCode.J)then log("PRESS J (enter the Inner World) try "..state.Tries)else stop("Key input failed.");return end
+  end
+  status.Text=string.format("Entering the Inner World... Entries: %d · kicked out: %d",state.Entries,state.Kicks)
+  return
+ end
+ state.MissingSince=nil;state.Tries=0
+ if not state.InWorld then
+  state.InWorld=true;state.Entries+=1
+  log(string.format("ENTER Shadow at %.1f studs, %d Shadow model(s) in range",distance,count))
+ end
+ describe(shadow)
+ local target=shadow.HumanoidRootPart.Position
+ local enemy=shadow:FindFirstChildOfClass("Humanoid")
+ if distance>REACH-1 and now>=state.NextMove then state.NextMove=now+.25;humanoid:MoveTo(target)end
+ if distance<=12 then
+  local flat=Vector3.new(target.X,root.Position.Y,target.Z)
+  if (flat-root.Position).Magnitude>.5 then root.CFrame=CFrame.lookAt(root.Position,flat)end
+ end
+ if distance<=REACH+1 and now>=state.NextClick and (not enemy or enemy.Health>0) then
+  state.NextClick=now+.3
+  local ok=click()
+  if ok==nil then status.Text="The hub covers the screen; hide it (Right Alt) so punches reach the game.";return end
+  if not ok then stop("Mouse input failed.");return end
+  state.Clicks+=1
+ end
+ status.Text=string.format("Fighting your Shadow (%.0f studs). Entries: %d · kicked out: %d · punches: %d · power %s",
+  distance,state.Entries,state.Kicks,state.Clicks,tostring(power(character) and math.floor(power(character)) or "?"))
 end)
 controller.Connect(player.OnTeleport,function()stop("Teleporting.")end)
 controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)

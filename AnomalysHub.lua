@@ -4524,6 +4524,133 @@ controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
 
 end)()
 ;(function()
+-- Sparkling CEXP tracker v1 (SP-048). CEXP is only revealed by Varrik's paid check (SP-047), so this counts what you do between
+-- checks; comparing consecutive checks shows which activities give CEXP. Trello: "You gain CombatEXP through queues, fighting and
+-- quests"; a completed queue gives 100 (200 for Battle type). Read-only: listens to events the game already sends you.
+-- Effects formats are from the parry diagnostics: ("EmitReferenceParticle", yourCharacter, "HitOut") = your hit landed,
+-- (…, "Blunt") = you were hit, ("Weave", yourCharacter, "Counter Parry!"/"Perfect Counter!") = your counter.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local players=game:GetService("Players")
+local rs=game:GetService("ReplicatedStorage")
+local run=game:GetService("RunService")
+local http=game:GetService("HttpService")
+local player=players.LocalPlayer
+
+local COUNTS="AnomalyHub/universal/sparkling_cexp_counters.json"
+local HISTORY="AnomalyHub/universal/sparkling_cexp_history.txt"
+local KEYS={"HitsLanded","HitsTaken","Counters","PerfectCounters","ShadowSeconds","ShadowHits","OtherFightSeconds","PLGained","ZeniEarned","JobsPaid","Deaths"}
+local counts={Since=os.time()}
+for _,key in ipairs(KEYS)do counts[key]=0 end
+local function folder()
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+end
+if type(readfile)=="function"then
+ local ok,text=pcall(readfile,COUNTS)
+ local got,data=ok and pcall(function()return http:JSONDecode(text)end)
+ if got and type(data)=="table" then for key,value in pairs(data)do if counts[key]~=nil and tonumber(value)then counts[key]=tonumber(value)end end end
+end
+local function saveCounts()
+ if type(writefile)~="function" then return end
+ folder();pcall(writefile,COUNTS,http:JSONEncode(counts))
+end
+local function zeni()
+ local gui=player:FindFirstChildOfClass("PlayerGui")
+ local inventory=gui and gui:FindFirstChild("Inventory")
+ local label=inventory and inventory:FindFirstChild("hh",true)
+ local digits=label and label:IsA("TextLabel") and label.Text:match("Zeni:%s*([%d,]+)")
+ return digits and tonumber((digits:gsub(",","")))
+end
+local function power()
+ local value=player.Character and player.Character:FindFirstChild("PowerLevel")
+ return value and value:IsA("ValueBase") and tonumber(value.Value) or nil
+end
+-- Your own Inner World Shadow nearby (the farm's owner rule).
+local function inShadowWorld(root)
+ local live=workspace:FindFirstChild("Live")
+ if not live or not root then return false end
+ for _,model in ipairs(live:GetChildren())do
+  if model.Name=="Shadow" and not players:GetPlayerFromCharacter(model)then
+   local owner=model:GetAttribute("Player")
+   local part=model:FindFirstChild("HumanoidRootPart")
+   if (owner==nil or owner==player.Name) and part and (part.Position-root.Position).Magnitude<400 then return true end
+  end
+ end
+ return false
+end
+
+local requests=rs:FindFirstChild("Requests")
+local effects=requests and requests:FindFirstChild("Effects")
+local lastHitAt=-math.huge
+local shadowNow=false
+if effects and effects:IsA("RemoteEvent")then
+ controller.Connect(effects.OnClientEvent,function(kind,model,message)
+  if model~=player.Character then return end
+  if kind=="EmitReferenceParticle" and message=="HitOut" then
+   counts.HitsLanded+=1;lastHitAt=os.clock()
+   if shadowNow then counts.ShadowHits+=1 end
+  elseif kind=="EmitReferenceParticle" and message=="Blunt" then counts.HitsTaken+=1;lastHitAt=os.clock()
+  elseif kind=="Weave" and message=="Counter Parry!" then counts.Counters+=1
+  elseif kind=="Weave" and message=="Perfect Counter!" then counts.PerfectCounters+=1 end
+ end)
+end
+-- Varrik's answer: write a history line with everything counted since the previous check, then start counting again.
+local dialogue=requests and requests:FindFirstChild("Dialogue")
+if dialogue and dialogue:IsA("RemoteEvent")then
+ controller.Connect(dialogue.OnClientEvent,function(data)
+  local msg=type(data)=="table" and data.msg
+  local amount=type(msg)=="string" and msg:match("[Yy]ou have%s+([%d,]+)%s+combat experience")
+  amount=amount and tonumber((amount:gsub(",","")))
+  if not amount then return end
+  local previous
+  if type(readfile)=="function"then
+   local ok,text=pcall(readfile,HISTORY)
+   if ok and type(text)=="string"then for value in text:gmatch("CEXP=(%d+)")do previous=tonumber(value)end end
+  end
+  local parts={os.date("%Y-%m-%d %H:%M:%S"),"CEXP="..amount,"change="..(previous and tostring(amount-previous) or "first"),
+   "PL="..tostring(power() and math.floor(power()) or "?"),"Zeni="..tostring(zeni() or "?"),"minutes="..math.floor((os.time()-counts.Since)/60)}
+  for _,key in ipairs(KEYS)do table.insert(parts,key.."="..math.floor(counts[key]))end
+  local line=table.concat(parts," ")
+  if type(writefile)=="function"then
+   folder()
+   local ok,old=pcall(readfile,HISTORY)
+   pcall(writefile,HISTORY,((ok and type(old)=="string") and old or "SPARKLING CEXP HISTORY // one line per Varrik check; counters cover the time since the previous check\n")..line.."\n")
+  end
+  for _,key in ipairs(KEYS)do counts[key]=0 end
+  counts.Since=os.time();saveCounts()
+  controller.SparklingCexpLast=line
+ end)
+end
+-- Once a second: time in the Inner World or in other fights, Power Level and Zeni gains, deaths.
+local lastPL,lastZeni,dead,nextSave,elapsed=power(),zeni(),false,os.clock()+30,0
+controller.Connect(run.Heartbeat,function(dt)
+ elapsed+=dt
+ if elapsed<1 then return end
+ local step=elapsed;elapsed=0
+ local character=player.Character
+ local root=character and character:FindFirstChild("HumanoidRootPart")
+ local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+ if humanoid and humanoid.Health<=0 then
+  if not dead then dead=true;counts.Deaths+=1 end
+ elseif humanoid then dead=false end
+ shadowNow=inShadowWorld(root)
+ if shadowNow then counts.ShadowSeconds+=step elseif os.clock()-lastHitAt<5 then counts.OtherFightSeconds+=step end
+ local pl=power()
+ if pl and lastPL and pl>lastPL then counts.PLGained+=pl-lastPL end
+ lastPL=pl or lastPL
+ local money=zeni()
+ if money and lastZeni and money>lastZeni then
+  counts.ZeniEarned+=money-lastZeni
+  if money-lastZeni==200 then counts.JobsPaid+=1 end
+ end
+ lastZeni=money or lastZeni
+ if os.clock()>=nextSave then nextSave=os.clock()+30;saveCounts()end
+end)
+controller.RegisterCleanup(saveCounts)
+
+end)()
+;(function()
 -- Combat page v16 / diagnostics v7: shared NPC/player policy at user request (SP-034); hits 3-4 skipped, hit 5 seed 0.
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.

@@ -215,3 +215,7 @@ The user explicitly requested applying Claude’s NPC auto-parry behavior to pla
 ### Sparkling other-player Visuals and Profile Scan v2 (2026-11-19)
 
 Visuals v5 shows selected-character live resources and condition fields when present, keeps temporary stats separate from allocated stats, and collapses unavailable other-player profile rows. The existing Run Profile Scan now includes other-player values/attributes without the old keyword filter, retaining object limits and an explicit 6,000-line truncation marker. Captures stay local; no requests are sent. See [SP-046](docs/games/sparkling.md) for verified sources, missing data and validation.
+
+## Sparkling shared-observer namecall constraint (SP-080)
+
+The shared outgoing observer runs before the original __namecall forwards. Observer callbacks must avoid Roblox Instance method calls (including HttpService:JSONEncode, GetFullName and IsA), because they can replace the active method and break the original remote call. Queue bounded plain-Lua snapshots and perform serialization/Instance inspection outside the hook. NPC trace v1 violated this and disrupted requests; v2 fixes the standalone observer without modifying the hub. Regression checks must model namecall dispatch state, not just callback ownership/cleanup. Raw v1 NPC captures are invalid for reward validation; see SP-080 in the Sparkling note.

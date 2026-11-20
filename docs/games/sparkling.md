@@ -1910,3 +1910,14 @@ Health loss here is the sum of client health decreases, not a count of enemy att
 - [1] (key minigame) and Floor Staff are unchanged. Source and both variants compile; no live test yet.
 
 **Next step:** run Auto Job at the Scientific Engineer board with the job at [2]. Check that the counter passes 300, how the minigame ends, the pay, and whether 8 clicks/s registers 1:1.
+
+## SP-072 — Auto Job v1.5: [2] minigame clicks at full speed (2026-11-20, Claude)
+
+**User:** "full blast the auto click".
+
+**Implemented / untested live:**
+- The Scientific Engineer [2] click minigame (SP-071) now presses the mouse on one frame and releases it on the next. That is ~30 clicks/s at 60 FPS (`CLICK_RATE=30`, hold 0), up from 8/s with a 60 ms hold.
+- Nothing else changed. Source and both variants compile.
+- Unknown: whether the server counts every click at this rate, and whether it reacts to it.
+  - The `MINIGAME2 closed` line logs clicks vs counter, so a capped count will show as counter << clicks.
+  - If it caps, lower CLICK_RATE to the rate that still counts 1:1.

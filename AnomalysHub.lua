@@ -4182,7 +4182,7 @@ controller.RegisterCleanup(function()stop("Unloaded.")end)
 
 end)()
 ;(function()
--- Sparkling Auto Job v1.4 (SP-042/043/071). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
+-- Sparkling Auto Job v1.5 (SP-042/043/071/072). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
 -- Evidence (Job Recorder, SP-040, 2026-11-19): a job is taken from a "Take Quest" prompt (Floor Staff: Workspace.NPCs.Thlentil;
 -- Scientific Engineer: Workspace.Map.Model.Model.Paperworks), which creates PlayerGui.Mission ("Progress: a/b"). Floor Staff: one
 -- "Spill" prompt under Workspace.Quest.Spills moves after each wipe; progress rises ~2.2 s after the prompt; at 10/10 the game sends
@@ -4195,6 +4195,7 @@ end)()
 -- (344 counter steps for 356 clicks). The job level picks the prompt, the minigame is answered with clicks, and the prompt is no
 -- longer re-pressed while a minigame is open (v1.3 pressed it every 1.2 s, and both recorded attempts closed early at 133 / 150).
 -- The finish has not been recorded yet: [2] counts as done only when the job window shows its progress complete.
+-- v1.5 (SP-072, user request "full blast"): [2] clicks at ~30/s instead of 8/s.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -4210,7 +4211,9 @@ if not page then return end
 
 local SEARCH=150          -- studs to look for job prompts
 local TAP_RATE=5          -- minigame key presses per second (the user did ~4/s; the goal is over 50 in 60 s)
-local CLICK_RATE=8        -- [2] minigame clicks per second (the user did ~4/s; the goal is over 300 in 60 s, so at least 5/s)
+-- [2] minigame clicks per second (the user did ~4/s; the goal is over 300 in 60 s, so at least 5/s). User asked for full speed:
+-- press on one frame, release on the next, so ~30/s at 60 FPS. Whether the server counts them all shows in MINIGAME2 closed.
+local CLICK_RATE=30
 local path="AnomalyHub/universal/sparkling_auto_job_latest.txt"
 local state={Enabled=false,Closed=false,Lines={},Held={}}
 
@@ -4221,7 +4224,7 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- pcall(writefile,path,"SPARKLING AUTO JOB v1.4 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop/tablet, PROGRESS = window text, MINIGAME2 = the [2] click minigame,"
+ pcall(writefile,path,"SPARKLING AUTO JOB v1.5 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop/tablet, PROGRESS = window text, MINIGAME2 = the [2] click minigame,"
   .." DONE = job finished (pay arrives from the game), QUIT = pressed [ Quit ], ZENI = inventory label.\n"..table.concat(state.Lines,"\n"))
 end
 
@@ -4372,9 +4375,9 @@ end
 -- Presses now rotate through the click at the centre, the centre shifted up/down by the top-bar inset, and the button's own
 -- click handlers (getconnections); whichever makes the box go away is kept for later presses (logged as PRESS_WORKED).
 local METHODS={"click","click-inset","click+inset","handlers"}
-local function clickAt(x,y)
+local function clickAt(x,y,hold)
  local ok=pcall(function()vim:SendMouseButtonEvent(x,y,0,true,game,0)end)
- if ok then table.insert(state.Held,{Mouse=true,X=x,Y=y,At=os.clock()+.06})end
+ if ok then table.insert(state.Held,{Mouse=true,X=x,Y=y,At=os.clock()+(hold or .06)})end
  return ok
 end
 local function fireHandlers(object)
@@ -4527,7 +4530,8 @@ local function step(now)
    if job and job.Quit then table.insert(avoid,job.Quit)end
    local x,y=freeClickPoint(avoid)
    if not x then status.Text="The hub covers the middle of the screen; move the hub (or hide it with Right Alt).";return end
-   if clickAt(x,y)then state.Clicks+=1 end
+   -- Hold 0: released at the next Heartbeat.
+   if clickAt(x,y,0)then state.Clicks+=1 end
   end
   status.Text=string.format("Scientific Engineer [2]: clicking (counter %s, %s). Jobs finished: %d",tostring(game2.Counter),game2.Timer,state.Jobs)
   return

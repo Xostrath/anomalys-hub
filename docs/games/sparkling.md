@@ -1427,3 +1427,5 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 **Cause (source inspection):** loading `sparkling_cexp_value.txt` ("1808 1795127153") used `local value,at=ok and text:match(...)`, which keeps only the first capture, so `cexp.At` was nil and the row's age calculation errored; the row's pcall then fell back to "Unavailable". It worked in the session that heard Varrik because the listener sets both fields. Same pattern as the CEXP tracker load bug (SP-050).
 
 **Fixed / untested live:** the match runs first, then `ok` is checked. After a reload, the row should read "1,808 (Varrik, N h ago)".
+
+**Same bug in Auto Job (source inspection):** the Floor Staff progress read (`local a,b=amount and amount.Text:match(...)`) lost the total, so "10/10" was never seen as finished and logs printed `progress=N/nil`; finishing relied on the Restart box instead. Fixed (both captures assigned directly). Untested live: the next Floor Staff run should log `PROGRESS N/10` and `DONE` at 10/10.

@@ -4214,7 +4214,9 @@ local function mission()
  local main=m and m:FindFirstChild("Main")
  if not main then return nil end
  local name=main:FindFirstChild("NameLabel");local amount=main:FindFirstChild("Amount")
- local a,b=amount and amount.Text:match("(%d+)%s*/%s*(%d+)")
+ -- Logical and keeps only the first match capture; assign both directly.
+ local a,b
+ if amount and amount:IsA("TextLabel")then a,b=amount.Text:match("(%d+)%s*/%s*(%d+)")end
  return {Gui=m,Main=main,Name=name and name.Text or "",Done=tonumber(a),Total=tonumber(b),Quit=main:FindFirstChild("Cancel")}
 end
 local function minigame()

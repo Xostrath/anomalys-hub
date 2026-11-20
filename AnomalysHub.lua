@@ -2679,8 +2679,10 @@ local cexpPath="AnomalyHub/universal/sparkling_cexp_value.txt"
 local cexp={}
 if type(readfile)=="function"then
  local ok,text=pcall(readfile,cexpPath)
- local value,at=ok and tostring(text):match("^(%d+)%s+(%d+)")
- if value then cexp.Value,cexp.At=tonumber(value),tonumber(at)end
+ -- Logical and keeps only the first match capture; match first, then check ok.
+ local value,at
+ if ok then value,at=tostring(text):match("^(%d+)%s+(%d+)")end
+ if value then cexp.Value,cexp.At=tonumber(value),tonumber(at) or os.time()end
 end
 local dialogue=rs:FindFirstChild("Requests") and rs.Requests:FindFirstChild("Dialogue")
 if dialogue and dialogue:IsA("RemoteEvent")then

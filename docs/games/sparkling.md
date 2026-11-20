@@ -1419,3 +1419,11 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 **Source:** the profile's `GravityMastery` number (hidden scan 2026-11-19: `GravityMastery=1` for the user). It was previously only a " · Gravity N" suffix on Form Mastery. It is not replicated for other players (characters carry `GravityAugment`, 0 for everyone scanned, meaning unknown), so other players show "Hidden (only shown for you)".
 
 **Implemented / untested live — Visuals:** a "Gravity Mastery" row shows the value and the next unlock from the in-game guide: Kaioken 10, Power Release (TriHuman) 80, Golden (Acrosian) 100, Astral State (Alien) 120, e.g. "1 · next 10 (Kaioken, 9 to go)". The suffix on Form Mastery was removed.
+
+## SP-054 — Visuals CEXP row showed "Unavailable" after a hub reload (2026-11-19, Claude)
+
+**User:** "cexp shows up unavailable".
+
+**Cause (source inspection):** loading `sparkling_cexp_value.txt` ("1808 1795127153") used `local value,at=ok and text:match(...)`, which keeps only the first capture, so `cexp.At` was nil and the row's age calculation errored; the row's pcall then fell back to "Unavailable". It worked in the session that heard Varrik because the listener sets both fields. Same pattern as the CEXP tracker load bug (SP-050).
+
+**Fixed / untested live:** the match runs first, then `ok` is checked. After a reload, the row should read "1,808 (Varrik, N h ago)".

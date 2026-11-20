@@ -20,7 +20,7 @@ Last reviewed: 2026-11-20. This is the initial consolidated handoff from the ava
 | Feature | Current behavior | Evidence / status | Remaining question |
 | --- | --- | --- | --- |
 | Combat PL/CEXP investigation | Input action path and server-oriented mission CEXP reward code identified | SP-077: 25 scripts captured/reviewed; no grant tested | Server reward caller, GainBoost implementation and combat PL formula remain missing; decompiler flow needs corroboration |
-| Item/CEXP reward investigation | Early daily claim unsuccessful; no arbitrary grant established | SP-075: live State stayed unclaimed; observed balances/tools unchanged; no Claimed event | Duplicate claims remain untested; CEXP was absent from profile response |
+| Item/CEXP reward investigation | Normal daily capsule granted once; early and sequential duplicate attempts unsuccessful | SP-075/SP-079: server state and item counts support negative bypass results | Other grant routes unverified; CEXP absent from profile response; NPC trace pending |
 | Visuals other-player stats | v5.2: Shield/Hunger/Overcharge removed; injuries >=70%; Zeni parser fixed; Race Potential labeled honestly | SP-048: 59 mock assertions and compilation; source fields observed in SP-047 | Allocated base stats/private balances and actual latent-power mapping remain unavailable or unconfirmed; live UI unverified |
 | Profile identity | Universe routing labels the hub Sparkling across places | Implemented | Do not equate place coverage with identical remotes |
 | Interface | Shared Hunter X Enter design; isolated UI root | User-confirmed visual correction | Preserve isolation from game styling |
@@ -2034,3 +2034,15 @@ Stops 20 seconds after target death/removal candidate, on rerun, hub unload, cha
 **Validation:** standalone Luau compilation and 45 mock assertions across seven lifecycle scenarios passed: target death with 20-second aftermath, five-minute timeout/chunk rotation, ownership loss preserving another callback, rerun stop, busy hooks, unavailable hooks, disk failure cleanup. Installed file hash matches the prepared artifact. These are mock checks, not live recorder or reward validation.
 
 **Next handoff:** user turns off Auto Parry/other recorders, stands near one enemy NPC, runs the standalone script and fights the announced target normally. Analyze the manifest, all referenced parts, coverage and candidate-defeat window before inferring any client completion request. CEXP may remain absent from profile responses; lack of a measured CEXP delta is not proof of no gain. Do not conflate ordinary combat actions, recorder-generated profile reads, ambiguous nearby-player kills or server effects with a grant endpoint.
+
+## SP-079 — Normal daily capsule granted; duplicate claim gave no second reward (2026-11-20)
+
+**Verified live outcome for this test:** duplicate-only v2 completed in place 110405289082842, 9.717 seconds, two Claim requests. Frozen local history ending 1795199722. Baseline State: played=1800/need=1800, claimed=false, day 1 reward Capsule, pending=false. Baseline inventory contained no breakthrough capsule.
+
+**Positive control:** normal Claim at t=0.2178 s received Claimed at t=0.3331 s, reward list containing Capsule, claimed=true. Fresh State at t=3.8335 s confirmed claimed=true. The after-control inventory contained one Breakthrough Capsule (Event). This verifies an ordinary eligible reward acknowledgment plus item appearance; persistence/use after rejoin was not tested.
+
+**Duplicate attempt:** second Claim at t=3.9497 s, 3.732 seconds after the first request and after confirmed claimed state. At t=4.0650 s the server sent State, still claimed=true/pending=false, without a reward list. A separate later State again confirmed claimed=true. No second Claimed event appeared. Final inventory still contained exactly one capsule and the same other tools. All three profile reads succeeded; Zeni, PowerLevel and EventWins were unchanged throughout. CEXP was absent from profile responses and this was a capsule reward, so this is not a direct CEXP duplication measurement.
+
+**Conclusion:** the straightforward sequential duplicate daily claim failed; normal eligibility and repeated-claim state were enforced in the observed tests (SP-075/SP-079). Do not label the normal first capsule as a successful dupe, or claim that every possible reward route is secure. No further repetition of the same sequential call is indicated. No code changes or new tests were run for this findings-only update. Raw inventory/profile data remains local.
+
+**Handoff:** daily claim branch has a successful legitimate control and negative early/duplicate results. Continue the separate SP-078 normal NPC reward trace; this daily test provides no NPC defeat/caller evidence. The user's report here referred specifically to the duplicate test, not completion of the NPC recording.

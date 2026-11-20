@@ -4676,6 +4676,7 @@ end)()
 -- v16.5 (SP-049): Warrior Clan Rogue combo mapped for NPCs (hits 2, 3, 5 pressed; 1 and 4 too fast).
 -- v16.6 (SP-050): rogue heavy pressed at 0.30 s; heavy defer cut to 0.40 s (presses at 0.5 s landed after the hit).
 -- v16.7 (SP-051): rogue heavy ignores the facing checks (5/5 pressed were Perfect Counters; 6 skipped for facing hit us).
+-- v16.8 (SP-056): non-colliding combat effects under Workspace.Thrown no longer count as line-of-sight obstacles.
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -4885,7 +4886,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=per_style_catalog timingTrial=player_set_b_initial range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -4997,6 +4998,9 @@ local function cosmeticObstacle(instance)
   if thrown and cursor.Name=="Zvanishdummy" and cursor:IsA("Model") and cursor.Parent==thrown then return cursor,"zvanish_dummy"end
   cursor=cursor.Parent
  end
+ -- SP-056: combat effects (explosions, wall-crack balls, effect meshes) under Thrown are non-colliding and blocked 10 cues
+ -- on Earth; only that exact part is excluded, collidable Thrown parts still block.
+ if thrown and instance:IsA("BasePart") and not instance.CanCollide and instance:IsDescendantOf(thrown)then return instance,"thrown_effect"end
 end
 local function logLosObject(instance,excluded,kind)
  if not session or session.LosObjects[instance] or session.LosObjectCount>=32 then return end
@@ -5032,7 +5036,7 @@ local function threat(model,rangeLimit,anyFacing)
  params.FilterDescendantsInstances={char,model}
  local exclusions={char,model}
  local ignored={}
- for _=1,5 do
+ for _=1,8 do
   params.FilterDescendantsInstances=exclusions
   local hit=workspace:Raycast(other.Position,delta,params)
   if not hit then return true,"clear",detail.." los=clear ignoredCosmetics="..table.concat(ignored,",")end

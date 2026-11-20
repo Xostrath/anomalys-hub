@@ -1449,3 +1449,16 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 - **Tracker caveat:** `PLGained`=313,963 adds every upward Power Level tick (the shown PL drops and recovers with fatigue/injury/health), so it overstates the gain; the net change is 67,314 → 99,183 = **+31,869**. Use the PL field in the history line.
 
 **Next step:** one source per Varrik check (5,000 Zeni each), e.g. 15 minutes of rogues only, then 15 minutes of PvP only, to price each source.
+
+## SP-056 — Saiyan Grunt ambush and EX Wolf Fang fights: no new attacks; effects blocked line of sight; own punches (2026-11-19, Claude)
+
+**Evidence (Verified from captures):** histories 1795134532 (186 s, place 135537125271116, two `SaiyanGrunt1_ambush` NPCs plus Nahray; ended in a death) and 1795134947 (135 s, place 110405289082842 Earth, three `EXWolfFang`), v16.7.
+- **Every hit we took that traces to an NPC (attacker HitOut within 60 ms) came from an already-mapped animation.** Grunts: hit 1 `114493250337466` 19, hit 2 `84394230178792` 10, hit 3 `95937874840716` 10 (lead 118 ms), hit 4 `139487903747364` 8 (lead 85 ms). The ambush grunts play them at speed 1.15. EX Wolf Fang uses the rogue combo: hit 1 `78875817992139` 20 (lead 117 ms), hit 2 10, hit 4 9, hit 3 8, hit 5 3. 11 + 10 hits had no NPC HitOut (unclear source). The many unmapped animations nearby did not precede our hits from the same attacker.
+- **Press timing is identical for counters and failures:** grunt hits 1/2 pressed 50–53 ms after the start with the result ~183 ms later, and rogue hits 2/3 at 2 ms. Grunt hit 2: 9 counters / 5 Blunt; grunt hit 1: 3 / 4 (+5 no outcome, 2 blocks); grunt hit 5: 4 / 4; rogue heavy: 5 Perfect Counters / 2 Blunt; rogue hit 2: 4 / 3; hit 3: 2 / 2 (+1 `Dodged!`).
+- **Own punches:** for presses where the user's own M1 went down within ~220 ms before the press, 15 of 22 failed; otherwise 11 of 32 failed (repeats SP finding: own attacks block the counter).
+- **Line of sight (bug):** on Earth, 10 cues were skipped for `line_of_sight` and 6 of those hit us. Every obstacle was a non-colliding combat effect under `Workspace.Thrown` (`Main.In1`/`in2` meshes ~20×10×8, `explosion`, `WallCrack.Ball`, `Part`).
+- **Death (place 135537125271116):** grunt combos took health 19.7 → 1 between 175.7 and 182.6 s (hits 3 and 4 too fast, one heavy skipped by the counter cooldown, two by attacker facing); health went to 0 at 185.8 s while knocked.
+
+**Implemented / untested live — Combat page v16.8:** a non-colliding BasePart under `Workspace.Thrown` is excluded from the line-of-sight ray (logged `exclusion=thrown_effect`); collidable Thrown parts still block, and up to 8 exclusions per check (was 5).
+
+**Next step:** decide whether Auto Parry should hold back the user's own M1 for the ~200 ms before a mapped NPC hit lands (asked the user).

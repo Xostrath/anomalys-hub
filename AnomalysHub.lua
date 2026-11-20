@@ -4182,13 +4182,19 @@ controller.RegisterCleanup(function()stop("Unloaded.")end)
 
 end)()
 ;(function()
--- Sparkling Auto Job v1.3 (SP-042/043). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
+-- Sparkling Auto Job v1.4 (SP-042/043/071). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
 -- Evidence (Job Recorder, SP-040, 2026-11-19): a job is taken from a "Take Quest" prompt (Floor Staff: Workspace.NPCs.Thlentil;
 -- Scientific Engineer: Workspace.Map.Model.Model.Paperworks), which creates PlayerGui.Mission ("Progress: a/b"). Floor Staff: one
 -- "Spill" prompt under Workspace.Quest.Spills moves after each wipe; progress rises ~2.2 s after the prompt; at 10/10 the game sends
 -- its own reward request. Scientific Engineer: the "Capsule Minigame" laptop prompt opens PlayerGui.CapsuleMission1 for 60 s; press
 -- the key it shows (Button.TextLabel) as often as possible, aim for over 50. Both paid +200 Zeni, but the Mission window stays open
 -- afterwards; its [ Quit ] button clears it. Uses prompt holds and key/mouse input like playing by hand; sends no requests itself.
+-- v1.4 (SP-071, Job Recorder 1795169603): after 12 runs the job became "Scientific Engineer [2]" (Pay $500). Its minigame is the
+-- Tablet prompt (Workspace.Map.Tablet...CapsuleMinigame2; the laptop prompt does nothing for [2]), which opens
+-- PlayerGui.CapsuleMission2: "Time: 60s(Aim for over 300)" and a Counter that rose by one ~90 ms after every mouse click anywhere
+-- (344 counter steps for 356 clicks). The job level picks the prompt, the minigame is answered with clicks, and the prompt is no
+-- longer re-pressed while a minigame is open (v1.3 pressed it every 1.2 s, and both recorded attempts closed early at 133 / 150).
+-- The finish has not been recorded yet: [2] counts as done only when the job window shows its progress complete.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -4204,6 +4210,7 @@ if not page then return end
 
 local SEARCH=150          -- studs to look for job prompts
 local TAP_RATE=5          -- minigame key presses per second (the user did ~4/s; the goal is over 50 in 60 s)
+local CLICK_RATE=8        -- [2] minigame clicks per second (the user did ~4/s; the goal is over 300 in 60 s, so at least 5/s)
 local path="AnomalyHub/universal/sparkling_auto_job_latest.txt"
 local state={Enabled=false,Closed=false,Lines={},Held={}}
 
@@ -4214,7 +4221,7 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- pcall(writefile,path,"SPARKLING AUTO JOB v1.3 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop, PROGRESS = window text,"
+ pcall(writefile,path,"SPARKLING AUTO JOB v1.4 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop/tablet, PROGRESS = window text, MINIGAME2 = the [2] click minigame,"
   .." DONE = job finished (pay arrives from the game), QUIT = pressed [ Quit ], ZENI = inventory label.\n"..table.concat(state.Lines,"\n"))
 end
 
@@ -4259,6 +4266,13 @@ local function minigame()
  local counter=m:FindFirstChild("Main") and m.Main:FindFirstChild("Counter")
  return {Gui=m,Key=label and label.Text or "",Counter=counter and tonumber(counter.Text:match("(%d+)")) or nil}
 end
+local function minigame2()
+ local g=gui();local m=g and g:FindFirstChild("CapsuleMission2")
+ if not m or (m:IsA("ScreenGui") and not m.Enabled) then return nil end
+ local main=m:FindFirstChild("Main")
+ local counter=main and main:FindFirstChild("Counter");local timer=main and main:FindFirstChild("Timer")
+ return {Gui=m,Counter=counter and tonumber(counter.Text:match("(%d+)")) or nil,Timer=timer and timer.Text or "",Quit=main and main:FindFirstChild("Cancel")}
+end
 local function restartYes()
  local g=gui();local r=g and g:FindFirstChild("RestartMission")
  if not r or (r:IsA("ScreenGui") and not r.Enabled) then return nil end
@@ -4292,9 +4306,10 @@ end
 -- Nearest enabled prompt with this action text within SEARCH studs. The map is scanned at most twice a second and the
 -- result kept for 2 s (the spill prompt is one object that moves, so its position is re-read each time).
 local promptCache={}
-local function findPrompt(root,action,under,accept)
+local function findPrompt(root,action,under,accept,cacheKey)
  local now=os.clock()
- local entry=promptCache[action]
+ cacheKey=cacheKey or action
+ local entry=promptCache[cacheKey]
  if entry and now<entry.Until then
   local prompt=entry.Prompt
   if not prompt then return nil end
@@ -4312,7 +4327,7 @@ local function findPrompt(root,action,under,accept)
    end
   end
  end
- promptCache[action]={Prompt=best,Until=now+(best and 2 or .5),NextScan=now+.5}
+ promptCache[cacheKey]={Prompt=best,Until=now+(best and 2 or .5),NextScan=now+.5}
  return best,bestDistance
 end
 local DIGITS={["0"]="Zero",["1"]="One",["2"]="Two",["3"]="Three",["4"]="Four",["5"]="Five",["6"]="Six",["7"]="Seven",["8"]="Eight",["9"]="Nine"}
@@ -4401,9 +4416,30 @@ local function clickButton(object)
  -- ok only means the input call did not error; whether it pressed the button shows in PRESS_WORKED.
  return clickAt(x,y),detail..string.format(" click=(%d,%d)",x,y)
 end
+-- [2] minigame: any click counts, so click open screen. Skip points under the hub window or near a [ Quit ] button (each rect
+-- is stretched down by the top-bar inset, since whether input coordinates include it differs by ScreenGui).
+local function freeClickPoint(avoid)
+ local camera=workspace.CurrentCamera
+ if not camera then return nil end
+ local size=camera.ViewportSize
+ local inset=guiService:GetGuiInset().Y
+ local function covered(x,y,object,pad)
+  if not (object and object:IsA("GuiObject") and object.Visible) then return false end
+  local p,s=object.AbsolutePosition,object.AbsoluteSize
+  return x>=p.X-pad and x<=p.X+s.X+pad and y>=p.Y-pad and y<=p.Y+s.Y+inset+pad
+ end
+ for _,spot in ipairs({{.5,.55},{.35,.65},{.65,.65},{.5,.78}})do
+  local x,y=math.floor(size.X*spot[1]),math.floor(size.Y*spot[2])
+  local blocked=ui.Gui.Enabled and covered(x,y,ui.Window,10)
+  for _,object in ipairs(avoid)do if covered(x,y,object,30) then blocked=true end end
+  if not blocked then return x,y end
+ end
+ return nil
+end
 local function resetJob(now)
  state.DoneAt=nil;state.QuitTries=0;state.MinigameSeen=false;state.MinigameDone=false;state.MinigameStart=nil
  state.LastCounter=nil;state.CounterAt=now;state.SpillWait=nil;state.LastProgressAt=now
+ state.Game2Seen=false;state.Game2Counter=nil;state.Game2Timer=nil;state.Game2Start=nil;state.Clicks=0
 end
 local function toggle()
  if state.Closed then return end
@@ -4440,6 +4476,7 @@ local function step(now)
  end
  local job=mission()
  local game1=minigame()
+ local game2=minigame2()
  local yes=restartYes()
  -- Which of these clears a finished window is not known yet (SP-042); log every change.
  if (yes~=nil)~=state.RestartShown then
@@ -4473,6 +4510,33 @@ local function step(now)
    status.Text=string.format("Scientific Engineer minigame: pressing %s (counter %s). Jobs finished: %d",game1.Key,tostring(game1.Counter),state.Jobs)
    return
   end
+ end
+ -- Scientific Engineer [2] minigame running: click, since every click raises its counter. The prompt is left alone meanwhile.
+ if game2 then
+  if not state.Game2Seen then state.Game2Seen=true;state.Game2Start=now;state.CounterAt=now;state.Clicks=0;state.IdleLogged=false;log("MINIGAME2 open "..game2.Timer)end
+  if game2.Counter~=state.Game2Counter then state.Game2Counter=game2.Counter;state.CounterAt=now end
+  state.Game2Timer=game2.Timer
+  if state.Clicks>10 and now-state.CounterAt>5 and not state.IdleLogged then
+   state.IdleLogged=true;log("MINIGAME2 counter idle 5 s after "..state.Clicks.." clicks (counter "..tostring(game2.Counter)..")")
+  end
+  if now-state.Game2Start>75 then status.Text="The click minigame has been open over 75 s; waiting for it to close.";return end
+  if now>=state.NextTap then
+   state.NextTap=now+1/CLICK_RATE
+   local avoid={}
+   if game2.Quit then table.insert(avoid,game2.Quit)end
+   if job and job.Quit then table.insert(avoid,job.Quit)end
+   local x,y=freeClickPoint(avoid)
+   if not x then status.Text="The hub covers the middle of the screen; move the hub (or hide it with Right Alt).";return end
+   if clickAt(x,y)then state.Clicks+=1 end
+  end
+  status.Text=string.format("Scientific Engineer [2]: clicking (counter %s, %s). Jobs finished: %d",tostring(game2.Counter),game2.Timer,state.Jobs)
+  return
+ end
+ if state.Game2Seen then
+  -- How it ends (and whether the counter decides the pay) is unrecorded, so log the close; without progress the tablet is retried.
+  log(string.format("MINIGAME2 closed: open %.1f s, counter %s, clicks %d, last %s, progress %s/%s, zeni %s",now-state.Game2Start,tostring(state.Game2Counter),
+   state.Clicks,tostring(state.Game2Timer),tostring(job and job.Done),tostring(job and job.Total),tostring(zeni())))
+  state.Game2Seen=false;state.LastProgressAt=now;state.NextPrompt=math.max(state.NextPrompt,now+1.5)
  end
  if not job then
   -- No job window. After a job the game offers "Restart Quest? [ Yes ]" for a few seconds (it starts the same job); otherwise use
@@ -4546,7 +4610,11 @@ local function step(now)
   if usePrompt(humanoid,root,prompt,now,"TASK spill")then state.SpillWait=now+3.5;state.SpillDone=job.Done end
   status.Text=string.format("Floor Staff: wiping spills %s/%s. Jobs finished: %d",tostring(job.Done),tostring(job.Total),state.Jobs)
  else
-  local prompt=findPrompt(root,"Capsule Minigame")
+  -- [1] is the laptop (CapsuleMinigame1), [2] the tablet (CapsuleMinigame2); other levels fall back to the nearest one.
+  local level=tonumber(job.Name:match("%[(%d+)%]"))
+  local want=level and "CapsuleMinigame"..level
+  local prompt=want and findPrompt(root,"Capsule Minigame",nil,function(object)return object.Name==want end,want)
+  if not prompt then prompt=findPrompt(root,"Capsule Minigame") end
   if not prompt then status.Text="No laptop (\"Capsule Minigame\") prompt nearby.";return end
   if usePrompt(humanoid,root,prompt,now,"TASK laptop")then state.Laptop=promptPart(prompt).Position end
   status.Text=string.format("Scientific Engineer: opening the laptop minigame. Jobs finished: %d",state.Jobs)

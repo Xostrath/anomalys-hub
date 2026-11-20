@@ -1883,3 +1883,30 @@ Health loss here is the sum of client health decreases, not a count of enemy att
 **Capture limits:** middle run finalized Disabled at 240.274 s, footer 35 attempts / 18 counter receipts / 143 health decreases, 1913 dropped lines, detail ends at 200.8065 s. Latest snapshot was RUNNING at 275.622 s, footer 11 attempts / seven counter receipts / 189 health decreases, 1116 dropped lines, detail ends at 214.4406 s. This is why the comparison uses t<=180 only. Later live totals are not interchangeable with frozen detailed evidence. No raw reports or player names are published.
 
 **Decision:** findings-only update; keep installed/source v18.4 unchanged. Latest overall protection was worse, but no isolated code regression or defensible timing correction is established. Do not claim the AP is reliable merely because some counters work, disable cooldown protection to inflate inputs, or retune set C based on omitted/cross-attributed events. For an interpretable future run, AP should be the sole F-input source (normal movement/attacking can continue); this is guidance, not a prerequisite or requested confirmation. Existing recordings were analyzed first. No new build/tests are needed for this documentation-only change. Next engineering priority remains preserving compact per-attempt evidence beyond the detail cap rather than repeatedly inferring outcomes from footer totals.
+
+## SP-071 — Scientific Engineer [2]: tablet click minigame; Auto Job v1.4 (2026-11-20, Claude)
+
+**User:** "new job recorder". Read Job Recorder 1795169598 (brief) and 1795169603 (108 s, place 135537125271116), plus the Auto Job v1.3 log running alongside. Raw captures stay local.
+
+**Evidence (Verified from captures):**
+- **Level-up:** Auto Job v1.3 finished Scientific Engineer [1] 12 times in a row, +200 Zeni each (578 -> 2,778, ~12 s per job, Restart Quest pressed each time).
+  - The next window read **"Scientific Engineer [2]"**, "Pay: $500", "Help the company to develop a new system", Progress 0/1.
+- **[2] uses a different prompt:** v1.3 pressed the nearest "Capsule Minigame", the laptop (`Laptop1...CapsuleMinigame1`), 11 times and nothing opened. Then it switched to `Workspace.Map.Tablet.Part.CapsuleMinigame2`, which opens **`PlayerGui.CapsuleMission2`**:
+  - `Main.Timer` reads "Time: 60s(Aim for over 300)" and counts down once a second.
+  - `Main.Counter` reads "Counter: n"; there is also `Main.Cancel` "[ Quit ]".
+- **The counter counts mouse clicks:**
+  - 356 recorded MouseButton1 clicks (anywhere on screen, mostly unprocessed world clicks) gave 344 counter steps, about 1:1.
+  - Each step came 51–115 ms after a click (typically 85–100 ms).
+  - The user clicked about 4 per second.
+- **No completion recorded:** the two long attempts closed early, at counter 133 (13 s left) and 150 (24 s left). Six other openings lasted 0.7–7 s.
+  - v1.3 was pressing the tablet prompt every 1.2 s the whole time, so the cause of the early closes is unknown. The repeated presses are the main suspect, and `Workspace.Thrown.SPCapsule` also appeared before some closes.
+  - Zeni stayed 2,778 and progress stayed 0/1, so the pay and the meaning of "over 300" are unverified.
+
+**Implemented / untested live — Auto Job v1.4:**
+- The job level picks the prompt: `[n]` presses `CapsuleMinigame<n>` (laptop for [1], tablet for [2]), else the nearest one.
+- While CapsuleMission2 is open, the prompt is left alone. Auto Job mouse-clicks at **8 per second** on open screen: the middle, or three fallback spots, skipping the hub window and both [ Quit ] buttons.
+- [2] counts as finished only when the job window's progress is complete. A close without progress is logged (`MINIGAME2 closed: ... counter, clicks, last timer, progress, zeni`) and the tablet is pressed again after 1.5 s.
+- An idle counter (5 s without change while clicking) is logged once.
+- [1] (key minigame) and Floor Staff are unchanged. Source and both variants compile; no live test yet.
+
+**Next step:** run Auto Job at the Scientific Engineer board with the job at [2]. Check that the counter passes 300, how the minigame ends, the pay, and whether 8 clicks/s registers 1:1.

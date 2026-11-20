@@ -2295,3 +2295,53 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Grant investigation status / scoped recheck:** revisited the previously captured 25 progression and seven reward client scripts. Input forwards action names/arguments through Requests.Action; observed daily reward requests are State and Claim, and the PowerLevel reward table is a UI label. No confirmed client PL-grant command or selected award amount was found in those observed paths. The available source still omits the server Action/PL award and validation handler. The SP-088 empirical gain model does not expose that missing handler or make its fields client-writable. This is a source/evidence limitation, not proof every route is secure. No new remote mutation, grant attempt, gameplay input, or live experiment was performed here. The exact source/validation of a suspected award path would be needed before designing a meaningful further test; do not invent command names or request another normal fight merely to restate normal progression.
 
 **Validation / deployment:** 120 mock assertions across 14 meter/migration scenarios pass, including mounting exactly one card in Home with no Visuals duplicate and retaining numeric formatting/net/rate behavior. Updated module, actual patched public/private artifacts and freshly generated public/private artifacts compile. Installed private build backed up and hash verified; exact module replacement preserves unrelated bytes. No live visual inspection was performed. Reload and open Dashboard → LIVE SESSION; no additional combat recording is required for this placement change.
+
+## SP-091 — Auto Shadow Farm v2: rests in a bed at 90% injury (2026-11-20, Claude)
+
+**User:** "if injuries go over 90% it should find a nearby bed, then wait till it reaches 1% and start again".
+
+**Evidence used (Verified from captures / source):**
+- **Injury values:** the six `HeadInj` / `TorsoInj` / `LeftArmInj` / `RightArmInj` / `LeftLegInj` / `RightLegInj` NumberValues on your character run 0–100 (SP-033). Auto Shadow v1 stopped when an arm reached 90 (SP-043).
+- **Beds:** the job recorder (place 135537125271116) saw nine `Workspace.Map["Healing Pod"].Bed.ClickDetector` instances, including a nested `ClickDetector.ClickDetector` and one duplicate position.
+- **Healing:** Trello says beds and N (Sleep) clear injuries.
+- **Not yet recorded:** what clicking a bed does (sit, anchor, teleport, heal rate). Beds in other places, including the 120023577538065 Shadow runs, haven't been checked.
+
+**Implemented / untested live — v2:**
+
+*Trigger*
+- When any of the six injuries reaches 90 (was: either arm, stop), the farm enters a rest phase instead of stopping.
+
+*Leaving the Inner World*
+- It taps J and waits up to 5 s for the Shadow to vanish (two tries). Otherwise it stops.
+
+*Finding a bed*
+- One scan of `Workspace.Map` looks for a ClickDetector or ProximityPrompt under a part or model named `Bed`, or under a `Healing Pod`.
+- Nested detectors and duplicate positions are skipped.
+- It takes the nearest within 1,000 studs. If none is found, it stops with "no bed within 1000 studs".
+
+*Walking there*
+- It follows PathfindingService waypoints; if no path is found, it walks in a straight line.
+- Stuck means under 1 stud moved in 3 s. It allows up to 3 path attempts and an 8 s timeout per waypoint.
+- It pauses while chat or the menu is open, and stops within `MaxActivationDistance − 3` (4–8 studs) of the bed.
+
+*Using the bed*
+- Clicks 1–2 use the mouse at the bed's screen point. The second click is shifted by the top-bar inset, which Auto Job's buttons needed. The bed is skipped if the hub window covers that point.
+- Click 3 uses the executor's `fireclickdetector`, which fires the bed's own click event.
+- Prompts use `InputHoldBegin` / `InputHoldEnd`, as in Auto Job.
+
+*Waiting to heal*
+- Injuries must start falling within 15 s, or the bed is clicked again: 3 uses, then the next-nearest bed, 2 beds in total.
+- Once they're falling, it waits until every injury is ≤ 1, with a 10-minute cap on the whole rest.
+
+*Resuming*
+- If the character is sitting, anchored or PlatformStand, it taps Space once.
+- The normal J branch then re-enters the Inner World.
+
+*Log lines (`sparkling_auto_shadow_latest.txt`)*
+- REST start and done, BED candidates / path / use, BEDSTATE (sit, seat, anchored, state, position) and HEAL every 5 s.
+- POWER lines add the worst injury.
+- Stopping the farm cancels the walk.
+
+**Checks:** source and both variants compile. No live or mock run.
+
+**Next step:** run Auto Shadow until an injury hits 90%, near a hospital or healing pod. Then read the log for which bed it chose, whether the path or the click worked, the bed state, and how fast injuries fall. If beds don't work, N (Sleep) is the documented alternative.

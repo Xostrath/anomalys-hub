@@ -2510,3 +2510,27 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - Both variants compile.
 
 **Next step:** hit an NPC (e.g. a Warrior Clan Rogue) or a player with Damage Numbers on. If nothing pops there, the rendering or the health replication needs a capture.
+
+## SP-099 — Event wins: Visuals matches the game's own HUD "Event Elo" (2026-11-20, Claude)
+
+**User:** "are event wins in visual accurate? how do i check in game".
+
+**Evidence (Verified from captures; job-recorder GUI lines, read-only):**
+- **In-game display found** (earlier notes said there was none):
+  - `PlayerGui.HUD.LB.EventElo` = "Event Elo:n" and `PlayerGui.HUD.LB.EventNeeded` = "Event Elo Needed:n". HUD.LB is the limit-break panel; the right-side bar is the limit-break bar (SP notes / player confirmation).
+  - `PlayerGui.KiHud.LimitStage.EventElo` = "ELO n/m".
+  - The Trello Queue card already equates "Event Elo" with event wins.
+- **Visuals matches it.** The source Visuals reads, `Character@EventWins`, gave the same value as the HUD in every Nov 19 job capture:
+
+  | Time | Both read |
+  |---|---|
+  | 13:13–13:31 | 0 |
+  | 13:40–13:55 | 1.5 |
+
+  So Visuals shows the game's own number, not an estimate.
+- **Latest HUD reading:** Nov 20 03:13–03:15, "Event Elo:17", "Event Elo Needed:20", "ELO 17/20". The figure of 12 the user gave earlier is older than that.
+- **Limit-break gate (inference):** "Event Elo Needed" sits in the limit-break HUD, so the current limit-break stage appears to require 20 event wins. The Trello "Event Wins" card lists Limit Break among their uses. Not confirmed in game.
+
+**No code change.**
+
+**Next step:** compare the HUD "Event Elo" with Visuals once more after the next queue or event win.

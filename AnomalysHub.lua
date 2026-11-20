@@ -4773,7 +4773,7 @@ controller.RegisterCleanup(saveCounts)
 
 end)()
 ;(function()
--- Combat page v18.4 / diagnostics v7: recorded player_set_d added (SP-068); v18.3 rogue-heavy trial retained.
+-- Combat page v18.5 / diagnostics v7: ping compensation (SP-073). v18.4 added recorded player_set_d (SP-068); v18.3 rogue-heavy trial retained.
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.
 -- v16.3 (SP-039): heavy cues ignore the release track stopping early and may wait out the 0.5 s post-counter cooldown.
@@ -4904,7 +4904,7 @@ local diagnosticStatus,button
 local players=game:GetService("Players")
 -- Combat page options (user's reference layout, 2026-11-17). Auto Parry itself never turns on after a reload; only these options persist.
 local settingsPath=rootPath.."sparkling_combat_settings.json"
-local settings={Range=8,PvE=true,PvP=false,SkipKnocked=true,SkipOffScreen=false,TimingOffsetMs=0,HoldMs=120,HoldClicks=false,Binds={}}
+local settings={Range=8,PvE=true,PvP=false,SkipKnocked=true,SkipOffScreen=false,TimingOffsetMs=0,HoldMs=120,HoldClicks=false,PingComp=true,Binds={}}
 if type(readfile)=="function" then
  local ok,saved=pcall(function()return http:JSONDecode(readfile(settingsPath))end)
  if ok and type(saved)=="table" then
@@ -4919,6 +4919,8 @@ local function finiteSetting(value,default,minimum,maximum)
 end
 settings.TimingOffsetMs=finiteSetting(settings.TimingOffsetMs,0,-80,150)
 settings.HoldMs=finiteSetting(settings.HoldMs,120,60,250)
+-- Ping compensation (SP-073): seeds were tuned at ~100 ms ping; see currentPing.
+local PING_BASE_MS,PING_SKIP_SHORT=100,.06
 local function saveSettings()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
@@ -5041,7 +5043,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=shared_npc_player_catalog timingTrial=npc_policy_pvp_transfer range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 sharedHeavyTrial=102483335944327@260/320/380ms sharedRogue=hit2,hit3@0,hit5@80ms,heavy@260/300ms;skip1,4 sharedTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 sharedBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms sharedWolfFangClaw@100ms postCounterLockout=1.25s playerSetB=all5@40/0/0/40/20ms playerSetC=hit1@0,hit2/3@20,hit5@100ms;skip4;speed1.175+/-0.025 playerSetD=hit1/5@80,hit2@0ms;skip3,4;speed1.2+/-0.025 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+exact_noncolliding_target_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@mappedCue->press+30ms"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 sharedHeavyTrial=102483335944327@260/320/380ms sharedRogue=hit2,hit3@0,hit5@80ms,heavy@260/300ms;skip1,4 sharedTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 sharedBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms sharedWolfFangClaw@100ms postCounterLockout=1.25s playerSetB=all5@40/0/0/40/20ms playerSetC=hit1@0,hit2/3@20,hit5@100ms;skip4;speed1.175+/-0.025 playerSetD=hit1/5@80,hit2@0ms;skip3,4;speed1.2+/-0.025 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+exact_noncolliding_target_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@mappedCue->press+30ms pingComp="..tostring(settings.PingComp).."@base"..PING_BASE_MS.."ms,skipShort"..math.floor(PING_SKIP_SHORT*1000).."ms"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -5126,6 +5128,21 @@ local function clockSample()
  local ok,server=pcall(function()return workspace:GetServerTimeNow()end)
  local pingOK,ping=pcall(function()return stats.Network.ServerStatsItem["Data Ping"]:GetValueString()end)
  log("CLOCK","local="..os.clock().." unix="..os.time().." server="..(ok and tostring(server)or "unavailable").." ping="..(pingOK and sample(ping)or "unavailable"))
+end
+-- Ping compensation (SP-073). Every seed was tuned at ~100 ms ping. Shadow presses stayed ~182 ms before impact at both
+-- 70-105 ms ping (149/189 counters) and ~187 ms (0/20, all Blunt): what counts is lead minus ping (counters at 20-140 ms,
+-- none at 0 or below). So presses move earlier by (ping - 100) ms, or later when ping is lower (capped -80/+250 ms).
+-- A cue that would still be short of its tuned lead by 60+ ms is skipped: a late press only gets Blunted (hit still lands
+-- 88% of the time) and costs the 5 s cooldown the next combo needs. Constants sit by the settings (the Config line reads them).
+local pingMs,pingAt=nil,-math.huge
+local function currentPing()
+ local now=os.clock()
+ if now-pingAt>=.5 then
+  pingAt=now
+  local ok,value=pcall(function()return stats.Network.ServerStatsItem["Data Ping"]:GetValue()end)
+  if ok and type(value)=="number" and value==value and value>0 and value<2000 then pingMs=value end
+ end
+ return pingMs
 end
 local function roots(model)
  local hum=model and model:FindFirstChildOfClass("Humanoid")
@@ -5215,7 +5232,7 @@ parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. v18.4: additional player style mapped (hits 1/2/5). Rogue heavy trial retained; diagnostics record while enabled."},card)
+ Text="Off. v18.5: ping compensation (presses shift by ping - 100 ms). Player style D and rogue heavy trial retained; diagnostics record while enabled."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -5326,6 +5343,14 @@ local function observe(model,track)
   local seed=ROGUE_HEAVY_DELAYS[rogueHeavyTrials[kind]]
   delay=math.max(0,seed+settings.TimingOffsetMs/1000)
   detail=detail.." trial="..(kind=="NPC" and "npc_rogue_heavy" or "player_rogue_heavy").." heavyDelayMs="..math.floor(seed*1000+.5)
+ end
+ local ping=settings.PingComp and currentPing()
+ if ping then
+  local shift=math.clamp((ping-PING_BASE_MS)/1000,-.08,.25)
+  local short=math.max(0,shift-delay)
+  delay=math.max(0,delay-shift)
+  detail=detail.." pingMs="..math.floor(ping+.5).." pingShiftMs="..math.floor(shift*1000+.5)
+  if short>=PING_SKIP_SHORT then skip("ping_too_high","stage=observe shortMs="..math.floor(short*1000+.5).." "..detail);return end
  end
  local range=cueRange(model)
  local anyFacing=id==rogueHeavy or nil
@@ -5556,13 +5581,15 @@ local function timingBox(id,title,minimum,maximum,column)
 end
 timingBox("TimingOffsetMs","Timing offset (ms)",-80,150,0)
 timingBox("HoldMs","F hold (ms)",60,250,1)
-local skipSection=ui.Section(page,"Don't Parry If",126,true)
+local skipSection=ui.Section(page,"Don't Parry If",156,true)
 skipSection.Frame.LayoutOrder=2
 optionRow(skipSection.Body,0,"SkipKnocked","Don't Parry If Knocked",function()return settings.SkipKnocked end,setting("SkipKnocked"))
 optionRow(skipSection.Body,30,"SkipOffScreen","Don't Parry If Off Screen",function()return settings.SkipOffScreen end,setting("SkipOffScreen"))
 -- SP-057/064: optionally hold M1 from a mapped player/NPC cue until just after its scheduled parry.
 optionRow(skipSection.Body,60,"HoldClicks","Hold Punches Before Parry (Players & NPCs)",function()return settings.HoldClicks end,setting("HoldClicks"))
-ui.Create("TextLabel",{Position=UDim2.fromOffset(14,96),Size=UDim2.new(1,-28,0,20),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Typing / menu: always pauses active input"},skipSection.Body)
+-- SP-073: presses shift by ping - 100 ms; hits that still can't be reached in time are skipped.
+optionRow(skipSection.Body,90,"PingComp","Ping Compensation",function()return settings.PingComp end,setting("PingComp"))
+ui.Create("TextLabel",{Position=UDim2.fromOffset(14,126),Size=UDim2.new(1,-28,0,20),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Typing / menu: always pauses active input"},skipSection.Body)
 
 controller.Connect(input.InputBegan,function(object,processed)
  if closed or object.UserInputType~=Enum.UserInputType.Keyboard then return end
@@ -5679,7 +5706,7 @@ local function update(dt)
    end
   end
  end
- status.Text=string.format("AUTO PARRY v18.4 · Additional player style mapped · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("AUTO PARRY v18.5 · Ping compensation · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)

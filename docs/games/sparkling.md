@@ -1921,3 +1921,42 @@ Health loss here is the sum of client health decreases, not a count of enemy att
 - Unknown: whether the server counts every click at this rate, and whether it reacts to it.
   - The `MINIGAME2 closed` line logs clicks vs counter, so a capped count will show as counter << clicks.
   - If it caps, lower CLICK_RATE to the rate that still counts 1:1.
+
+## SP-073 — Auto Parry v18.5: ping compensation (2026-11-20, Claude)
+
+**User:** "check the auto parry i think its bugged", then "we need like a ping compensation".
+
+**Evidence (Verified from captures):**
+- **Today:** histories 1795196868 and 1795196902 (Inner World Shadow, plus one Warrior Clan Rogue) had 26 F presses, **0 counters** and 19 Blunts. Ping was ~187 ms.
+- **The presses weren't late on the client.** Shadow presses still came a median ~182 ms before the attacker's HitOut, the same as in the good runs.
+- **Earlier Shadow runs:**
+
+  | History | Ping | Counters |
+  |---|---|---|
+  | 1795126135 | 78 ms | 60/78 |
+  | 1795133566 | 71 ms | 33/50 |
+  | 1795156077 | 105 ms | 56/61 |
+
+- **What decides the outcome is lead minus ping.** Grouped by that value across all five histories:
+  - 20–140 ms: 149 of 182 countered
+  - 0 ms or below: 0 of 20 (all Blunt or no outcome)
+
+  The swing reaches us one-way late and our F reaches the server one-way late, so the server sees roughly lead − RTT.
+- **Blunt is a hit, not a block:** across 40 histories, 1,806 of 2,049 self "Blunt" effects were followed by health damage within 0.4 s. A late press also triggers the 5 s cooldown.
+- **All seeds were tuned at ~100 ms ping:** every PvP and NPC history from 01:33–03:19 had a median ping of 99–107 ms.
+
+**Implemented / untested live — v18.5:**
+- New setting **Ping Compensation**, on by default, under "Don't Parry If".
+- Ping is read from `Stats.Network.ServerStatsItem["Data Ping"]:GetValue()` at most every 0.5 s.
+- Every mapped cue, NPC or player, shifts by (ping − 100) ms, capped at −80/+250 ms. Higher ping presses earlier; lower ping presses later.
+- **Skipping:** if the delay can't absorb the shift and the cue would still be 60+ ms short of its tuned lead, it is skipped with `SKIP reason=ping_too_high shortMs=`.
+  - At ~187 ms ping, the standard hits 1/2 (seed 40 ms) press immediately (about 35 ms net lead, borderline).
+  - Hit 5 (seed 0) is skipped.
+  - Heavies press about 87 ms earlier.
+- `CUE_QUEUED` lines now carry `pingMs=` and `pingShiftMs=`; the Config line gains `pingComp=`.
+- The PvP seeds (GPT's) themselves are unchanged. Compensation is a no-op at 100 ms and can be switched off.
+- Source and both variants compile. The shift and skip arithmetic was checked offline. No live run yet.
+
+**Next step:**
+- Fight the Shadow at high ping and check counters and the `ping_too_high` skips.
+- Also test at normal ping (~100 ms) to confirm nothing changed there.

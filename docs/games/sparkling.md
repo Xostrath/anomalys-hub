@@ -4,13 +4,13 @@ Last reviewed: 2026-11-19. This is the initial consolidated handoff from the ava
 
 ## Read first
 
-**Current mode: per-style auto parry (Combat page v17 / diagnostics v7).** SP-052 adds the recorded player_set_b five-hit combo and repairs geometry evaluation. Standard player/NPC exclusions and Claude’s NPC rogue/heavy policies remain; player results are unverified.
+**Current mode: shared NPC/player attack policy (Combat page v18 / diagnostics v7).** SP-064 extends all NPC attack catalogs, timings, exclusions, heavy handling and optional punch holding to players. Additional player_set_b coverage remains; live PvP timing is unverified.
 
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. Additional recorded place: `135537125271116` (place name/role not verified). User-supplied entry place: `120525873606470`.
-- Current objective: validate actual automatic player inputs for the newly mapped player_set_b combo before judging timings (SP-052). The reviewed PvP snapshot had zero automatic player presses.
+- Current objective: review player diagnostics on v18 by style and targetType after the full NPC-policy transfer (SP-064); distinguish automatic inputs from actual outcomes.
 - User-confirmed: a missed parry incurs cooldown (SP-030). Investigate the first failed attempt before the penalty; subsequent cooldown skips are not independent timing misses. Exact penalty onset and short-notice reset semantics remain unknown.
-- Current defense: off-by-default per-style catalog with target toggles, standard exclusions, NPC rogue/heavy policies and additional player_set_b cues. Geometry is restored; recordings distinguish inputs from outcomes.
-- Latest implementation: **v17 / SP-052**. Player catalog gap and mapped-cue geometry failure repaired; 128 mocked assertions plus baseline failure reproduction and compilation. Live PvP benefit remains unverified.
+- Current defense: shared mapped attack handling with PvP/PvE controls, style-specific exclusions, 1.25-second post-counter lockout and optional punch holding. Player range/focus settings remain; diagnostics record automatically.
+- Latest implementation: **v18 / SP-064**, based on Claude’s v17.6. Full NPC catalog shared with players, including Rogue/Trainer/Bandit, both heavies and Wolf Fang Claw. 317 mock assertions and compilation; live PvP benefit unverified.
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -26,7 +26,7 @@ Last reviewed: 2026-11-19. This is the initial consolidated handoff from the ava
 | Power ESP | Direct Character.PowerLevel numeric value; rounded whole numbers with commas | Numeric source observed; formatting compiled | Base, effective, or suppressed power? |
 | Ki ESP | Blue bar next to red health bar; requires known Ki and explicit positive MaxKi for fill | Ki observed; bar compiled | No verified MaxKi source; unknown max shows an empty track marked `?` |
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
-| Auto parry | v17 per-style catalog; additional player combo; geometry restored; existing NPC policies retained | SP-052: original regression reproduced, 128 mock assertions and compilation | New player inputs/outcomes need live validation; heavy/other player styles remain limited |
+| Auto parry | v18 shared NPC/player attack policy, optional punch holding; existing player combo retained | SP-064: 317 mock assertions and compilation | Live player timing and shared-heavy reliability remain unverified |
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
 | Combat page v11 (SP-T030) | Normal Auto Parry controls; no temporary single-hit filters | 174 mocked assertions and compilation passed; all-hit coverage/cleanup live-verified in SP-T031 | Preserve target context and distinguish conflicted counter receipts from automatic results |
 | Parry diagnostics v7 | Adds RANGE_WAIT/CHECK/ENTERED to existing request/state/outcome records | v6 state snapshots verified live in SP-T035; new geometry trace mocked in SP-T036 | Range entry is not a successful parry; live recovery outcomes outstanding |
@@ -1650,3 +1650,29 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 - **Wolf Fang Claw** is pressed 100 ms after it is seen (~200 ms before the median first hit). NPCs only; logs `style=npc_skill skill=wolf_fang_claw`. Trial seed.
 
 **Next step:** a Wolf Fang fight on v17.6. Count Wolf Fang Claw counters, and check that no presses land before 1.25 s.
+
+
+## SP-064 — Full NPC attack policy shared with players (2026-11-19)
+
+**User request:** "apply all the npc auto parry to the player side". Supersedes the NPC-only catalog restrictions in SP-049 through SP-063 and the player-heavy limitation in SP-052. Built on Claude's latest v17.6 source, preserving concurrent modules. This is an explicitly requested policy transfer, not new evidence of equivalent PvP timing or success.
+
+**Implemented / untested live — Combat page v18:** all NPC-mapped animation IDs now use the same attack policy for player targets. Existing player_set_b coverage remains additive and player-only. Standard combo still presses hits 1/2/5 and skips 3/4. Added player coverage:
+
+| Catalog | Delay after observed animation start (plus user offset) | Exclusions / behavior |
+| --- | --- | --- |
+| Warrior Clan Rogue | hit 2/3: 0; hit 5: 80 ms | Skip hits 1/4 |
+| Rogue heavy | 300 ms | Same explicit facing exemption; LOS/range still required |
+| PlunderTrainer | hits 1/2/4/5: 40/0/80/0 ms | Skip hit 3 |
+| AlienBandit | hits 1–5: 120/0/40/0/40 ms | All five mapped |
+| Wolf Fang Claw | 100 ms | Same skill ID; other skills remain unmapped |
+| Shared heavy release | rotating 260/320/380 ms | Same stopped-track exception, expiry and bounded cooldown deferral |
+
+Player and NPC shared-heavy rotations have separate indices so a player cue cannot change the existing NPC trial sequence. No timing constants changed. The 1.25-second post-counter lockout and cooldown/input/approach/LOS policies already share one execution path and remain shared. The optional **Hold Punches Before Parry (Players & NPCs)** now applies to accepted mapped player cues as well, from cue time through scheduled press +30 ms; PvP-disabled, skipped and unmapped cues do not activate it. It retains its existing saved toggle and stop cleanup.
+
+**Target controls retained:** PvP/PvE toggles, current/alive player ownership, player focus gating, configured player range (default 8), NPC-specific 12-stud range/Shadow-owner exception, typing/menu pauses, manual F protection and input release cleanup. "Shared policy" describes attack handling; it does not silently change user targeting settings or enable background player inputs. Unknown IDs stay unmapped. Existing player_set_b timing remains 40/0/0/40/20 ms.
+
+**Diagnostics:** Config, START and CUE_ACCEPTED identify scope=shared_npc_player_catalog timingTrial=npc_policy_pvp_transfer. Catalog config fields are now sharedHeavyTrial/sharedRogue/sharedTrainer/sharedBandit/sharedWolfFangClaw; skill cues use style=shared_skill. targetType still distinguishes NPC and player observations; heavy trial tags distinguish npc_heavy/player_heavy. Header identifies mappedCue punch holding. Diagnostics continue automatically while enabled. Existing readers must accept these new shared labels rather than filtering only npc-prefixed fields.
+
+**Validation:** 317 mocked assertions pass: 189 new shared-catalog/timing/cooldown/targeting/punch-hold checks, 60 existing player-catalog/geometry/NPC-preservation checks, 36 standard-policy checks, 26 target ownership/PvP/PvE checks and six settings/reload checks. Every newly shared light/skill ID is exercised for players and NPCs at its intended delay, exclusions remain skipped, heavy trial sequences stay independent, stopped-track handling and the scoped facing exception work, walls/range/manual F/PvP/focus still block inputs, 1.25-second lockout and additive offset persist, and punch-hold toggling/cleanup work. Source, staged public/private, and regenerated public/private variants compile. No live gameplay interaction was performed. NPC results from older notes are not counted as player successes.
+
+**Handoff:** reload v18, enable PvP and Auto Parry, and optionally enable Hold Punches Before Parry. Review the next existing player diagnostic by style/targetType: first establish queued cues and released inputs, then counters versus damage and cooldown. Shared-heavy reliability was unresolved even on NPCs (SP-051); do not describe it as proven. Reused Sparkling's existing path only; the Hunter X Enter reference note was checked for workflow, and no cross-game IDs, remotes or timings were imported. Sanitized notes only; raw reports remain local.

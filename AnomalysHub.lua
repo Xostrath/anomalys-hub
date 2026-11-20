@@ -4701,7 +4701,7 @@ controller.RegisterCleanup(saveCounts)
 
 end)()
 ;(function()
--- Combat page v17 / diagnostics v7: additional recorded player combo and restored geometry evaluation (SP-052).
+-- Combat page v18 / diagnostics v7: full NPC attack policy also applies to players (SP-064).
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.
 -- v16.3 (SP-039): heavy cues ignore the release track stopping early and may wait out the 0.5 s post-counter cooldown.
@@ -4744,30 +4744,30 @@ local immediateHit5='131649056441662'
 -- later, impact (attacker HitOut) a median ~462 ms after the release (301-731). It hit us 141 of 152 times; 12 F taps that happened
 -- to come 164-195 ms before impact gave 0 counters and 0 blocks. User + tutorial: heavies are answered by a perfect counter/block, not the
 -- light counter parry. The 5 self "Perfect Counter!" receipts seen came 46-139 ms after our Defend press, so the release is pressed at a
--- rotating 260/320/380 ms (~200/140/80 ms before the median impact) to find the window. NPCs only; player heavies stay unmapped.
+-- rotating 260/320/380 ms (~200/140/80 ms before the median impact) to find the window. SP-064 shares this trial with players; success remains unverified.
 local npcHeavy='102483335944327'
 local HEAVY_DELAYS={.26,.32,.38}
-local heavyTrial=0
+local heavyTrials={NPC=0,Player=0}
 attacks[npcHeavy]=0
 -- Warrior Clan Rogue combo (SP-049, history 1795127425, 2 rogues, 52 hits taken, none mapped). Order from same-actor sequences:
 -- hit1 78875817992139 -> hit2 120572377399879 -> hit3 119528335719333 -> hit4 92958519453859 -> hit5 80105885088261 (all seen at
 -- phase 0, speed 1.15). Attacker HitOut a median 117 / 201 / 151 / 84 / 270 ms after the swing is seen. A counter needs ~150+ ms
 -- of lead, so hits 1 and 4 are skipped like the standard combo's hits 3-4; hit 2 and 3 press at once, hit 5 after 80 ms.
--- NPCs only for now (players using this style stay unmapped).
+-- SP-064: the same IDs, seeds and exclusions now apply to players at user request.
 local rogueHits={['78875817992139']=1,['120572377399879']=2,['119528335719333']=3,['92958519453859']=4,['80105885088261']=5}
 attacks['120572377399879']=0;attacks['119528335719333']=0;attacks['80105885088261']=.08
 attacks['78875817992139']=0;attacks['92958519453859']=0
 lateHits['78875817992139']=1;lateHits['92958519453859']=4
 -- Rogue heavy (SP-050): 126361551838373 (length 0.7, knockback) hit us 0.417-0.435 s after it was seen in all five runs of history
 -- 1795127683. Earlier captures hold five self "Perfect Counter!" receipts against it with F pressed 0.25-0.37 s after it started,
--- so it is pressed at a fixed 0.30 s. NPCs only.
+-- so it is pressed at a fixed 0.30 s. SP-064 also applies this to players.
 local rogueHeavy='126361551838373'
 attacks[rogueHeavy]=.30;rogueHits[rogueHeavy]="heavy"
 -- PlunderTrainer combo (SP-059, history 1795148185, laptop-job place, 1 trainer, all seen at phase 0, speed 1.25). Order from
 -- same-actor sequences: hit1 115562914490424 -> hit2 139627968387116 -> hit3 92411449150342 -> hit4 124959370864638 ->
 -- hit5 80989963053908 (hit 4 is sometimes the rogue heavy instead). Attacker HitOut a median 218 / 167 / 118 / 267 / 184 ms after
 -- the swing is seen. The user's own counters on it came ~148 ms before impact, matching the ~150+ ms lead used above, so hit 3 is
--- skipped; hit 1 presses after 40 ms, hit 4 after 80 ms, hits 2 and 5 at once. NPCs only; trial seeds from one recording.
+-- skipped; hit 1 presses after 40 ms, hit 4 after 80 ms, hits 2 and 5 at once. NPC-derived trial seeds from one recording; shared with players in SP-064.
 local trainerHits={['115562914490424']=1,['139627968387116']=2,['92411449150342']=3,['124959370864638']=4,['80989963053908']=5}
 attacks['115562914490424']=.04;attacks['139627968387116']=0;attacks['92411449150342']=0
 attacks['124959370864638']=.08;attacks['80989963053908']=0
@@ -4775,14 +4775,14 @@ lateHits['92411449150342']=3
 -- AlienBandit combo (SP-061, history 1795149911, laptop-job place, speed 1.25, phase 0). Same-actor order: hit1 115411232011168 ->
 -- hit2 85425709738831 -> hit3 107415938517971 -> hit4 84926821033390 -> hit5 99917228120363 (hit 2 or 3 is sometimes followed by
 -- the rogue heavy). Attacker HitOut a median 301 / 167 / 216 / 184 / 218 ms after the swing is seen (5-11 impacts each, spread
--- under 40 ms). Pressed for ~165-185 ms of lead: 120 / 0 / 40 / 0 / 40 ms. NPCs only; trial seeds from one recording.
+-- under 40 ms). Pressed for ~165-185 ms of lead: 120 / 0 / 40 / 0 / 40 ms. NPC-derived trial seeds from one recording; shared with players in SP-064.
 local banditHits={['115411232011168']=1,['85425709738831']=2,['107415938517971']=3,['84926821033390']=4,['99917228120363']=5}
 attacks['115411232011168']=.12;attacks['85425709738831']=0;attacks['107415938517971']=.04
 attacks['84926821033390']=0;attacks['99917228120363']=.04
 -- EX Wolf Fang's "Wolf Fang Claw" skill (SP-063): 123139123318422 (length 1.43, Weave "Wolf Fang Claw"), a multi-hit bleed whose first
 -- hit lands a median 301 ms after the start (56 starts, 4 histories). Manual F 85 and 186 ms after the start gave Counter Parry
--- ~200 ms later, so it is pressed at 100 ms. NPCs only; trial seed.
-local npcSkills={['123139123318422']="wolf_fang_claw"}
+-- ~200 ms later, so it is pressed at 100 ms. NPC-derived trial seed; shared with players in SP-064.
+local sharedSkills={['123139123318422']="wolf_fang_claw"}
 attacks['123139123318422']=.10
 -- SP-052: additional player combo, observed repeatedly in order with same-actor HitOut.
 -- Style name unknown. Initial seeds are a trial, not server parry-window measurements.
@@ -4797,7 +4797,7 @@ local nextPulse,nextScan,cooldownUntil=0,0,0
 -- 1.15 in v17.4; SP-063: six presses deferred to 1.15-1.20 s all failed (pooled 1.05-1.20 s: 0 of 28; 1.20-1.30 s: 4 of 8).
 local POST_COUNTER_LOCKOUT=1.25
 local lastLocalAttack=-math.huge
--- SP-057 click hold: deadline (os.clock) and the NPC cue that set it; see holdClicksFor.
+-- SP-057 click hold: deadline (os.clock) and the mapped cue that set it; see holdClicksFor.
 local clickHoldUntil,clickHoldCue=0,nil
 local lastCounterNotice
 local lastDamageAt
@@ -4948,8 +4948,8 @@ local function report(reason)
   .."\nApproach recheck: fresh mapped player and NPC cues within Range+3 (your own Shadow uses range 12, SP-036) may wait at most 80ms, four checks at 20ms intervals, two waiting slots. F still requires configured Range, facing, LOS and all normal gates. RANGE_WAIT/CHECK/ENTERED describe client geometry, not hit confirmation."
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
-  .."\nConfig: mode=active_test scope=per_style_catalog timingTrial=player_set_b_initial range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 npcTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 npcBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms npcWolfFangClaw@100ms postCounterLockout=1.25s playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@npcCue->press+30ms"
+  .."\nConfig: mode=active_test scope=shared_npc_player_catalog timingTrial=npc_policy_pvp_transfer range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 sharedHeavyTrial=102483335944327@260/320/380ms sharedRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 sharedTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 sharedBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms sharedWolfFangClaw@100ms postCounterLockout=1.25s playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@mappedCue->press+30ms"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -5118,7 +5118,7 @@ parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. v17: additional player combo mapped. Standard and NPC policies retained; diagnostics record while enabled."},card)
+ Text="Off. v18: full NPC attack policy shared with players. PvP controls player targets; diagnostics record while enabled."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -5203,21 +5203,18 @@ local function observe(model,track)
  local allowed,targetReason=targetAllowed(model)
  if not allowed then skip(targetReason,"stage=observe "..detail);return end
  if playerMove then detail=detail.." style=player_set_b hit="..playerMove.Hit.." timing=initial_trial" end
- if rogueHits[id] and targetKind(model)~="NPC" then skip("unmapped_animation",detail.." rogueStyle=player");return end
  if rogueHits[id] then detail=detail.." style=rogue hit="..rogueHits[id] end
- if trainerHits[id] and targetKind(model)~="NPC" then skip("unmapped_animation",detail.." trainerStyle=player");return end
  if trainerHits[id] then detail=detail.." style=plunder_trainer hit="..trainerHits[id] end
- if banditHits[id] and targetKind(model)~="NPC" then skip("unmapped_animation",detail.." banditStyle=player");return end
  if banditHits[id] then detail=detail.." style=alien_bandit hit="..banditHits[id] end
- if npcSkills[id] and targetKind(model)~="NPC" then skip("unmapped_animation",detail.." skill=player");return end
- if npcSkills[id] then detail=detail.." style=npc_skill skill="..npcSkills[id] end
+ if sharedSkills[id] then detail=detail.." style=shared_skill skill="..sharedSkills[id] end
  if lateHits[id] then skip(targetKind(model)=="NPC" and "npc_late_hit" or "player_late_hit","stage=observe hit="..lateHits[id].." "..detail);return end
  if id==immediateHit5 then delay=math.max(0,settings.TimingOffsetMs/1000);detail=detail.." trial="..(targetKind(model)=="NPC" and "npc_hit5_seed0" or "player_hit5_seed0") end
  if id==npcHeavy then
-  if targetKind(model)~="NPC" then skip("unmapped_animation",detail.." heavy=player");return end
-  heavyTrial=heavyTrial%#HEAVY_DELAYS+1
-  delay=math.max(0,HEAVY_DELAYS[heavyTrial]+settings.TimingOffsetMs/1000)
-  detail=detail.." trial=npc_heavy heavyDelayMs="..math.floor(HEAVY_DELAYS[heavyTrial]*1000)
+  local kind=targetKind(model)
+  heavyTrials[kind]=heavyTrials[kind]%#HEAVY_DELAYS+1
+  local seed=HEAVY_DELAYS[heavyTrials[kind]]
+  delay=math.max(0,seed+settings.TimingOffsetMs/1000)
+  detail=detail.." trial="..(kind=="NPC" and "npc_heavy" or "player_heavy").." heavyDelayMs="..math.floor(seed*1000)
  end
  local range=cueRange(model)
  local anyFacing=id==rogueHeavy or nil
@@ -5246,8 +5243,8 @@ local function observe(model,track)
   Heavy=id==npcHeavy or nil,AnyFacing=anyFacing})
  log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
  -- SP-057: your own M1 sent between an NPC swing appearing and our press made 60 of 64 counters fail (26 histories);
- -- clicks after the press were harmless. Hold M1 from now until just after the scheduled press. NPC cues only.
- if settings.HoldClicks and targetKind(model)=="NPC" and controller.SparklingHoldClicks then
+ -- clicks after the press were harmless. SP-064 shares the optional hold with player cues too.
+ if settings.HoldClicks and controller.SparklingHoldClicks then
   local untilAt=now+delay+.03
   if untilAt>clickHoldUntil then clickHoldUntil,clickHoldCue=untilAt,serial;controller.SparklingHoldClicks(untilAt)end
  end
@@ -5347,7 +5344,7 @@ local function start()
  enabled=true;ownCharacter=player.Character;nextScan=0;nextPulse=0
  seen=setmetatable({},{__mode="k"})
  button.Text="Auto Parry: ON"
- log("START","mode=active_test scope=per_style_catalog timingTrial=player_set_b_initial offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
+ log("START","mode=active_test scope=shared_npc_player_catalog timingTrial=npc_policy_pvp_transfer offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." remainingCounterCooldown="..math.max(0,cooldownUntil-os.clock()))
  local coverage="outgoing hooks unavailable"
  if controller.BeginSparklingParryObservation then
   local ok,disconnect,description=pcall(controller.BeginSparklingParryObservation,guarded("ActionProbe",function(remote,direction,args,started,id,result,path)
@@ -5452,8 +5449,8 @@ local skipSection=ui.Section(page,"Don't Parry If",126,true)
 skipSection.Frame.LayoutOrder=2
 optionRow(skipSection.Body,0,"SkipKnocked","Don't Parry If Knocked",function()return settings.SkipKnocked end,setting("SkipKnocked"))
 optionRow(skipSection.Body,30,"SkipOffScreen","Don't Parry If Off Screen",function()return settings.SkipOffScreen end,setting("SkipOffScreen"))
--- SP-057: holds your M1 clicks for the ~50 ms between an NPC swing appearing and the parry press.
-optionRow(skipSection.Body,60,"HoldClicks","Hold Punches Before Parry (NPCs)",function()return settings.HoldClicks end,setting("HoldClicks"))
+-- SP-057/064: optionally hold M1 from a mapped player/NPC cue until just after its scheduled parry.
+optionRow(skipSection.Body,60,"HoldClicks","Hold Punches Before Parry (Players & NPCs)",function()return settings.HoldClicks end,setting("HoldClicks"))
 ui.Create("TextLabel",{Position=UDim2.fromOffset(14,96),Size=UDim2.new(1,-28,0,20),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Typing / menu: always pauses active input"},skipSection.Body)
 
 controller.Connect(input.InputBegan,function(object,processed)
@@ -5555,7 +5552,7 @@ local function update(dt)
    if not reason and now<nextPulse then reason="pulse_cooldown"end
    table.remove(pending,i)
    if reason then skip(reason,"stage=execute "..detail)else
-    log("CUE_ACCEPTED","scope=per_style_catalog timingTrial=player_set_b_initial offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
+    log("CUE_ACCEPTED","scope=shared_npc_player_catalog timingTrial=npc_policy_pvp_transfer offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." "..detail)
     sendingAttempt=attempts+1;heldAttempt=sendingAttempt
     held=true;heldAt=now;releaseAt=now+settings.HoldMs/1000;nextPulse=now+.3;nextReleaseRetry=0
     table.insert(session.Pulses,{Id=heldAttempt,DownAt=now})
@@ -5571,7 +5568,7 @@ local function update(dt)
    end
   end
  end
- status.Text=string.format("AUTO PARRY v17 · Player combo coverage updated · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("AUTO PARRY v18 · Shared player & NPC attack policy · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)

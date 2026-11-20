@@ -4714,6 +4714,7 @@ end)()
 -- v17.3 (SP-059): PlunderTrainer combo mapped for NPCs (hits 1, 2, 4, 5 pressed; 3 too fast).
 -- v17.4 (SP-060): the 0.5 s counter notice is treated as a 1.15 s lockout (presses inside it never countered).
 -- v17.5 (SP-061): AlienBandit combo mapped for NPCs (all five hits pressed).
+-- v17.6 (SP-063): post-counter lockout 1.25 s; EX Wolf Fang's Wolf Fang Claw skill pressed at 100 ms (NPCs).
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -4778,6 +4779,11 @@ lateHits['92411449150342']=3
 local banditHits={['115411232011168']=1,['85425709738831']=2,['107415938517971']=3,['84926821033390']=4,['99917228120363']=5}
 attacks['115411232011168']=.12;attacks['85425709738831']=0;attacks['107415938517971']=.04
 attacks['84926821033390']=0;attacks['99917228120363']=.04
+-- EX Wolf Fang's "Wolf Fang Claw" skill (SP-063): 123139123318422 (length 1.43, Weave "Wolf Fang Claw"), a multi-hit bleed whose first
+-- hit lands a median 301 ms after the start (56 starts, 4 histories). Manual F 85 and 186 ms after the start gave Counter Parry
+-- ~200 ms later, so it is pressed at 100 ms. NPCs only; trial seed.
+local npcSkills={['123139123318422']="wolf_fang_claw"}
+attacks['123139123318422']=.10
 -- SP-052: additional player combo, observed repeatedly in order with same-actor HitOut.
 -- Style name unknown. Initial seeds are a trial, not server parry-window measurements.
 -- This is a different animation set; the standard combo's skipped IDs stay skipped.
@@ -4788,7 +4794,8 @@ local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local windowFocused=true
 local sendingAttempt
 local nextPulse,nextScan,cooldownUntil=0,0,0
-local POST_COUNTER_LOCKOUT=1.15
+-- 1.15 in v17.4; SP-063: six presses deferred to 1.15-1.20 s all failed (pooled 1.05-1.20 s: 0 of 28; 1.20-1.30 s: 4 of 8).
+local POST_COUNTER_LOCKOUT=1.25
 local lastLocalAttack=-math.huge
 -- SP-057 click hold: deadline (os.clock) and the NPC cue that set it; see holdClicksFor.
 local clickHoldUntil,clickHoldCue=0,nil
@@ -4942,7 +4949,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=per_style_catalog timingTrial=player_set_b_initial range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 npcTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 npcBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms postCounterLockout=1.15s playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@npcCue->press+30ms"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 npcTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 npcBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms npcWolfFangClaw@100ms postCounterLockout=1.25s playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@npcCue->press+30ms"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -5202,6 +5209,8 @@ local function observe(model,track)
  if trainerHits[id] then detail=detail.." style=plunder_trainer hit="..trainerHits[id] end
  if banditHits[id] and targetKind(model)~="NPC" then skip("unmapped_animation",detail.." banditStyle=player");return end
  if banditHits[id] then detail=detail.." style=alien_bandit hit="..banditHits[id] end
+ if npcSkills[id] and targetKind(model)~="NPC" then skip("unmapped_animation",detail.." skill=player");return end
+ if npcSkills[id] then detail=detail.." style=npc_skill skill="..npcSkills[id] end
  if lateHits[id] then skip(targetKind(model)=="NPC" and "npc_late_hit" or "player_late_hit","stage=observe hit="..lateHits[id].." "..detail);return end
  if id==immediateHit5 then delay=math.max(0,settings.TimingOffsetMs/1000);detail=detail.." trial="..(targetKind(model)=="NPC" and "npc_hit5_seed0" or "player_hit5_seed0") end
  if id==npcHeavy then

@@ -1620,3 +1620,33 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 - **Profile copy choice:** when several snapshot copies are equally close to the live PowerLevel (it doesn't change while meditating), the one with more Ki is used.
 
 **Next step:** confirm the counter matches the Doctor (around 244).
+
+## SP-063 — Hold Punches first live run; lockout 1.25 s; Wolf Fang Claw (2026-11-19, Claude)
+
+**User:** "new auto parry test". Three histories, all v17.5:
+- 1795151179 — Alien Bandits, laptop-job place, Hold off.
+- 1795151513 — EX Wolf Fang ambush, Earth, ~250 s, Hold **on**.
+- 1795152104 — Wolf Fang, Hold on; still recording when read.
+
+**Evidence (Verified from captures):**
+- **AlienBandit mapping (SP-061), first run:** 11 counters / 17 presses (hits 1–4: 5/8, 1/4, 4/4, 1/1).
+- **Hold Punches (SP-057), first run:** `CLICK_HELD` 7 times out of 410 outgoing M1 (held 5–205 ms).
+  - Wolf Fang ambush: 25 counters / 31 presses (81%). Only 3 presses had an own M1 in the 200 ms before (2 countered); the other 28 countered 23 times.
+  - Earlier, 64 of 252 recorded presses had an M1 in the 100 ms before (SP-057).
+  - The third history so far: 8 / 9, with 6 holds.
+  - The Hold Punches result is live on one fight: a large improvement, but still a small sample.
+- **Lockout edge:** six presses landed 1.15–1.20 s after a 0.5 s notice (deferred to the v17.4 lockout end) and all failed. Pooled with SP-060: 1.05–1.20 s 0 / 28, 1.20–1.30 s 4 / 8.
+- **What still hits in the Wolf Fang ambush (101 HP drops):**
+  - Rogue hit 1 `78875817992139` (28): skipped, it lands ~117 ms after it is seen.
+  - **Wolf Fang Claw** `123139123318422` (15): unmapped.
+  - Rogue hit 2 when not pressed (14). The rest is spread across other skills.
+- **Wolf Fang Claw:**
+  - A skill: Weave "Wolf Fang Claw", length 1.43 s, multi-hit "Sharp" plus Bleed. First self hit a median 301 ms after the start (56 starts in 4 histories, 50–634 ms).
+  - Manual F 85 ms and 186 ms after the start each gave Counter Parry about 200 ms later, at 283 and 384 ms.
+  - So the skill can be countered.
+
+**Implemented / untested live — Combat page v17.6:**
+- The post-counter lockout is now **1.25 s** (`postCounterLockout=1.25s`).
+- **Wolf Fang Claw** is pressed 100 ms after it is seen (~200 ms before the median first hit). NPCs only; logs `style=npc_skill skill=wolf_fang_claw`. Trial seed.
+
+**Next step:** a Wolf Fang fight on v17.6. Count Wolf Fang Claw counters, and check that no presses land before 1.25 s.

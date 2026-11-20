@@ -1522,3 +1522,37 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 **Implemented / untested live — Combat page v17.3:** trainer hits 1 / 2 / 4 / 5 are pressed after 40 / 0 / 80 / 0 ms (~178 / 167 / 187 / 184 ms of lead); hit 3 is skipped as too fast (`npc_late_hit`). NPCs only: players using these animations stay unmapped (`trainerStyle=player`). Cues log `style=plunder_trainer`. These are trial seeds from one recording.
 
 **Next step:** a trainer fight with Auto Parry on, no manual F, and Hold Punches on (after a rejoin). Compare the counter rate per hit.
+
+## SP-060 — PlunderTrainer mapping result; 1.2 s lockout after any counter (2026-11-19, Claude)
+
+**User:** "done" (history 1795148752, laptop-job place, ~156 s, ended in death). Hold Punches was still **off** (`holdClicks=false`); the user pressed F by hand only twice.
+
+**Evidence (Verified from capture) — SP-059 trainer mapping, first live run:**
+
+| Trainer hit | Pressed | Counter Parry | Blunt | Block | No effect |
+|---|---|---|---|---|---|
+| 1 (@40 ms) | 12 | 3 | 4 | 3 | 2 |
+| 2 (@0) | 12 | 6 | 4 | 0 | 2 |
+| 4 (@80 ms) | 11 | 7 | 3 | 1 | 0 |
+| 5 (@0) | 4 | 2 | 1 | 1 | 0 |
+| rogue heavy (@300 ms) | 2 | 0 | 2 | 0 | 0 |
+
+18 counters from 41 presses, versus none from Auto Parry on trainer combos before SP-059. Successful and failed presses had the same lead before impact (133–200 ms), so the failures were not timing.
+
+**Evidence (Verified from captures, 38 histories today) — post-counter lockout:** the `CooldownNT` "Counter" notice of 0.5 s arrives after your own counter and when an opponent counters you. F presses after it:
+
+| Time after the 0.5 s notice | Presses | Counters |
+|---|---|---|
+| 0.50–1.20 s | 192 | 0 |
+| 1.20–1.25 s | 2 | 1 |
+| 1.25–1.50 s | 52 | 39 |
+| 1.50 s and later | 670 | 553 |
+
+- The same holds after your own counter (0 of 25 before 1.25 s) and after an opponent countered you (1 of 169).
+- 187 of 202 presses inside the window took a Blunt hit. 8 of 192 failed ones were followed by a 5 s counter cooldown.
+- The 5 s notice (failed counter) has no extra lockout: presses 5.0–5.5 s after it countered 5 of 10.
+- **So the counter state is locked about 1.2 s after any counter, not 0.5 s.** After an opponent counters your attack, its next hits in that window land regardless. That was the larger source (169 of 194).
+
+**Implemented / untested live — Combat page v17.4:** a 0.5 s (any sub-1 s) counter notice now sets the local cooldown to 1.15 s (`COUNTER_COOLDOWN ... lockout=1.15`). Cues inside it are skipped as `counter_cooldown`. Heavy cues keep their existing defer rule (up to 0.40 s after the release is seen). The 1.15 s value is a trial at the edge of the measured window.
+
+**Next step:** a recording with Hold Punches on (after a rejoin). Check that no counters were lost at 1.15–1.25 s and that no 5 s cooldowns follow lockout presses.

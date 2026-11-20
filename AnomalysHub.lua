@@ -4709,6 +4709,7 @@ end)()
 -- v17.1 (SP-056): non-colliding combat effects under Workspace.Thrown no longer count as line-of-sight obstacles.
 -- v17.2 (SP-057): optional "Hold Punches Before Parry": your M1 is held from an NPC cue until just after its press.
 -- v17.3 (SP-059): PlunderTrainer combo mapped for NPCs (hits 1, 2, 4, 5 pressed; 3 too fast).
+-- v17.4 (SP-060): the 0.5 s counter notice is treated as a 1.15 s lockout (presses inside it never countered).
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -4776,6 +4777,7 @@ local held,heldAt,heldAttempt,releaseAt,nextReleaseRetry=false,0,0,0,0
 local windowFocused=true
 local sendingAttempt
 local nextPulse,nextScan,cooldownUntil=0,0,0
+local POST_COUNTER_LOCKOUT=1.15
 local lastLocalAttack=-math.huge
 -- SP-057 click hold: deadline (os.clock) and the NPC cue that set it; see holdClicksFor.
 local clickHoldUntil,clickHoldCue=0,nil
@@ -4929,7 +4931,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=per_style_catalog timingTrial=player_set_b_initial range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 npcTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@npcCue->press+30ms"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 npcTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 postCounterLockout=1.15s playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@npcCue->press+30ms"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -5559,7 +5561,10 @@ if cooldown and cooldown:IsA("RemoteEvent")then controller.Connect(cooldown.OnCl
  if type(data)=="table" then
   log("COOLDOWN","name="..sample(data.name).." duration="..sample(data.duration))
   if data.name=="Counter" and type(data.duration)=="number" and data.duration==data.duration and data.duration>=0 and data.duration<=30 then
-   cooldownUntil=os.clock()+data.duration;log("COUNTER_COOLDOWN","duration="..data.duration.." untilLocal="..cooldownUntil)
+   -- SP-060: after the 0.5 s notice (your counter, or an opponent countering you) presses within 1.25 s countered 1 of 194 (0 of 192 before 1.2 s)
+   -- times across 38 histories (0 of 25 after your own counter); from 1.25 s on they countered again. The 5 s notice has no extra lockout.
+   local lockout=data.duration>0 and data.duration<1 and math.max(data.duration,POST_COUNTER_LOCKOUT) or data.duration
+   cooldownUntil=os.clock()+lockout;log("COUNTER_COOLDOWN","duration="..data.duration.." lockout="..lockout.." untilLocal="..cooldownUntil)
    lastCounterNotice={At=os.clock(),Duration=data.duration};pairOpponentCounter()
   end
  else log("COOLDOWN_UNPARSED","type="..typeof(data))end

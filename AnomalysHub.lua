@@ -2785,6 +2785,14 @@ local FIELDS={
  {Label="Race",Resolve=function(target)return show(attr(target,"Race"))end},
  -- User confirmed (2026-11-19) that Trait is the race variant, e.g. Traditional.
  {Label="Race Variant",Resolve=function(target)return show(attr(target,"Trait"))end},
+ -- Character@EventWins replicates for every player (Profile Scan 2026-11-17: 1.5, 0, 4); your profile copy is the fallback.
+ -- Trello: queues win 1.5 / lose 0.5, invades 2.5 / 1, events by type (TDM 1.5, Gauntlet 1, WMAT 2...).
+ {Label="Event Wins",Resolve=function(target)
+  local live=tonumber(attr(target,"EventWins"))
+  if finite(live)then return number(live)end
+  if target~=localPlayer then return nil end
+  return number(tonumber(own("EventWins"))) or (profile and "0" or "Loading profile...")
+ end},
  -- Profile GravityMastery is a number (1 for the user, hidden scan 2026-11-19); not replicated for other players.
  -- Unlock thresholds from the in-game guide: Kaioken 10, Power Release 80, Golden 100, Astral State 120.
  -- Trained by the Gravity Chamber machine/shadow, fighting under planet gravity and Gravity Augmenting Apples (Trello).

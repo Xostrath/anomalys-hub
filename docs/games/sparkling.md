@@ -1488,3 +1488,11 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 - **Line-of-sight fix renumbered** v17.1 (was v16.8 in SP-056), after GPT's v17.
 
 **Next step:** a recording with the toggle on. Compare the counter rate with M1 in the cue window, and count `CLICK_HELD`.
+
+## SP-058 — Visuals: Event Wins row (2026-11-19, Claude)
+
+**User:** "how can i see event wins".
+
+**Source:** the character attribute `EventWins` replicates for every player (Profile Scan 2026-11-17: values 1.5, 0 and 4 on three characters). The profile table also holds `EventWins` (own only), used as the fallback. No in-game display is documented in the Trello or Game Research notes.
+
+**Implemented / untested live — Visuals:** an "Event Wins" row for any selected player (attribute first, then your profile).

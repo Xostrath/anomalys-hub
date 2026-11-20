@@ -228,4 +228,4 @@ Sparkling's POWER LEVEL TRACE is built into Recorders via src/SparklingPowerTrac
 
 ## Sparkling PL tracking panel (2026-11-20)
 
-src/SparklingPowerTracker.lua is assembled into both variants and mounts YOUR POWER LEVEL in Visuals, separately from the detailed recorder. It exposes own profile/live readings, signed session net and elapsed-time rate using the existing UI helpers. See [Sparkling SP-089](docs/games/sparkling.md) for source freshness, session/reset semantics, legacy counter migration and validation; game-specific findings remain in that game's continuous note.
+src/SparklingPowerTracker.lua is assembled into both variants and mounts LIVE SESSION on Dashboard (SP-090), using the Beyond Nen/Gohan session-tile layout. It exposes own profile/live readings, signed session net, rate, time and reading age. This is measurement support; the active Sparkling objective is assessing whether a PL self-grant route exists. See [Sparkling SP-089/SP-090](docs/games/sparkling.md) for metric semantics, the placement correction, evidence limits and validation; game-specific findings remain in that game's continuous note.

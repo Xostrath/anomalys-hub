@@ -3352,14 +3352,14 @@ controller.RegisterCleanup(function()stopFinder("Unloaded.")end)
 
 end)()
 ;(function()
--- Sparkling Power Tracker v1: profile endpoint net, live PL and elapsed-session rate.
+-- Sparkling Power Tracker v1.1: Dashboard live-session measurements, not a PL grant mechanism.
 local controller=((getgenv and getgenv()) or shared).__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
 local player=game:GetService("Players").LocalPlayer
 local rs=game:GetService("ReplicatedStorage")
 local run=game:GetService("RunService")
 local ui=controller.UI
-if not ui or not ui.Pages.Visuals then return end
+if not ui or not ui.Pages.Home then return end
 if controller.SparklingPowerStats then return end
 local meter={Active=true,Epoch=0,Revision=0,NeedsSeed=true,Busy=false,LastAttempt=-math.huge,Status="Waiting for character"}
 controller.SparklingPowerStats=meter
@@ -3445,22 +3445,28 @@ if updated and updated:IsA("RemoteEvent")then
   if finite(power)then meter.Revision+=1;accept(power,"DataUpdated")end
  end)
 end
-local card=ui.Card(ui.Pages.Visuals,"YOUR POWER LEVEL",
- "Profile net gain for this session. PL/min includes idle time. Live power can change with output and form.",260)
-card.LayoutOrder=0
+local card=ui.Card(ui.Pages.Home,"LIVE SESSION",
+ "Your power and gains this session. Restarts on a new character or Reset session; rates include idle time.",374)
+card.LayoutOrder=-1
+local grid=ui.Create("Frame",{Position=UDim2.fromOffset(14,68),Size=UDim2.new(1,-28,0,208),BackgroundTransparency=1},card)
+ui.Create("UIGridLayout",{CellPadding=UDim2.fromOffset(8,8),CellSize=UDim2.new(.5,-4,0,64),
+ FillDirectionMaxCells=2,SortOrder=Enum.SortOrder.LayoutOrder},grid)
 local labels={}
-for i,title in ipairs({"Profile PL","Live battle power","Net profile gain","Profile PL / min"})do
- local y=68+(i-1)*22
- ui.Create("TextLabel",{Position=UDim2.fromOffset(14,y),Size=UDim2.new(.52,-14,0,22),BackgroundTransparency=1,
-  Font=Enum.Font.Gotham,TextSize=11,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text=title},card)
- labels[i]=ui.Create("TextLabel",{Position=UDim2.new(.52,0,0,y),Size=UDim2.new(.48,-14,0,22),BackgroundTransparency=1,
-  Font=Enum.Font.GothamSemibold,TextSize=11,TextColor3=ui.Colors.Text,TextXAlignment=Enum.TextXAlignment.Right,Text="Waiting..."},card)
+for i,definition in ipairs({{"ProfilePL","PROFILE PL"},{"LivePL","LIVE BATTLE POWER"},
+ {"NetPL","NET PROFILE GAIN"},{"Rate","PROFILE PL / MIN"},{"Time","SESSION TIME"},{"Age","PROFILE UPDATED"}})do
+ local tile=ui.Create("Frame",{LayoutOrder=i,BackgroundColor3=ui.Colors.Surface,BorderSizePixel=0},grid)
+ ui.Create("UICorner",{CornerRadius=UDim.new(0,7)},tile)
+ ui.Create("TextLabel",{Position=UDim2.fromOffset(12,7),Size=UDim2.new(1,-24,0,16),BackgroundTransparency=1,
+  Font=Enum.Font.Gotham,TextSize=9,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text=definition[2]},tile)
+ labels[i]=ui.Create("TextLabel",{Name=definition[1].."Value",Position=UDim2.fromOffset(12,27),Size=UDim2.new(1,-24,0,26),BackgroundTransparency=1,
+  Font=Enum.Font.GothamSemibold,TextSize=13,TextColor3=ui.Colors.Text,TextXAlignment=Enum.TextXAlignment.Left,
+  TextTruncate=Enum.TextTruncate.AtEnd,Text="Waiting..."},tile)
 end
-local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,160),Size=UDim2.new(1,-28,0,42),BackgroundTransparency=1,
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,332),Size=UDim2.new(1,-28,0,30),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextColor3=ui.Colors.Muted,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left,Text="Reading profile..."},card)
-local refresh=ui.Button(card,"Refresh profile",14,212,135,function()task.spawn(function()meter.Refresh(false)end)end,ui.Colors.AccentSoft)
-local reset=ui.Button(card,"Reset session",160,212,135,function()task.spawn(meter.Reset)end,ui.Colors.AccentSoft)
-refresh.Size=UDim2.new(.5,-18,0,34);reset.Size=refresh.Size;reset.Position=UDim2.new(.5,4,0,212)
+local refresh=ui.Button(card,"Refresh profile",14,290,135,function()task.spawn(function()meter.Refresh(false)end)end,ui.Colors.AccentSoft)
+local reset=ui.Button(card,"Reset session",160,290,135,function()task.spawn(meter.Reset)end,ui.Colors.AccentSoft)
+refresh.Size=UDim2.new(.5,-18,0,34);reset.Size=refresh.Size;reset.Position=UDim2.new(.5,4,0,290)
 local function format(value,signed)
  if not finite(value)then return "Unavailable"end
  local rounded=math.floor(math.abs(value)+.5)
@@ -3474,7 +3480,8 @@ local function render()
  labels[4].Text=data.Net~=nil and data.PerMinute==nil and "Measuring..." or format(data.PerMinute,true)
  local time=data.Elapsed and string.format("%02d:%02d",math.floor(data.Elapsed/60),math.floor(data.Elapsed%60)) or "--:--"
  local age=data.ProfileAge and string.format("%.0fs ago",data.ProfileAge) or "not received"
- status.Text=data.Status.."\nSession "..time.." · profile updated "..age
+ labels[5].Text=time;labels[6].Text=age
+ status.Text=data.Status
 end
 controller.Connect(player.CharacterAdded,characterChanged)
 local elapsed=0

@@ -4701,7 +4701,7 @@ controller.RegisterCleanup(saveCounts)
 
 end)()
 ;(function()
--- Combat page v18.1 / diagnostics v7: additional observed player style (SP-065); shared NPC policy retained.
+-- Combat page v18.2 / diagnostics v7: repair cosmetic LOS filtering observed in player recordings (SP-066).
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.
 -- v16.3 (SP-039): heavy cues ignore the release track stopping early and may wait out the 0.5 s post-counter cooldown.
@@ -4958,7 +4958,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=shared_npc_player_catalog timingTrial=npc_policy_pvp_transfer range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 sharedHeavyTrial=102483335944327@260/320/380ms sharedRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 sharedTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 sharedBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms sharedWolfFangClaw@100ms postCounterLockout=1.25s playerSetB=all5@40/0/0/40/20ms playerSetC=hit1@0,hit2/3@20,hit5@100ms;skip4;speed1.175+/-0.025 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@mappedCue->press+30ms"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 sharedHeavyTrial=102483335944327@260/320/380ms sharedRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 sharedTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 sharedBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms sharedWolfFangClaw@100ms postCounterLockout=1.25s playerSetB=all5@40/0/0/40/20ms playerSetC=hit1@0,hit2/3@20,hit5@100ms;skip4;speed1.175+/-0.025 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+exact_noncolliding_target_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@mappedCue->press+30ms"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -5057,16 +5057,21 @@ local function onScreen(model)
  local _,visible=camera:WorldToViewportPoint(root.Position)
  return visible
 end
-local function cosmeticObstacle(instance)
- -- Only the current local character's exact direct BasePart; never exclude all Visuals.
+local function cosmeticObstacle(instance,target)
+ -- Exact local or current target-player head effect only; never exclude all Visuals.
  local visuals=workspace:FindFirstChild("Visuals")
  local char=player.Character
  if visuals and char and instance and instance:IsA("BasePart") and instance.Parent==visuals
   and instance.Name=="anotherHead"..char.Name then return instance,"local_head_effect"end
+ -- SP-066: the opponent's non-colliding head effect blocked mapped PvP cues too.
+ local owner=target and targetOwner(target)
+ if visuals and target and owner and owner~=player and owner.Character==target and owner.Parent==players
+  and instance and instance:IsA("BasePart") and instance.CanCollide==false and instance.Parent==visuals
+  and instance.Name=="anotherHead"..target.Name then return instance,"target_head_effect"end
  local thrown=workspace:FindFirstChild("Thrown")
  local cursor=instance
  for _=1,8 do
-  if not cursor then return end
+  if not cursor then break end -- Keep checking the original part after the ancestor walk (SP-066).
   if thrown and cursor.Name=="Zvanishdummy" and cursor:IsA("Model") and cursor.Parent==thrown then return cursor,"zvanish_dummy"end
   cursor=cursor.Parent
  end
@@ -5112,7 +5117,7 @@ local function threat(model,rangeLimit,anyFacing)
   params.FilterDescendantsInstances=exclusions
   local hit=workspace:Raycast(other.Position,delta,params)
   if not hit then return true,"clear",detail.." los=clear ignoredCosmetics="..table.concat(ignored,",")end
-  local cosmetic,kind=cosmeticObstacle(hit.Instance)
+  local cosmetic,kind=cosmeticObstacle(hit.Instance,model)
   logLosObject(hit.Instance,cosmetic,kind)
   if not cosmetic then return false,"line_of_sight",detail.." obstacle="..sample(hit.Instance).." ignoredCosmetics="..table.concat(ignored,",")end
   table.insert(exclusions,cosmetic);table.insert(ignored,kind..":"..sample(cosmetic))
@@ -5127,7 +5132,7 @@ parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. v18.1: additional player style mapped (hits 1/2/3/5). Full shared NPC policy retained; diagnostics record while enabled."},card)
+ Text="Off. v18.2: player cosmetic LOS fix. Shared attack policies retained; diagnostics record while enabled."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -5583,7 +5588,7 @@ local function update(dt)
    end
   end
  end
- status.Text=string.format("AUTO PARRY v18.1 · Additional player style mapped · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("AUTO PARRY v18.2 · Player cosmetic LOS fix · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)

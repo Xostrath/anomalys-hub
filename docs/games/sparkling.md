@@ -4,13 +4,13 @@ Last reviewed: 2026-11-20. This is the initial consolidated handoff from the ava
 
 ## Read first
 
-**Current mode: shared NPC/player attack policy (Combat page v18.1 / diagnostics v7).** SP-065 adds another observed player style (hits 1/2/3/5; fast hit 4 skipped). All v18 shared NPC behavior and player_set_b remain. New timings are trials, not verified PvP success.
+**Current mode: shared NPC/player attack policy (Combat page v18.2 / diagnostics v7).** SP-066 repairs target-head and non-colliding Thrown cosmetic LOS blockers. New recordings show counter receipts after standard, Trainer and player_set_c automatic PvP inputs. Heavy reliability remains mixed; no timing change.
 
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. Additional recorded place: `135537125271116` (place name/role not verified). User-supplied entry place: `120525873606470`.
-- Current objective: verify automatic player_set_c input/outcomes after repairing its catalog gap (SP-065). Latest v18 run had zero automatic presses; known heavy queues were cooldown-blocked. Separate capped detail from later totals.
+- Current objective: verify v18.2 cosmetic LOS exclusions against retained diagnostics (SP-066). False head/effect blockers were reproduced; real obstacles stay blocking. Preserve working hit-5 timing; distinguish automatic from unmatched counters.
 - User-confirmed: a missed parry incurs cooldown (SP-030). Investigate the first failed attempt before the penalty; subsequent cooldown skips are not independent timing misses. Exact penalty onset and short-notice reset semantics remain unknown.
 - Current defense: shared mapped attack handling with PvP/PvE controls, style-specific exclusions, 1.25-second post-counter lockout and optional punch holding. Player range/focus settings remain; diagnostics record automatically.
-- Latest implementation: **v18.1 / SP-065**. Additional player-only combo mapped from the new recording; 382 mock assertions and compilation. Fast fourth hit and shared-heavy mechanics remain unresolved.
+- Latest implementation: **v18.2 / SP-066**. Scoped cosmetic LOS repair; both original failures reproduced, 446 mock assertions and compilation. Standard hit 5 had 5/5 counter receipts in one complete PvP encounter; rogue heavy 2/7, so do not generalize.
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -26,7 +26,7 @@ Last reviewed: 2026-11-20. This is the initial consolidated handoff from the ava
 | Power ESP | Direct Character.PowerLevel numeric value; rounded whole numbers with commas | Numeric source observed; formatting compiled | Base, effective, or suppressed power? |
 | Ki ESP | Blue bar next to red health bar; requires known Ki and explicit positive MaxKi for fill | Ki observed; bar compiled | No verified MaxKi source; unknown max shows an empty track marked `?` |
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
-| Auto parry | v18.1: shared NPC/player policy plus player_set_b and newly observed player_set_c; optional punch holding | SP-065: 382 mocked checks and compilation; limited prior v18 live PvP evidence | New-style live timings, fast fourth hit and shared-heavy behavior remain unresolved; detail caps limit long-run analysis |
+| Auto parry | v18.2 shared policies and player styles; corrected exact-target-head/non-colliding-Thrown LOS handling | SP-066: live PvP counter receipts; both LOS bugs reproduced; 446 mock checks and compilation | Cosmetic fix awaits live validation; heavy behavior remains unresolved/mixed |
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
 | Combat page v11 (SP-T030) | Normal Auto Parry controls; no temporary single-hit filters | 174 mocked assertions and compilation passed; all-hit coverage/cleanup live-verified in SP-T031 | Preserve target context and distinguish conflicted counter receipts from automatic results |
 | Parry diagnostics v7 | Adds RANGE_WAIT/CHECK/ENTERED to existing request/state/outcome records | v6 state snapshots verified live in SP-T035; new geometry trace mocked in SP-T036 | Range entry is not a successful parry; live recovery outcomes outstanding |
@@ -1715,3 +1715,47 @@ Matching: first same-actor HitOut within 600 ms, before the next candidate start
 **Validation:** 382 mocked assertions pass: 65 new-style timing/scope/gate checks plus all 317 v18 checks. Covers intended seeds and offset, fourth-hit exclusion, NPC scope exclusion, ambient/reaction rejection, configured range and approach recovery, player focus/ownership/PvP, manual F, cooldown, stopped tracks, typing/menu/death, optional punch hold and cleanup. Source and both staged/generated variants compile. No live session control or gameplay input by the agent. Reused Sparkling's existing catalog/decision pipeline; no cross-game timing imported.
 
 **Handoff:** reload v18.1 for this additional style. Existing recording is sufficient to implement the coverage fix; no repeat capture was required first. Next player results must show actual automatic player_set_c presses before timing success is assessed. Keep the fast fourth hit and shared-heavy problem explicitly unresolved. The detail-cap issue is now material in busy/long fights: retained event windows and footer totals must be reported separately; future recorder changes should preserve useful per-attempt evidence without silently dropping failure context. No logger format/cap change was made in v18.1.
+
+
+## SP-066 — Live PvP counters; cosmetic LOS failures reproduced and fixed (2026-11-20)
+
+**User:** "new recordings". Read frozen snapshots of 1795158781, 1795158876, 1795160040 and 1795160661. The three fight snapshots have no dropped lines. Last run was still RUNNING; do not replace its snapshot totals with later growing totals. All use v18.1 playerSetC config, PvP/PvE=true, range=8, offset=0, hold=120 ms and Hold Punches=true. Raw reports and actor identifiers stay local.
+
+| Session | Snapshot status / elapsed | Automatic presses | Self-counter receipts | Receipts within 600 ms of an automatic press |
+| --- | --- | --- | --- | --- |
+| 1795158781 | Disabled / 1.433 s | 0 | 0 | 0 |
+| 1795158876 | Disabled / 81.847 s | 3 | 1 | 1 |
+| 1795160040 | Disabled / 154.775 s | 19 | 10 | 10 |
+| 1795160661 | RUNNING / 275.624 s | 6 | 6 | 3 |
+
+All 28 retained automatic presses have successful F_UP API results, and no LOGGER_ERROR/failed-input events occur in these snapshots. Counter receipts have a single recent candidate attempt with inputConflicts=[]; attribution remains temporal, not server confirmation of causation. The other three newest-run counter receipts have no automatic candidate. Do not count those as auto-parry successes.
+
+**New style player_set_c is active:** the 81.847-second run presses hit 3 twice and hit 2 once. First hit-3 press at 25.6500 s is followed by the opponent's HitOut at +180 ms and local Counter Parry at +181 ms, without an intervening unmatched F event. This is live evidence that the new mapping can lead to a counter. The later hit-2/hit-3 presses at 31.0495/31.4170 s have no counter. A BlockEffect at 31.5808 follows the second hit-3 press by 164 ms, and a subsequent Blunt at 31.9318 belongs to the later sequence. Do not independently credit the same effect to both presses merely because both are within a 600-ms window.
+
+Hits 1 and 5 never reached input in that run. Mapped skips: 16 attacker-facing, 5 self-facing, 14 out-of-range, 5 approach-expiry, 5 line-of-sight and 4 cooldown; hit 4 remains intentionally skipped (11 starts). No unverified_style_speed skips. Geometry explains much of the low input count, but that does not establish that all facing/range gates should be removed.
+
+**Complete 155-second standard-style fight (1795160040):**
+
+| Attack | Automatic presses | Local counter receipts within 600 ms |
+| --- | --- | --- |
+| Standard hit 1 | 2 | 1 |
+| Standard hit 2 | 5 | 2 |
+| Standard hit 5 | 5 | 5 |
+| Rogue heavy 126361551838373 | 7 | 2 Perfect Counter |
+
+No unmatched F event intervenes in these press/counter windows. Standard hit 5 is the strongest evidence in this sample; keep its zero-delay seed. These are small per-encounter counts, not a general success guarantee. Rogue heavy's five other presses were followed by Blunt. Successful heavy receipts came 112 and 132 ms after input; failed hits came 58–117 ms after input. Four failed inputs were ~301–302 ms after animation start, overlapping the successful 301/305-ms scheduling; one was delayed to 327 ms. Prior own-M1 ages were 1.0–7.7 seconds, so a punch immediately before input does not explain these seven heavy outcomes. Existing cooldown had cleared. Do not invent a new universal heavy delay from this mixed evidence. Shared heavy 102483335944327 still had seven cooldown skips and four facing skips; zero presses.
+
+**Newest mixed-player run (1795160661):** the first opponent uses mapped PlunderTrainer hits. All three automatic inputs (hit 1, hit 5, hit 2) are followed by same-opponent HitOut and Counter Parry at +148/+132/+165 ms. Later unmatched F presses in the broad 600-ms windows occur only after those receipts (+350–582 ms), so they are not intervening causes of those earlier counters. Against the next standard-style opponent, three automatic presses show zero counter receipts: one has a Blunt at +180 ms, two have no matching local outcome/attacker HitOut within 600 ms. Three other self counters in the session have no automatic candidate. Unknown repeated IDs are not automatically attacks: 18151234538 is a 20-second track with 80 starts; 127030057484621 / 85648965461461 (0.7833 s, 18/14 starts) and 83185442366893 (0.75 s, 13 starts) remain unclassified. No speculative new mappings added.
+
+**Confirmed code/observation failure — cosmetic objects blocking LOS:**
+- Run 1795158876: four decisions stop at the exact target player's `Workspace.Visuals.anotherHead<target-character-name>` (hit 5 three times, hit 1 once), and one at `Workspace.Thrown.Part`.
+- Run 1795160040: two decisions stop at the target head effect, two at `Workspace.Thrown.asrushPart`.
+- Run 1795160661: two stop at the target head effect; one stops at `Workspace.Thrown.Debris`.
+- The eight head-effect blockers are direct Parts in Visuals, CanCollide=false, CanQuery=true, unanchored, size 2/1/1. Names match the actual cue target's character, checked locally without publishing identifiers. The three Part/asrushPart blockers are CanCollide=false, CanQuery=true, size 8/8/5. Debris is CanCollide=true and must continue blocking. Thus **11 first blockers are cosmetic/non-colliding**, versus one real collidable object; this does not prove all 11 would otherwise pass later gates or counter successfully.
+- Source explains both gaps. Head filtering previously covered only the local character's exact effect. The intended SP-056 Thrown filter sat after an ancestor walk containing `if not cursor then return end`; normal Part -> Thrown -> Workspace -> DataModel -> nil chains returned from the whole helper before reaching the non-colliding-part check. It was present in code but ineffective for these objects. Logs explicitly show exclusion=none for them. Do not treat SP-056's implemented status as prior live verification.
+
+**Implemented / untested live — v18.2:** pass the current target model to cosmeticObstacle. Exclude only its exact direct `anotherHead` BasePart under Visuals when CanCollide=false and it belongs to a current live Player character. Local head and exact Zvanishdummy handling remain. Change the ancestor walk's nil case from return to break so the existing exact non-colliding Thrown-part test executes. Raycast again after each exclusion; preserve eight-step cap. Unrelated/nested/lookalike Visuals objects, collidable target-head parts, actual walls and collidable Thrown debris remain blocking. No broad Visuals/Thrown folder exclusion. No changes to attack catalogs, timings, cooldowns, range/facing, target toggles, punch holding or input lifecycle. Config adds exact_noncolliding_target_anotherHead; LOS_OBJECT logs target_head_effect/thrown_effect when actually excluded.
+
+**Validation:** before-fix fixture reproduces both head-effect and non-colliding-Thrown failures (eight assertions). After-fix 446 mocked assertions pass: 64 targeted LOS assertions plus all 382 v18.1 checks. Tests use ancestry-aware raycasts to verify exact target and local head effects, Zvanishdummy, nested non-colliding Thrown effect, walls behind cosmetics, multiple effects, collidable debris/head, unrelated and prefix-lookalike names, wrong/nested folders, and iteration cap. Existing timing, player/NPC scope, focus, ownership, manual F, cooldown, approach, cleanup and settings checks pass. Source, staged public/private and regenerated public/private builds compile. No live session control or agent gameplay inputs. Reused this game's existing LOS policy; no cross-game timings or semantics imported.
+
+**Handoff:** reload v18.2 to remove these confirmed false LOS blockers. The recordings support retaining current standard hit-5 timing and newly shared Trainer coverage; rogue-heavy reliability remains mixed and shared-heavy cooldown remains unresolved. Next retained diagnostics should distinguish target_head_effect/thrown_effect exclusions from actual obstacles. Do not widen facing/range or retune all attacks just to increase the input count. Automatic recording continues.

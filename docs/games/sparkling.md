@@ -1602,3 +1602,21 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 - In the latest log it read 100 at start, 30 s and 60 s, while every prompt was answered.
 - Mind is the stat that Trello's "100 Mind" requirement (Selflessness State) uses. Whether the copy updates live during meditation is **unverified**: it has never been compared with the in-game number (Doctor).
 - **Next step:** the user checks Ki at a Doctor. If it isn't 100, the counter is reading a stale snapshot and needs a live source.
+
+## SP-062 — Ki is profile `Ki`, not `Mind` (2026-11-19, Claude)
+
+**User:** checked Ki at a Doctor: **244.4**. Auto Meditation's counter showed 100.
+
+**Evidence:**
+- User report: Doctor Ki 244.4.
+- **Verified from capture:** the Hidden Value Scan v3 profile (2026-11-17) holds two fields:
+  - `Mind=100`, flat and the same in every copy.
+  - `Ki=15.6` in the newest copies and `15.4` in the older ones. It is fractional and rose 0.2 between snapshots, like the Doctor's 244.4.
+- So the meditation Ki stat is profile `Ki`. `Mind` is a separate stat. The SP-A001 note ("profile `Mind`") and the Visuals Stats row ("KI" = Mind) were wrong.
+
+**Implemented / untested live:**
+- **Auto Meditation:** the counter and the 400 cap read profile `Ki`, rounded to 0.1. The log uses `START ki=` / `KI`.
+- **Visuals Stats (own):** `KI` now shows profile Ki and a separate `MIND` shows Mind. For other players the direct-field key formerly labelled `KI` (Mind) is now labelled `MIND`.
+- **Profile copy choice:** when several snapshot copies are equally close to the live PowerLevel (it doesn't change while meditating), the one with more Ki is used.
+
+**Next step:** confirm the counter matches the Doctor (around 244).

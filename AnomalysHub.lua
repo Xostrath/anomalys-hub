@@ -2646,7 +2646,8 @@ local function refreshProfile()
      end)
      if copy and copy.Emotion~=nil and copy.Trait~=nil then
       local gap=(finite(live) and finite(copy.PowerLevel)) and math.abs(copy.PowerLevel-live) or 0
-      if not bestGap or gap<bestGap then best,bestGap=copy,gap end
+      -- Equal gaps (PowerLevel unchanged while meditating): prefer the copy with more Ki, which only rises.
+      if not bestGap or gap<bestGap or gap==bestGap and (tonumber(copy.Ki) or 0)>(tonumber(best.Ki) or 0) then best,bestGap=copy,gap end
      end
     end
    end
@@ -2668,7 +2669,7 @@ local function number(n)return finite(n) and (math.abs(n)>=1000 and commas(n) or
 
 -- Only the selected character's direct values/attributes are used here. Never read
 -- AttackerTags, trainer templates or the local profile as another player's stats.
-local STAT_KEYS={{"STR","Strength"},{"BODY","CoreStr"},{"CONC","Concentration"},{"REACT","Reactions"},{"AGI","Agility"},{"KI","Mind"}}
+local STAT_KEYS={{"STR","Strength"},{"BODY","CoreStr"},{"CONC","Concentration"},{"REACT","Reactions"},{"AGI","Agility"},{"MIND","Mind"}}
 local function replicatedStats(target,prefix)
  local parts={}
  for _,pair in ipairs(STAT_KEYS)do
@@ -2768,7 +2769,8 @@ local FIELDS={
   if target~=localPlayer then return replicatedStats(target) or OWN_ONLY end
   if profile then
    local parts={}
-   for _,pair in ipairs({{"STR","Strength"},{"BODY","CoreStr"},{"CONC","Concentration"},{"REACT","Reactions"},{"AGI","Agility"},{"KI","Mind"}})do
+   -- SP-062: the Doctor's Ki (244.4) is profile Ki (meditation adds 0.2 steps); Mind is a separate flat stat (100).
+   for _,pair in ipairs({{"STR","Strength"},{"BODY","CoreStr"},{"CONC","Concentration"},{"REACT","Reactions"},{"AGI","Agility"},{"KI","Ki"},{"MIND","Mind"}})do
     local amount=number(own(pair[2]))
     if amount then table.insert(parts,pair[1].." "..amount)end
    end
@@ -3354,7 +3356,7 @@ end)()
 -- From the tutorial capture (2026-11-17): M sends Action("Meditate") and opens PlayerGui["Mind Training"]; Frame.Start shows a
 -- W/A/S/D letter about once a second and the player presses it. A repeated letter doesn't change the text, so a prompt still
 -- showing 1.05s after the last press is pressed again (the user's own repeats were ~1.05s apart). Meditation raises the Ki stat
--- (profile "Mind") up to 400 per the game guide. Reference: Hunter X Enter training key macros and Beyond Nen Auto Meditation.
+-- (profile "Ki"; SP-062 corrected this from "Mind") up to 400 per the game guide. Reference: Hunter X Enter training key macros and Beyond Nen Auto Meditation.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -3418,8 +3420,9 @@ end
 local function mind()
  local read=controller.SparklingProfile
  local data=type(read)=="function" and read() or nil
- local value=data and tonumber(data.Mind)
- return value
+ -- SP-062: Ki, not Mind. The Doctor showed 244.4 while profile Mind stayed 100; profile Ki rises in 0.2 steps.
+ local value=data and tonumber(data.Ki)
+ return value and math.floor(value*10+.5)/10
 end
 local function toggle()
  if state.Closed then return end
@@ -3433,7 +3436,7 @@ local function toggle()
  if controller.SparklingRefreshProfile then pcall(controller.SparklingRefreshProfile)end
  state.NextProfile=os.clock()+30
  button.Text="Auto Meditation: ON";status.Text="On."
- log("START mind="..tostring(mind()))
+ log("START ki="..tostring(mind()))
 end
 button=ui.Checkbox(section.Body,"Auto Meditation","Auto Meditation: OFF",toggle)
 button.Position=UDim2.fromOffset(14,0)
@@ -3464,7 +3467,7 @@ controller.Connect(run.Heartbeat,function()
   state.NextProfile=now+30
   if controller.SparklingRefreshProfile then pcall(controller.SparklingRefreshProfile)end
   local value=mind()
-  log("MIND "..tostring(value))
+  log("KI "..tostring(value))
   if value and value>=CAP then stop("Ki reached "..CAP..", the meditation cap.");return end
  end
  local start,visible=prompt()

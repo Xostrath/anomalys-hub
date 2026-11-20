@@ -3910,7 +3910,7 @@ button.Size=UDim2.new(1,-28,0,34)
 
 end)()
 ;(function()
--- Sparkling Power Trace v1.1: built-in Recorders card; optional standalone execution.
+-- Sparkling Power Trace v2: PL, input, effects and health timeline; read-only.
 local hub=((getgenv and getgenv()) or shared).__AnomalyUniversalController
 if type(hub)~="table" or hub.Profile~="Sparkling" then return end
 assert(game.GameId==10771972206,"Sparkling only")
@@ -3923,7 +3923,9 @@ local controller=env.__AnomalyUniversalController
 assert(type(controller)=="table" and controller.Profile=="Sparkling","Load Anomaly Hub in Sparkling first")
 local ui=controller.UI
 assert(ui and ui.Pages.Recorders,"Recorders page unavailable")
-local player=game:GetService("Players").LocalPlayer
+local players=game:GetService("Players")
+local player=players.LocalPlayer
+local input=game:GetService("UserInputService")
 local rs=game:GetService("ReplicatedStorage")
 local http=game:GetService("HttpService")
 local requests=rs:FindFirstChild("Requests")
@@ -3932,8 +3934,8 @@ local updated=requests and requests:FindFirstChild("DataUpdated")
 assert(fetch and fetch:IsA("RemoteFunction"),"FetchData read unavailable")
 assert(updated and updated:IsA("RemoteEvent"),"DataUpdated event unavailable")
 local module={Active=false,Connections={},Destroyed=false}
-local card=ui.Card(ui.Pages.Recorders,"SPARKLING POWER LEVEL TRACE",
- "Start while resting. Mark combat before fighting, then mark recovery and rest. Stop + Save when recovered. Records only your values; max 10 minutes.",250)
+local card=ui.Card(ui.Pages.Recorders,"SPARKLING POWER LEVEL TRACE v2",
+ "Records PL with combat inputs, hit/parry cues and nearby health changes. Start baseline, mark combat, fight normally, then mark recovery and Stop + Save. Max 10 minutes.",250)
 card.LayoutOrder=-20
 local label=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,158),Size=UDim2.new(1,-28,0,80),
  BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,
@@ -3978,10 +3980,35 @@ local function notify(text)
 end
 local function log(r,kind,data)
  if not r.Active or r.Limit then return end
- local line=http:JSONEncode({t=os.clock()-r.Started,kind=kind,phase=r.Phase,data=data})
- if r.Bytes+#line+1>4000000 or r.Events>=4500 then r.Limit=true;r.Report.limited=true;return end
+ local line=http:JSONEncode({seq=r.Events+1,t=os.clock()-r.Started,kind=kind,phase=r.Phase,data=data})
+ if r.Bytes+#line+1>8000000 or r.Events>=12000 then r.Limit=true;r.Report.limited=true;return end
  if #r.Lines>=800 or r.PartBytes+#line+1>400000 then r.Flush();r.Part+=1;r.Lines={};r.PartBytes=0 end
  table.insert(r.Lines,line);r.PartBytes+=#line+1;r.Bytes+=#line+1;r.Events+=1
+ return r.Events
+end
+local function combatEvent(r,kind,data)
+ local id=log(r,kind,data)
+ if not id then return end
+ r.Report.signalCounts[kind]=(r.Report.signalCounts[kind] or 0)+1
+ while r.Recent[1] and os.clock()-r.Started-r.Recent[1].t>.75 do table.remove(r.Recent,1)end
+ r.Recent[#r.Recent+1]={seq=id,t=os.clock()-r.Started,kind=kind,actor=data.actor}
+ if #r.Recent>128 then table.remove(r.Recent,1);r.Report.coverage.recentWindowEvicted=true end
+end
+local function observeProfile(r,data,source)
+ local now=os.clock()
+ if r.Profile and type(r.Profile.PowerLevel)=="number" and data.PowerLevel~=r.Profile.PowerLevel then
+  local recent={}
+  for _,event in ipairs(r.Recent)do
+   local age=now-r.Started-event.t
+   if age>=0 and age<=.75 then recent[#recent+1]=event end
+  end
+  local live=r.Character:FindFirstChild("PowerLevel")
+  log(r,"PL_CHANGE",{before=r.Profile.PowerLevel,after=data.PowerLevel,delta=data.PowerLevel-r.Profile.PowerLevel,
+   source=source,previousProfileAge=r.ProfileAt and now-r.ProfileAt,livePL=live and live:IsA("ValueBase") and scalar(live.Value) or nil,
+   precedingSignals=recent,windowSeconds=.75,attribution="temporal_only; later cues remain in timeline"})
+  r.Report.plChanges+=1
+ end
+ r.Profile=data;r.ProfileAt=now;r.ProfileSource=source
 end
 local function sample(r,kind)
  local data=state(r.Character)
@@ -4018,7 +4045,7 @@ local function readProfile(r,reason)
  if not ok or type(data.PowerLevel)~="number"then
   log(r,"PROFILE_READ_FAILED",{reason=reason,status=ok and "numeric PowerLevel missing" or "read error"});return false
  end
- r.Profile=data;r.ProfileAt=os.clock();r.ProfileSource="FetchData/"..reason
+ observeProfile(r,data,"FetchData/"..reason)
  local entry={t=os.clock()-r.Started,reason=reason,profile=data,live=state(r.Character)}
  table.insert(r.Report.checkpoints,entry);log(r,"PROFILE_READ_RESULT",entry)
  return true
@@ -4049,19 +4076,151 @@ local function guarded(r,fn)
  local ok,err=pcall(fn)
  if not ok then finish(r,"Capture error: "..tostring(err),false)end
 end
+local function bindCombat(r)
+ local function listen(signal,fn,bucket)
+  local c=signal:Connect(function(...)
+   if not r.Active or module.Current~=r or player.Character~=r.Character then return end
+   local args=table.pack(...)
+   guarded(r,function()fn(table.unpack(args,1,args.n))end)
+  end)
+  table.insert(r.Connections,c)
+  if bucket then table.insert(bucket,c)end
+ end
+ local actors,active,nextActor={},{},0
+ local function actorId(model)
+  if model==r.Character then return "self"end
+  return active[model] and active[model].id or nil
+ end
+ local function shortPayload(value,depth)
+  local basic=scalar(value);if basic~=nil then return basic end
+  if typeof(value)=="Instance"then return actorId(value) or "<unwatched instance>"end
+  if type(value)~="table" or (depth or 0)>=2 then return "<"..typeof(value)..">"end
+  local copy,n={},0
+  for k,v in next,value do
+   n+=1;if n>12 then copy.__truncated=true;break end
+   if type(k)=="string" or type(k)=="number"then copy[tostring(k):sub(1,60)]=shortPayload(v,(depth or 0)+1)end
+  end
+  return copy
+ end
+ local function trackHealth(model,id,bucket)
+  local hum=model:FindFirstChildOfClass("Humanoid")
+  if not hum then return end
+  local last=scalar(hum.Health)
+  listen(hum.HealthChanged,function(value)
+   value=scalar(value);if type(value)~="number"then return end
+   combatEvent(r,id=="self" and "SELF_HEALTH" or "ACTOR_HEALTH",{actor=id,health=value,maxHealth=scalar(hum.MaxHealth),
+    delta=last and value-last,attackerKnown=false});last=value
+  end,bucket)
+  listen(hum.Died,function()combatEvent(r,"DEATH_CUE",{actor=id,killCreditKnown=false})end,bucket)
+  listen(model.ChildAdded,function(child)
+   if child.Name=="Dead" or child.Name=="Knocked"then
+    combatEvent(r,"STATE_MARKER",{actor=id,marker=child.Name,killCreditKnown=false})
+   end
+  end,bucket)
+ end
+ trackHealth(r.Character,"self")
+ local power=r.Character:FindFirstChild("PowerLevel")
+ if power and power:IsA("ValueBase")then
+  local last=scalar(power.Value)
+  listen(power:GetPropertyChangedSignal("Value"),function()
+   local value=scalar(power.Value)
+   log(r,"LIVE_PL_CHANGE",{before=last,after=value,delta=type(last)=="number" and type(value)=="number" and value-last or nil})
+   last=value
+  end)
+  r.Report.coverage.livePLChanges=true
+ end
+ r.RefreshActors=function()
+  local root=r.Character:FindFirstChild("HumanoidRootPart")
+  local live=workspace:FindFirstChild("Live")
+  if not root or not live then r.Report.coverage.actorDiscovery="Workspace.Live/root unavailable";return end
+  r.Report.coverage.actorDiscovery="Workspace.Live direct children, refreshed each second"
+  local candidates={}
+  for index,model in ipairs(live:GetChildren())do
+   if index>500 then r.Report.coverage.actorScanLimited=true;break end
+   if model~=r.Character and model:IsA("Model")then
+    local part=model:FindFirstChild("HumanoidRootPart")
+    if part and model:FindFirstChildOfClass("Humanoid")then
+     local distance=(part.Position-root.Position).Magnitude
+     if distance<=35 then candidates[#candidates+1]={model=model,distance=distance}end
+    end
+   end
+  end
+  table.sort(candidates,function(a,b)return a.distance<b.distance end)
+  if #candidates>8 then r.Report.coverage.nearbyActorOverflow=true end
+  local wanted={}
+  for i=1,math.min(8,#candidates)do wanted[candidates[i].model]=candidates[i].distance end
+  for model,entry in pairs(active)do
+   if not wanted[model]then
+    log(r,"ACTOR_LEAVE",{actor=entry.id,reason="outside watched set; not proof of death"})
+    for _,c in ipairs(entry.connections)do c:Disconnect()end
+    active[model]=nil
+   end
+  end
+  for model,distance in pairs(wanted)do
+   if not active[model]then
+    if not actors[model] and nextActor>=64 then r.Report.coverage.actorIdLimit=true;continue end
+    if not actors[model]then nextActor+=1;actors[model]=nextActor end
+    local id="actor"..actors[model]
+    local entry={id=id,connections={}};active[model]=entry
+    local hum=model:FindFirstChildOfClass("Humanoid")
+    local actorPower=model:FindFirstChild("PowerLevel")
+    local isPlayer=players:GetPlayerFromCharacter(model)~=nil
+    log(r,"ACTOR_JOIN",{actor=id,targetType=isPlayer and "player" or "NPC",npcLabel=not isPlayer and model.Name:sub(1,80) or nil,
+     distance=distance,health=scalar(hum.Health),maxHealth=scalar(hum.MaxHealth),
+     livePL=actorPower and actorPower:IsA("ValueBase") and scalar(actorPower.Value) or nil})
+    trackHealth(model,id,entry.connections)
+   end
+  end
+  for i=#r.Connections,1,-1 do if not r.Connections[i].Connected then table.remove(r.Connections,i)end end
+ end
+ r.RefreshActors()
+ local effects=requests:FindFirstChild("Effects")
+ r.Report.coverage.effects=effects~=nil and effects:IsA("RemoteEvent")
+ if r.Report.coverage.effects then listen(effects.OnClientEvent,function(kind,model,message,...)
+  local actor=actorId(model)
+  if not actor then r.Report.coverage.unwatchedEffects=(r.Report.coverage.unwatchedEffects or 0)+1;return end
+  local cue="other_effect"
+  if kind=="EmitReferenceParticle" and message=="HitOut"then cue="hit_out"
+  elseif kind=="EmitReferenceParticle" and message=="Blunt"then cue="blunt"
+  elseif kind=="Weave" and (message=="Counter Parry!" or message=="Perfect Counter!")then cue="counter"
+  elseif message=="BlockEffect" or kind=="BlockEffect"then cue="block"end
+  combatEvent(r,"COMBAT_EFFECT",{actor=actor,effectKind=shortPayload(kind),message=shortPayload(message),
+   extra=shortPayload(table.pack(...)),cue=cue,attackerKnown=false})
+ end)end
+ local cooldown=requests:FindFirstChild("CooldownNT")
+ r.Report.coverage.cooldowns=cooldown~=nil and cooldown:IsA("RemoteEvent")
+ if r.Report.coverage.cooldowns then listen(cooldown.OnClientEvent,function(data)
+  if type(data)=="table"then combatEvent(r,"COOLDOWN",{actor="self",name=scalar(data.name),duration=scalar(data.duration)})end
+ end)end
+ local function inputEvent(direction,object,processed)
+  if input:GetFocusedTextBox()then return end
+  local kind=object.UserInputType
+  local mouse=kind==Enum.UserInputType.MouseButton1 or kind==Enum.UserInputType.MouseButton2
+  local key=object.KeyCode
+  if not mouse and key~=Enum.KeyCode.F then return end
+  combatEvent(r,"COMBAT_INPUT",{actor="self",direction=direction,key=mouse and tostring(kind) or tostring(key),
+   processed=processed==true,origin="user_or_synthetic_unknown",serverAcceptance="not_observed"})
+ end
+ listen(input.InputBegan,function(object,processed)inputEvent("DOWN",object,processed)end)
+ listen(input.InputEnded,function(object,processed)inputEvent("UP",object,processed)end)
+ r.Report.coverage.inputs="Mouse1/Mouse2/F only, including processed UI input; excludes focused text entry"
+end
 local function start()
  if module.Active or module.Destroyed then return end
  local character=player.Character
  if not character or not character:FindFirstChildOfClass("Humanoid")then setStatus("NOT STARTED — spawn first.");return end
  local prefix="AnomalyHub/universal/sparkling_power_trace"
  local r={Active=true,Started=os.clock(),Character=character,Phase="baseline",Connections={},Lines={},
-  Part=1,PartBytes=0,Events=0,Bytes=0,Reads=0,History=prefix.."_"..os.time().."_"..http:GenerateGUID(false):sub(1,8)}
- r.Report={version=1,unix=os.time(),place=game.PlaceId,status="starting",parts={},checkpoints={},
-  fields=fields,coverage={selfOnly=true,profileEvents=true,outgoingHooks=false,sampleSeconds=.5},
+  Part=1,PartBytes=0,Events=0,Bytes=0,Reads=0,Recent={},History=prefix.."_"..os.time().."_"..http:GenerateGUID(false):sub(1,8)}
+ r.Report={version=2,unix=os.time(),place=game.PlaceId,status="starting",parts={},checkpoints={},signalCounts={},plChanges=0,
+  fields=fields,coverage={selfOnly=false,profileEvents=true,outgoingHooks=false,sampleSeconds=.5,nearbyActors=8,radius=35},
   notes={"Only baseline/recovery/final FetchData reads, at most three; no gameplay commands or outgoing hooks.",
    "Phase markers are user annotations, not proof of combat, defeat or recovery.",
    "Profile/live values are independently observed; profile age and source are included. Missing fields remain unknown.",
-   "No persistence check. Ratios do not establish a universal multiplier. Raw files stay local."}}
+   "No persistence check. Ratios do not establish a universal multiplier. Raw files stay local.",
+   "Combat inputs are not server requests; effects and temporal PL associations do not prove hit ownership or reward causation.",
+   "Nearby health/effects cover up to eight loaded actors within 35 studs; actors use local IDs. Unknown actors are counted, not inferred.",
+   "PL_CHANGE references preceding signals within 0.75s; later signals remain in the full timeline for latency-aware analysis."}}
  module.Current=r;module.Active=true
  r.Flush=function()
   if #r.Lines>0 then
@@ -4083,20 +4242,21 @@ local function start()
    guarded(r,function()
     local selected=profileFields(data)
     if type(selected.PowerLevel)=="number"then
-     r.Profile=selected;r.ProfileAt=os.clock();r.ProfileSource="DataUpdated"
+     observeProfile(r,selected,"DataUpdated")
     end
     log(r,"PROFILE_EVENT",selected)
    end)
   end))
   table.insert(r.Connections,player.CharacterAdded:Connect(function()finish(r,"Character changed; baseline invalid",false)end))
   local hum=character:FindFirstChildOfClass("Humanoid")
+  bindCombat(r)
   table.insert(r.Connections,hum.Died:Connect(function()finish(r,"Character died",false)end))
   setStatus("STARTING — reading baseline (up to 8 seconds).")
   assert(readProfile(r,"baseline"),"Baseline profile unavailable; capture not ready")
   if not r.Active then return end
   r.Ready=true;r.Report.status="recording";sample(r,"BASELINE");r.Save()
   notify("RECORDING baseline. Rest 10 seconds, then mark combat.")
-  local nextSave=os.clock()+5
+  local nextSave,nextActors=os.clock()+5,os.clock()+1
   task.spawn(function()
    while r.Active and not r.Stopping do
     guarded(r,function()
@@ -4104,6 +4264,7 @@ local function start()
      if r.Limit then finish(r,"Capture limit reached",false);return end
      if os.clock()-r.Started>=600 then finish(r,"Ten-minute limit",true);return end
      sample(r)
+     if os.clock()>=nextActors then r.RefreshActors();nextActors=os.clock()+1 end
      setStatus(string.format("RECORDING — %s | %d events | %.0fs\nProfile PL: %s | live PL: %s | profile age: %.1fs\nMark recovery after combat, then Stop + Save once rested.",
       r.Phase,r.Events,os.clock()-r.Started,tostring(r.Profile and r.Profile.PowerLevel or "?"),tostring(r.Live or "?"),r.ProfileAt and os.clock()-r.ProfileAt or 0))
      if os.clock()>=nextSave then r.Save();nextSave=os.clock()+5 end

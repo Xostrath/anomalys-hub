@@ -1556,3 +1556,49 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 **Implemented / untested live — Combat page v17.4:** a 0.5 s (any sub-1 s) counter notice now sets the local cooldown to 1.15 s (`COUNTER_COOLDOWN ... lockout=1.15`). Cues inside it are skipped as `counter_cooldown`. Heavy cues keep their existing defer rule (up to 0.40 s after the release is seen). The 1.15 s value is a trial at the edge of the measured window.
 
 **Next step:** a recording with Hold Punches on (after a rejoin). Check that no counters were lost at 1.15–1.25 s and that no 5 s cooldowns follow lockout presses.
+
+## SP-061 — v17.4 lockout checked live; AlienBandit combo mapped; Auto Meditation Ki counter (2026-11-19, Claude)
+
+**User:** "new auto parry recordings, also is the auto meditation ki counter correct?" Two histories on the laptop-job place: 1795149155 (PlunderTrainer, ~144 s, ended in death) and 1795149911 (Alien Bandits, ~99 s). Hold Punches was **off** in both (`holdClicks=false`), so SP-057 is still untested.
+
+**Evidence (Verified from captures) — v17.4 post-counter lockout:** no press came inside 1.2 s of a 0.5 s notice in either history (24 such notices in the trainer fight).
+
+**PlunderTrainer, second run (v17.4):** 18 counters from 30 presses (was 18 / 41 in SP-060).
+
+| Hit | Counters / presses |
+|---|---|
+| 1 | 3 / 9 |
+| 2 | 10 / 12 |
+| 4 | 2 / 3 |
+| 5 | 2 / 3 |
+| rogue heavy | 1 / 3 |
+
+- Across both trainer runs, hit 2 countered 14 / 17 with no own M1 in the 400 ms before, and 2 / 7 with one. This matches SP-057.
+- Hit 1 countered only 5 / 15 even without a recent M1, with the same lead as its successes (133–200 ms). Its failures cluster 0.7–1.1 s after the user's last M1, which may be a post-combo state. Unresolved; not retuned.
+
+**AlienBandit combo (history 1795149911):**
+- It is a separate animation set: speed 1.25, phase 0, one attacking bandit.
+- Order from same-actor sequences:
+
+| Hit | Animation | Median impact | Range | Impacts |
+|---|---|---|---|---|
+| 1 | 115411232011168 | 301 ms | 283–318 | 11 |
+| 2 | 85425709738831 | 167 ms | 165–168 | 8 |
+| 3 | 107415938517971 | 216 ms | 200–218 | 7 |
+| 4 | 84926821033390 | 184 ms | 183–200 | 5 |
+| 5 | 99917228120363 | 218 ms | 201–234 | 4 |
+
+- Hit 2 or 3 is sometimes followed by the rogue heavy; the shared heavy also appears.
+- These five accounted for 29 of 45 Blunt hits taken. Auto Parry pressed only 3 times (rogue heavy, 1 counter).
+- The user pressed F by hand 25 times, and the history holds 8 five-second failed-counter cooldowns.
+
+**Implemented / untested live — Combat page v17.5:**
+- Bandit hits 1–5 are pressed after 120 / 0 / 40 / 0 / 40 ms (~181 / 167 / 176 / 184 / 178 ms of lead).
+- NPCs only: players using these animations stay unmapped (`banditStyle=player`). Cues log `style=alien_bandit`.
+
+**Auto Meditation Ki counter (source inspection):**
+- The status shows `Ki <profile Mind> / 400`.
+- Mind is read from the client-memory profile copy SparklingVisuals picks: of the snapshot copies, the one whose PowerLevel is closest to the live PowerLevel. It is re-scanned every 30 s while meditating.
+- In the latest log it read 100 at start, 30 s and 60 s, while every prompt was answered.
+- Mind is the stat that Trello's "100 Mind" requirement (Selflessness State) uses. Whether the copy updates live during meditation is **unverified**: it has never been compared with the in-game number (Doctor).
+- **Next step:** the user checks Ki at a Doctor. If it isn't 100, the counter is reading a stale snapshot and needs a live source.

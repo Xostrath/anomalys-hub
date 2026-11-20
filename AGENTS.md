@@ -1,6 +1,6 @@
 # Anomaly's Hub contributor instructions
 
-Read [PROJECT_NOTES.md](PROJECT_NOTES.md), the [game-note index](docs/games/README.md), and the target game’s note before editing or adding a game profile.
+Read [PROJECT_NOTES.md](PROJECT_NOTES.md), starting with its current handoff and the relevant game section, before editing or adding a game profile. It is the single canonical findings and handoff note for the whole hub.
 
 - Inspect existing UI helpers, capture tools, and adapters before creating replacements.
 - Use the shared Anomaly interface. Hunter X Enter is the visual reference; game adapters change content, not the theme.
@@ -15,8 +15,8 @@ Read [PROJECT_NOTES.md](PROJECT_NOTES.md), the [game-note index](docs/games/READ
 
 ## Game evidence and handoff
 
-- Maintain a living per-game note in `docs/games/`. Use `TEMPLATE.md` when adding a game; explicitly mark missing information unknown.
+- Maintain all shared and game-specific findings in `PROJECT_NOTES.md`. Add new games as sections using its embedded template; explicitly mark missing information unknown. Former `docs/games/` files are redirects only; do not maintain separate notes.
 - Record discoveries, verified successes, failures, and inconclusive tests in the same change or immediately after reviewing a new recording. Include version/place, evidence, expected versus observed behavior, confidence, and next step. Preserve superseded results.
 - Separate source inspection, compile/mock checks, user confirmation, and verified live results. A feature existing in code is not proof that it works in game.
-- Before creating a feature, check other games’ notes and their referenced implementations for useful precedent. Record what was reused; do not transfer game-specific timings, remotes, or semantics without evidence.
-- Keep the current feature table and next-chat handoff current. Public notes contain sanitized findings, never raw captures, player identifiers, private builds, or secrets.
+- Before creating a feature, check other game sections in PROJECT_NOTES.md and their referenced implementations for useful precedent. Record what was reused; do not transfer game-specific timings, remotes, or semantics without evidence.
+- Keep the top-level current handoff and relevant feature table current. Public notes contain sanitized findings, never raw captures, player identifiers, private builds, or secrets.

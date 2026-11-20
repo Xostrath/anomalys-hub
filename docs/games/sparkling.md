@@ -11,7 +11,7 @@ Last reviewed: 2026-11-20. This is the initial consolidated handoff from the ava
 - User-confirmed: a missed parry incurs cooldown (SP-030). Investigate the first failed attempt before the penalty; subsequent cooldown skips are not independent timing misses. Exact penalty onset and short-notice reset semantics remain unknown.
 - Current defense: shared mapped attack handling with PvP/PvE controls, style-specific exclusions, 1.25-second post-counter lockout and optional punch holding. Player range/focus settings remain; diagnostics record automatically.
 - Latest implementation: **v18.4 / SP-068**. Additional player-only style at normal speed 1.2; hits 3/4 skipped. 534 mock assertions and compilation; new-style live timing unverified. Cosmetic filtering verified in retained v18.2 logs.
-- Latest recording review: **SP-069** (2026-11-20). Retained set C inputs have seven counter receipts across 13 presses; capped totals cannot establish a rate. Recorded session is v18.3, not the installed v18.4 set-D update; no timing changes.
+- Latest recording review: **SP-070** (2026-11-20). User-reported worsening is supported by equal-window health/input measures. Same v18.4 config/set C; unmatched F inputs and cooldown occupancy rose sharply. No timing change or proven code regression; keep distinct counter-event attribution.
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -1848,3 +1848,38 @@ Three hit-3 HitOut events have nearby local Counter Parry receipts. All include 
 **Decision / validation:** findings-only update; keep gameplay source, timing constants and the installed v18.4 build unchanged. No new compile/mock run is appropriate for a documentation-only review. Analysis matches automatic attempts to actor-specific HitOut, counter events, intervening input and releases, and distinguishes later-combo damage from the earlier attempt. Neither 7/13 nor the capped 15/16 total should be advertised as an overall reliability estimate.
 
 **Handoff:** v18.4 is already installed but must be reloaded to start a session containing playerSetD. The existing recording supports retaining set C's current timing; it does not test the newly added set D. The recurring 12,000-line detail cap is a recorder limitation: later attempts/outcomes become unavailable despite continued totals. A future bounded segmented/compact recording design should preserve per-attempt evidence; do not silently infer omitted outcomes or repeatedly retune from footer ratios. No extra test was requested as a prerequisite to this analysis.
+
+
+
+## SP-070 — User reports worsening; equal-window comparison shows more lockout/input competition (2026-11-20)
+
+**User:** "check again i think it go worse". Reviewed frozen snapshots of 1795166882 and 1795167356 and compared the complete first 180 seconds of each, with 1795166202 as older context. The user's report is supported by the latest encounter's reduced automatic activity and greater recorded health loss; do not dismiss it by quoting a counter/attempt footer ratio.
+
+**Version/control check:** both new runs have byte-for-byte identical Config lines, including v18.4 playerSetD, set-C seeds 0/20/20/100 ms, range=8, offset=0, hold=120 ms, PvP/PvE=true, Hold Punches=true, normal-speed guard and cosmetic fix. Retained opponent attacks use set C; there are zero set-D animation starts in either retained segment. The v18.4 addition therefore did not trigger new inputs in these sections, and did not change set-C timing. This does not by itself prove absence of every runtime/game-state cause, but provides no basis for rolling back the new catalog as the explanation.
+
+| Complete first 180 seconds | 1795166882 | 1795167356 (latest) |
+| --- | --- | --- |
+| Automatic F presses | 25 | 9 |
+| Distinct counter receipts after recent automatic input | 12 | 5 |
+| Of those, logger flags multiple recent attempts | 5 | 0 |
+| Unmatched F-down events | 8 | 29 |
+| Negative-health observations | 111 | 183 |
+| Sum of observed negative health deltas | 131.92 | 154.24 |
+| Decisions blocked by counter cooldown | 19 | 41 |
+| Approximate time under recorded counter lockout | 42.09 s | 65.88 s |
+| Five-second Counter notices | 4 | 9 |
+| Counter=0.5 notices | 18 | 21 |
+
+Health loss here is the sum of client health decreases, not a count of enemy attacks or a controlled damage benchmark. These are different encounter windows, not a randomized A/B test. Cooldown time integrates each recorded notice until its expiry, the next overriding notice, or t=180, matching the controller's replacement semantics; it is not simply notices multiplied by duration. Older 1795166202's same 180-second window had 13 presses, seven counter receipts, 141 negative-health events, 137.40 total negative deltas and ten five-second notices, illustrating substantial encounter variation.
+
+**Attribution correction for dense sequences:** a counter can fall within 600 ms of two consecutive automatic presses. Count each SELF_COUNTER event once, not one success for every earlier press inside that window. A naive per-press search yields 15 qualifying presses for the middle run's first 180 s, but only 12 distinct counter receipts; five have candidateCount=2 / attribution=ambiguous. No 15/25 success claim is warranted. In the full retained middle segment there are 28 presses and 14 distinct counter receipts, not 17 independent successes from broad per-press windows. Keep that distinction in future analysis tooling.
+
+**Latest five-second notices and F input source:** nine notices occur at 18.4134, 31.1956, 62.2288, 67.7953, 90.7269, 116.7101, 136.3098, 164.8915 and 178.3399 s. Every one follows an unmatched F-down by 82–448 ms. There is no prior automatic input for the first; the most recent AP press is 1.297–60.828 s earlier for the rest. None of these nine is temporally adjacent to an AP press. In the previous run, three of four five-second notices follow unmatched input; one is 64 ms after an automatic press. This supports increased input competition/lockout as a substantial contributor, not proof that manual input caused every cooldown. Unmatched means not associated with this AP pulse: it could be the user or another input source. Do not label it definitely manual or blame the user.
+
+**Remaining behavior:** in the newest retained 214.4406 seconds, 11 AP presses produce six counter receipts with single recent candidates; one other counter is unmatched. Set-C hit 5 has three presses followed by three counters; hit 2 one/one; hit 3 two/one; hit 1 five/one. Do not call the other five presses five measured timing failures: several have no same-opponent HitOut/local outcome, and the one later Blunt near the last hit-1 input belongs after the immediate hit window. The preceding run includes mixed hit-1 counter/block/damage outcomes at overlapping observed lead times (~165–198 ms), providing no clean new seed. Retained F_UP calls succeed and no runtime errors occur. Median sampled pings overlap; the latest does not show an obvious latency increase.
+
+**Gates and cosmetics:** latest first-180-s facing skips total 31 (22 attacker, nine self), versus 18 (15/three); range skips are 22 versus 37; six manual-F/already-held skips appear versus zero. These may further reduce response coverage but do not prove those geometry decisions are wrong. Forty-one cooldown skips include shared-heavy and light cues; they are not forty-one independently mistimed parries. The one latest LOS skip is collidable Workspace.Thrown.Debris and is intentionally preserved. No evidence here supports ignoring real debris or weakening the scoped cosmetic fix.
+
+**Capture limits:** middle run finalized Disabled at 240.274 s, footer 35 attempts / 18 counter receipts / 143 health decreases, 1913 dropped lines, detail ends at 200.8065 s. Latest snapshot was RUNNING at 275.622 s, footer 11 attempts / seven counter receipts / 189 health decreases, 1116 dropped lines, detail ends at 214.4406 s. This is why the comparison uses t<=180 only. Later live totals are not interchangeable with frozen detailed evidence. No raw reports or player names are published.
+
+**Decision:** findings-only update; keep installed/source v18.4 unchanged. Latest overall protection was worse, but no isolated code regression or defensible timing correction is established. Do not claim the AP is reliable merely because some counters work, disable cooldown protection to inflate inputs, or retune set C based on omitted/cross-attributed events. For an interpretable future run, AP should be the sole F-input source (normal movement/attacking can continue); this is guidance, not a prerequisite or requested confirmation. Existing recordings were analyzed first. No new build/tests are needed for this documentation-only change. Next engineering priority remains preserving compact per-attempt evidence beyond the detail cap rather than repeatedly inferring outcomes from footer totals.

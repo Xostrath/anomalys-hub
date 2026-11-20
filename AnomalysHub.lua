@@ -5945,6 +5945,182 @@ end)
 
 end)()
 ;(function()
+-- Sparkling spectate recorder (SP-100). Local, read-only capture for two jobs:
+-- 1. Spectate: what the camera does while the hub's Spectate v6 follows someone (camera type/subject/position each 0.25 s, whether the
+--    game's camera scripts move it after Spectate writes it, and Spectate's own START/WAIT/FOLLOW/STREAM lines).
+-- 2. Leaderboard spectate: Sparkling's player list is PlayerGui.PlayerList.Panel.List with Header/Row TextLabels showing character
+--    names ("Fennok") and a PlayerList.Tip that reads "@<account>" (job recorder 1795169603). This dumps that tree, every player's
+--    name fields and character attributes, the tip text as it changes, and the GUI objects under each click, so rows can be mapped
+--    to players. Sends no requests; changes nothing.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local ui,state=controller.UI,controller.State
+if not ui or not ui.Pages.Recorders then return end
+local players=game:GetService("Players")
+local run=game:GetService("RunService")
+local input=game:GetService("UserInputService")
+local guiService=game:GetService("GuiService")
+local player=players.LocalPlayer
+
+local LIMIT_SECONDS,LIMIT_LINES=180,6000
+local rec={Active=false,Lines={},Connections={},Truncated=false}
+local function short(value)return (tostring(value):gsub("[\r\n]"," "):sub(1,160))end
+local function log(text)
+ if not rec.Active then return end
+ if #rec.Lines>=LIMIT_LINES then rec.Truncated=true;return end
+ table.insert(rec.Lines,string.format("%.3f %s",os.clock()-rec.Started,text))
+end
+local function save(final)
+ if type(writefile)~="function" or not rec.Started then return end
+ if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ local body="SPARKLING SPECTATE RECORDER v1 // read-only\nplace="..game.PlaceId.." streaming="..tostring(workspace.StreamingEnabled)
+  .."\nTREE = PlayerList objects, PLAYER = name fields, CHAR = character attributes, TIP = hover tip changes, CLICK = GUI objects under the pointer,"
+  .." CAMERA = camera each 0.25 s (moved = changed after Spectate's last write), SPECTATE = the hub's own spectate lines.\n"
+  ..table.concat(rec.Lines,"\n")..(rec.Truncated and "\nTRUNCATED at "..LIMIT_LINES.." lines" or "")..(final and "\nSTATUS="..final or "")
+ pcall(writefile,"AnomalyHub/universal/sparkling_spectate_record_"..rec.Unix..".txt",body)
+ pcall(writefile,"AnomalyHub/universal/sparkling_spectate_record_latest.txt",body)
+end
+local function describe(object)
+ local parts={object.ClassName,object:GetFullName()}
+ if object:IsA("GuiObject") then
+  table.insert(parts,"visible="..tostring(object.Visible).." active="..tostring(object.Active))
+  if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then table.insert(parts,'text="'..short(object.Text)..'"')end
+  if object:IsA("ImageLabel") or object:IsA("ImageButton") then table.insert(parts,"image="..short(object.Image))end
+ elseif object:IsA("ValueBase") then table.insert(parts,"value="..short(object.Value))end
+ local attributes={}
+ for key,value in pairs(object:GetAttributes())do table.insert(attributes,"@"..key.."="..short(value))end
+ if #attributes>0 then table.insert(parts,table.concat(attributes," "))end
+ return table.concat(parts," ")
+end
+local function playerList()
+ local gui=player:FindFirstChildOfClass("PlayerGui")
+ return gui and gui:FindFirstChild("PlayerList")
+end
+local function dumpTree(reason)
+ local list=playerList()
+ if not list then log("TREE "..reason.." PlayerGui.PlayerList missing");return end
+ local count=0
+ for _,object in ipairs(list:GetDescendants())do
+  count+=1;if count>400 then log("TREE limit 400 reached");break end
+  log("TREE "..reason.." "..describe(object))
+ end
+end
+local function dumpPlayers()
+ for _,other in ipairs(players:GetPlayers())do
+  local character=other.Character
+  log(string.format("PLAYER name=%s display=%s userId=%d self=%s character=%s inLive=%s",other.Name,other.DisplayName,other.UserId,
+   tostring(other==player),character and character.Name or "none",tostring(character~=nil and character.Parent==workspace:FindFirstChild("Live"))))
+  local playerAttributes={}
+  for key,value in pairs(other:GetAttributes())do table.insert(playerAttributes,"@"..key.."="..short(value))end
+  if #playerAttributes>0 then log("PLAYER_ATTR "..other.Name.." "..table.concat(playerAttributes," "))end
+  if character then
+   local attributes={}
+   for key,value in pairs(character:GetAttributes())do table.insert(attributes,"@"..key.."="..short(value))end
+   local humanoid=character:FindFirstChildOfClass("Humanoid")
+   log("CHAR "..other.Name.." humanoidDisplay="..tostring(humanoid and humanoid.DisplayName).." "..table.concat(attributes," "):sub(1,1500))
+  end
+ end
+end
+local function watch(signal,callback)table.insert(rec.Connections,signal:Connect(callback))end
+local lastCamera
+local function cameraLine()
+ local camera=workspace.CurrentCamera
+ if not camera then log("CAMERA none");return end
+ local position=camera.CFrame.Position
+ local moved=lastCamera and (position-lastCamera).Magnitude>.05
+ log(string.format("CAMERA type=%s subject=%s pos=(%.1f,%.1f,%.1f) movedSinceSpectateWrite=%s spectating=%s waiting=%s reason=%s",
+  tostring(camera.CameraType):gsub("Enum.CameraType.",""),camera.CameraSubject and camera.CameraSubject:GetFullName() or "nil",
+  position.X,position.Y,position.Z,tostring(moved==true),state.SpectateTarget and state.SpectateTarget.Name or "none",
+  tostring(state.SpectateWaiting),tostring(state.SpectateWaitReason)))
+end
+local function clickLine(direction,io)
+ local gui=player:FindFirstChildOfClass("PlayerGui")
+ local position=io.Position
+ local objects={}
+ if gui then
+  for index,object in ipairs(gui:GetGuiObjectsAtPosition(position.X,position.Y))do
+   if index>8 then break end
+   table.insert(objects,describe(object):sub(1,220))
+  end
+ end
+ local list=playerList()
+ local tip=list and list:FindFirstChild("Tip")
+ tip=tip and tip:FindFirstChild("Text")
+ log(string.format("CLICK %s %s at=(%d,%d) tip=%s under=[%s]",direction,tostring(io.UserInputType):gsub("Enum.UserInputType.",""),
+  position.X,position.Y,tip and tip:IsA("TextLabel") and ('"'..short(tip.Text)..'"') or "none",table.concat(objects," | ")))
+end
+
+local card=ui.Card(ui.Pages.Recorders,"SPARKLING SPECTATE RECORDER",
+ "Start, then: open the player list, hover and click a few names, and spectate someone from General > Spectate for ~20 s (orbit, zoom, stop). Then Stop. Local file only; sends nothing.",210)
+card.LayoutOrder=37
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,80),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Off. Saves sparkling_spectate_record_latest.txt (stops itself after 3 minutes)."},card)
+local button
+local function stop(reason)
+ if not rec.Active then return end
+ dumpTree("end");log("STOP "..reason)
+ rec.Active=false
+ for _,connection in ipairs(rec.Connections)do connection:Disconnect()end
+ table.clear(rec.Connections)
+ if controller.RecordSpectateEvent==rec.Hook then controller.RecordSpectateEvent=rec.PreviousHook end
+ save(reason)
+ button.Text="Start Spectate Recorder"
+ status.Text="Saved: "..#rec.Lines.." lines (sparkling_spectate_record_latest.txt). "..reason
+end
+local function start()
+ if rec.Active then stop("Stopped.");return end
+ rec.Active=true;rec.Lines={};rec.Truncated=false;rec.Started=os.clock();rec.Unix=os.time();lastCamera=nil
+ button.Text="Stop Spectate Recorder";status.Text="Recording..."
+ log("START unix="..rec.Unix)
+ dumpTree("start");dumpPlayers()
+ -- The hub's spectate already reports through controller.RecordSpectateEvent when it is set (UniversalSpectate note()).
+ rec.PreviousHook=controller.RecordSpectateEvent
+ rec.Hook=function(text)log("SPECTATE "..short(text));if rec.PreviousHook then pcall(rec.PreviousHook,text)end end
+ controller.RecordSpectateEvent=rec.Hook
+ local list=playerList()
+ if list then
+  local tip=list:FindFirstChild("Tip")
+  tip=tip and tip:FindFirstChild("Text")
+  if tip and tip:IsA("TextLabel") then watch(tip:GetPropertyChangedSignal("Text"),function()log('TIP "'..short(tip.Text)..'"')end)end
+  if tip and tip.Parent:IsA("GuiObject") then watch(tip.Parent:GetPropertyChangedSignal("Visible"),function()log("TIP visible="..tostring(tip.Parent.Visible))end)end
+  watch(list.DescendantAdded,function(object)log("TREE added "..describe(object))end)
+  watch(list.DescendantRemoving,function(object)log("TREE removed "..object:GetFullName())end)
+  local panel=list:FindFirstChild("Panel")
+  if panel and panel:IsA("GuiObject") then watch(panel:GetPropertyChangedSignal("Visible"),function()log("PANEL visible="..tostring(panel.Visible))end)end
+ end
+ watch(input.InputBegan,function(io,processed)
+  if io.UserInputType==Enum.UserInputType.MouseButton1 or io.UserInputType==Enum.UserInputType.MouseButton2 then clickLine("DOWN processed="..tostring(processed),io)
+  elseif io.UserInputType==Enum.UserInputType.Keyboard then log("KEY "..tostring(io.KeyCode):gsub("Enum.KeyCode.","").." processed="..tostring(processed))end
+ end)
+ watch(input.InputEnded,function(io)
+  if io.UserInputType==Enum.UserInputType.MouseButton1 or io.UserInputType==Enum.UserInputType.MouseButton2 then clickLine("UP",io)end
+ end)
+ watch(players.PlayerAdded,function(other)log("JOIN "..other.Name)end)
+ watch(players.PlayerRemoving,function(other)log("LEAVE "..other.Name)end)
+ -- Camera: sample before rendering (game scripts) and right after Spectate's late render step writes it.
+ pcall(function()
+  run:BindToRenderStep("AnomalySparklingSpectateRecord",Enum.RenderPriority.Last.Value+2,function()
+   local camera=workspace.CurrentCamera
+   lastCamera=camera and camera.CFrame.Position
+  end)
+ end)
+ table.insert(rec.Connections,{Disconnect=function()pcall(function()run:UnbindFromRenderStep("AnomalySparklingSpectateRecord")end)end})
+ local nextCamera,nextSave=0,os.clock()+5
+ watch(run.Heartbeat,function()
+  local now=os.clock()
+  if now-rec.Started>=LIMIT_SECONDS then stop("Time limit reached.");return end
+  if now>=nextCamera then nextCamera=now+.25;cameraLine()end
+  if now>=nextSave then nextSave=now+5;save()end
+  status.Text=string.format("Recording... %ds, %d lines.",math.floor(now-rec.Started),#rec.Lines)
+ end)
+end
+button=ui.Button(card,"Start Spectate Recorder",14,72,200,start,ui.Colors.AccentSoft)
+controller.Connect(player.OnTeleport,function()stop("Teleporting.")end)
+controller.RegisterCleanup(function()stop("Unloaded.")end)
+
+end)()
+;(function()
 -- Combat page v18.5 / diagnostics v7: ping compensation (SP-073). v18.4 added recorded player_set_d (SP-068); v18.3 rogue-heavy trial retained.
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.

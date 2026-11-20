@@ -2534,3 +2534,40 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **No code change.**
 
 **Next step:** compare the HUD "Event Elo" with Visuals once more after the next queue or event win.
+
+## SP-100 — Spectate + leaderboard spectate: recorder first (2026-11-20, Claude)
+
+**User:** "lets focus on the spectate, lets get that working and the spectate leaderboard which will probably need a record".
+
+**Current state (source inspection):**
+- **Spectate v6 (`UniversalSpectate.lua`, General page)** runs on every profile and has no Sparkling-specific code.
+  - It follows the target with a Scriptable camera at RenderPriority Last+1 and requests streaming around the last known position.
+  - Today's `spectate_test.txt` holds only "READY v6" at 13:54. No spectate attempt has been logged in Sparkling, so the failure mode is unknown.
+- **Leaderboard spectate exists only for Beyond Nen** (`BeyondNenSpectate.lua`). It resolves rows from `PlayerGui.Leaderboard.PlayerList.PlayerScroller.Tab.<rank>.<account name>`.
+- **Sparkling's list is different** (job recorder 1795169603, Verified from capture):
+  - It is `PlayerGui.PlayerList.Panel.List`, holding Header TextLabels (factions, e.g. "Saiyan Army", "Players") and Row TextLabels that show **character names**, not account names.
+  - `PlayerList.Tip.Text` shows "@<account>", apparently on hover.
+  - A row → player mapping is therefore not established.
+
+**Implemented / untested live — `src/SparklingSpectateRecorder.lua` (Recorders page):**
+- **Run:** Start/Stop; it stops itself after 3 min. Writes local `sparkling_spectate_record_<unix>.txt` / `_latest.txt` (not committed).
+- **Player list:**
+  - the PlayerList tree at start and end (class, path, visibility, Active, text, attributes);
+  - added and removed rows;
+  - Tip text and visibility changes, and Panel visibility.
+- **Players:** every player's Name / DisplayName / UserId, player attributes, and character attributes plus `Humanoid.DisplayName`. This is for finding where the character name shown in the row lives.
+- **Input:**
+  - every left/right click, with the top 8 GUI objects under the pointer and the tip text at that moment;
+  - key presses.
+- **Camera:**
+  - sampled every 0.25 s: type, subject, position, Spectate target, wait state and reason;
+  - a render-step snapshot after Spectate's write, to flag the camera being moved outside the render step.
+- **Spectate's own lines:** START / WAIT / FOLLOW / STREAM / STOP, via `controller.RecordSpectateEvent`.
+- Sends no requests and changes nothing. Both variants compile.
+
+**Next step:**
+1. Start the recorder.
+2. Open the player list; hover and click several names.
+3. Spectate someone from General > Spectate for ~20 s (orbit, zoom, stop).
+4. Stop the recorder.
+5. Read the file. Then fix Spectate and add Sparkling row → player click-to-spectate.

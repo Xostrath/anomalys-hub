@@ -3910,6 +3910,241 @@ button.Size=UDim2.new(1,-28,0,34)
 
 end)()
 ;(function()
+-- Sparkling Power Trace v1.1: built-in Recorders card; optional standalone execution.
+local hub=((getgenv and getgenv()) or shared).__AnomalyUniversalController
+if type(hub)~="table" or hub.Profile~="Sparkling" then return end
+assert(game.GameId==10771972206,"Sparkling only")
+assert(type(writefile)=="function","writefile required")
+local env=(getgenv and getgenv()) or shared
+local previous=env.__AnomalyPowerTrace
+if previous and previous.Active then previous.Stop("Stopped by rerunning script");return end
+if previous and previous.Destroy then previous.Destroy()end
+local controller=env.__AnomalyUniversalController
+assert(type(controller)=="table" and controller.Profile=="Sparkling","Load Anomaly Hub in Sparkling first")
+local ui=controller.UI
+assert(ui and ui.Pages.Recorders,"Recorders page unavailable")
+local player=game:GetService("Players").LocalPlayer
+local rs=game:GetService("ReplicatedStorage")
+local http=game:GetService("HttpService")
+local requests=rs:FindFirstChild("Requests")
+local fetch=requests and requests:FindFirstChild("FetchData")
+local updated=requests and requests:FindFirstChild("DataUpdated")
+assert(fetch and fetch:IsA("RemoteFunction"),"FetchData read unavailable")
+assert(updated and updated:IsA("RemoteEvent"),"DataUpdated event unavailable")
+local module={Active=false,Connections={},Destroyed=false}
+local card=ui.Card(ui.Pages.Recorders,"SPARKLING POWER LEVEL TRACE",
+ "Start while resting. Mark combat before fighting, then mark recovery and rest. Stop + Save when recovered. Records only your values; max 10 minutes.",250)
+card.LayoutOrder=-20
+local label=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,158),Size=UDim2.new(1,-28,0,80),
+ BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,
+ TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="READY — click Start baseline."},card)
+local fields={"PowerLevel","Output","MaxOutput","Form","Transformation","Race","RacePotential",
+ "Fatigue","HeadInj","TorsoInj","LeftArmInj","RightArmInj","LeftLegInj","RightLegInj",
+ "Ki","MaxKi","Stamina","MaxStamina","OverCharge","Limit","LimitBreak","CombatTimer",
+ "Knocked","Dead","Sleeping","Resting","GodKi"}
+local function scalar(v)
+ if type(v)=="number"then return v==v and math.abs(v)<math.huge and v or nil end
+ if type(v)=="boolean"then return v end
+ if type(v)=="string"then return v:sub(1,120)end
+ return nil
+end
+local function profileFields(data)
+ local result={}
+ if type(data)=="table"then for _,name in ipairs(fields)do result[name]=scalar(rawget(data,name))end end
+ return result
+end
+local function state(character)
+ local result={values={},attributes={},valueAttributes={}}
+ local hum=character:FindFirstChildOfClass("Humanoid")
+ if hum then result.health=scalar(hum.Health);result.maxHealth=scalar(hum.MaxHealth)end
+ for _,name in ipairs(fields)do
+  result.attributes[name]=scalar(character:GetAttribute(name))
+  local item=character:FindFirstChild(name)
+  if item then
+   if item:IsA("ValueBase")then result.values[name]=scalar(item.Value)
+   elseif name=="Dead" or name=="Knocked"then result.values[name]=true end
+   local attrs={}
+   for _,key in ipairs({"Max","Min","Minimum","Maximum","MaxOutput"})do attrs[key]=scalar(item:GetAttribute(key))end
+   if next(attrs)then result.valueAttributes[name]=attrs end
+  end
+ end
+ return result
+end
+local function setStatus(text)
+ if not module.Destroyed then label.Text=text end
+end
+local function notify(text)
+ pcall(function()game:GetService("StarterGui"):SetCore("SendNotification",{Title="Power Level trace",Text=text,Duration=8})end)
+end
+local function log(r,kind,data)
+ if not r.Active or r.Limit then return end
+ local line=http:JSONEncode({t=os.clock()-r.Started,kind=kind,phase=r.Phase,data=data})
+ if r.Bytes+#line+1>4000000 or r.Events>=4500 then r.Limit=true;r.Report.limited=true;return end
+ if #r.Lines>=800 or r.PartBytes+#line+1>400000 then r.Flush();r.Part+=1;r.Lines={};r.PartBytes=0 end
+ table.insert(r.Lines,line);r.PartBytes+=#line+1;r.Bytes+=#line+1;r.Events+=1
+end
+local function sample(r,kind)
+ local data=state(r.Character)
+ -- The profile is the most recently received value, not a synchronous server read.
+ data.latestProfilePL=r.Profile and r.Profile.PowerLevel
+ data.profileAge=r.ProfileAt and os.clock()-r.ProfileAt
+ data.profileSource=r.ProfileSource
+ local live=data.values.PowerLevel
+ if type(live)=="number" and type(data.latestProfilePL)=="number" and data.latestProfilePL>0 then
+  data.liveToProfile=live/data.latestProfilePL
+ end
+ r.Live=live;log(r,kind or "SELF_SAMPLE",data)
+end
+local function readProfile(r,reason)
+ if r.Busy then log(r,"PROFILE_READ_SKIPPED",{reason=reason,status="another read pending"});return false end
+ if r.Reads>=3 then log(r,"PROFILE_READ_SKIPPED",{reason=reason,status="three-read budget"});return false end
+ r.Busy=true;r.Reads+=1;r.Report.profileReads=r.Reads
+ log(r,"PROFILE_READ_BEGIN",{reason=reason})
+ local done,ok,result=false,false,nil
+ task.spawn(function()
+  ok,result=pcall(function()return fetch:InvokeServer()end)
+  done=true
+ end)
+ local deadline=os.clock()+8
+ while not done and os.clock()<deadline and r.Active and player.Character==r.Character do task.wait(.05)end
+ r.Busy=false
+ if not r.Active or module.Current~=r or player.Character~=r.Character then return false end
+ if not done then
+  -- InvokeServer cannot be cancelled. Do not start another request on this run.
+  r.Reads=3;r.Report.profileReadsTimedOut=true
+  log(r,"PROFILE_READ_FAILED",{reason=reason,status="timeout; any late response ignored"});return false
+ end
+ local data=ok and profileFields(result) or {}
+ if not ok or type(data.PowerLevel)~="number"then
+  log(r,"PROFILE_READ_FAILED",{reason=reason,status=ok and "numeric PowerLevel missing" or "read error"});return false
+ end
+ r.Profile=data;r.ProfileAt=os.clock();r.ProfileSource="FetchData/"..reason
+ local entry={t=os.clock()-r.Started,reason=reason,profile=data,live=state(r.Character)}
+ table.insert(r.Report.checkpoints,entry);log(r,"PROFILE_READ_RESULT",entry)
+ return true
+end
+local function disconnect(r)
+ for _,c in ipairs(r.Connections)do c:Disconnect()end;r.Connections={}
+end
+local function finish(r,reason,finalRead)
+ if not r or not r.Active or r.Stopping then return end
+ r.Stopping=true;setStatus("SAVING — "..reason)
+ local ok,err=pcall(function()
+  if finalRead and player.Character==r.Character and not r.Limit then readProfile(r,"final")end
+  if player.Character==r.Character then sample(r,"FINAL_STATE")end
+  log(r,"STOP",{reason=reason})
+ end)
+ r.Active=false;module.Active=false;disconnect(r)
+ r.Report.status=reason;r.Report.phase=r.Phase
+ if not ok then r.Report.captureError=tostring(err)end
+ local saved,saveError=pcall(r.Save)
+ local terminal=(r.Limit and "FULL — " or "SAVED — ")..reason
+ if not saved then terminal="SAVE FAILED — "..tostring(saveError)
+ elseif not ok then terminal="SAVED WITH ERROR — "..reason end
+ setStatus(terminal.."\n"..r.Events.." events. "..r.History..".json")
+ notify(terminal)
+end
+module.Stop=function(reason)finish(module.Current,reason or "Stopped by user",true)end
+local function guarded(r,fn)
+ local ok,err=pcall(fn)
+ if not ok then finish(r,"Capture error: "..tostring(err),false)end
+end
+local function start()
+ if module.Active or module.Destroyed then return end
+ local character=player.Character
+ if not character or not character:FindFirstChildOfClass("Humanoid")then setStatus("NOT STARTED — spawn first.");return end
+ local prefix="AnomalyHub/universal/sparkling_power_trace"
+ local r={Active=true,Started=os.clock(),Character=character,Phase="baseline",Connections={},Lines={},
+  Part=1,PartBytes=0,Events=0,Bytes=0,Reads=0,History=prefix.."_"..os.time().."_"..http:GenerateGUID(false):sub(1,8)}
+ r.Report={version=1,unix=os.time(),place=game.PlaceId,status="starting",parts={},checkpoints={},
+  fields=fields,coverage={selfOnly=true,profileEvents=true,outgoingHooks=false,sampleSeconds=.5},
+  notes={"Only baseline/recovery/final FetchData reads, at most three; no gameplay commands or outgoing hooks.",
+   "Phase markers are user annotations, not proof of combat, defeat or recovery.",
+   "Profile/live values are independently observed; profile age and source are included. Missing fields remain unknown.",
+   "No persistence check. Ratios do not establish a universal multiplier. Raw files stay local."}}
+ module.Current=r;module.Active=true
+ r.Flush=function()
+  if #r.Lines>0 then
+   local file=r.History.."_part"..r.Part..".jsonl"
+   writefile(file,table.concat(r.Lines,"\n").."\n")
+   r.Report.parts[r.Part]={file=file,events=#r.Lines,bytes=r.PartBytes}
+  end
+ end
+ r.Save=function()
+  r.Flush();r.Report.elapsed=os.clock()-r.Started;r.Report.events=r.Events;r.Report.bytes=r.Bytes
+  local json=http:JSONEncode(r.Report)
+  writefile(r.History..".json",json);writefile(prefix.."_latest.json",json)
+ end
+ local ok,err=pcall(function()
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  r.Save() -- Verify writing before asking the user to collect data.
+  table.insert(r.Connections,updated.OnClientEvent:Connect(function(data)
+   if not r.Active or module.Current~=r or player.Character~=r.Character then return end
+   guarded(r,function()
+    local selected=profileFields(data)
+    if type(selected.PowerLevel)=="number"then
+     r.Profile=selected;r.ProfileAt=os.clock();r.ProfileSource="DataUpdated"
+    end
+    log(r,"PROFILE_EVENT",selected)
+   end)
+  end))
+  table.insert(r.Connections,player.CharacterAdded:Connect(function()finish(r,"Character changed; baseline invalid",false)end))
+  local hum=character:FindFirstChildOfClass("Humanoid")
+  table.insert(r.Connections,hum.Died:Connect(function()finish(r,"Character died",false)end))
+  setStatus("STARTING — reading baseline (up to 8 seconds).")
+  assert(readProfile(r,"baseline"),"Baseline profile unavailable; capture not ready")
+  if not r.Active then return end
+  r.Ready=true;r.Report.status="recording";sample(r,"BASELINE");r.Save()
+  notify("RECORDING baseline. Rest 10 seconds, then mark combat.")
+  local nextSave=os.clock()+5
+  task.spawn(function()
+   while r.Active and not r.Stopping do
+    guarded(r,function()
+     if player.Character~=character then finish(r,"Character changed; baseline invalid",false);return end
+     if r.Limit then finish(r,"Capture limit reached",false);return end
+     if os.clock()-r.Started>=600 then finish(r,"Ten-minute limit",true);return end
+     sample(r)
+     setStatus(string.format("RECORDING — %s | %d events | %.0fs\nProfile PL: %s | live PL: %s | profile age: %.1fs\nMark recovery after combat, then Stop + Save once rested.",
+      r.Phase,r.Events,os.clock()-r.Started,tostring(r.Profile and r.Profile.PowerLevel or "?"),tostring(r.Live or "?"),r.ProfileAt and os.clock()-r.ProfileAt or 0))
+     if os.clock()>=nextSave then r.Save();nextSave=os.clock()+5 end
+    end)
+    task.wait(.5)
+   end
+  end)
+ end)
+ if not ok then finish(r,"Startup failed: "..tostring(err),false)end
+end
+local function phase(name)
+ local r=module.Current
+ if not r or not r.Active or not r.Ready or r.Stopping then return end
+ if (name=="combat" and r.Phase~="baseline") or (name=="recovery" and r.Phase~="combat")then return end
+ guarded(r,function()
+  r.Phase=name;log(r,"PHASE_MARKER",{phase=name});sample(r,"PHASE_STATE")
+  if name=="recovery"then readProfile(r,"recovery")end
+  if r.Active then r.Save()end
+ end)
+end
+local function button(text,x,y,fn)
+ local b=ui.Button(card,text,x,y,135,function()task.spawn(fn)end,ui.Colors.AccentSoft)
+ b.Position=UDim2.new(x==14 and 0 or .5,x==14 and 14 or 4,0,y)
+ b.Size=UDim2.new(.5,-18,0,34)
+ return b
+end
+button("Start baseline",14,72,start)
+button("Mark combat",160,72,function()phase("combat")end)
+button("Mark recovery",14,114,function()phase("recovery")end)
+button("Stop + Save",160,114,function()module.Stop()end)
+module.Destroy=function()
+ if module.Destroyed then return end
+ if module.Active then finish(module.Current,"Recorder removed",false)end
+ module.Destroyed=true;card:Destroy()
+end
+controller.RegisterCleanup(module.Destroy)
+env.__AnomalyPowerTrace=module
+notify("Ready in Recorders: POWER LEVEL TRACE → Start baseline.")
+
+end)()
+;(function()
 -- Sparkling Job Recorder v1 (SP-040). Read-only capture of doing a job by hand, to prepare an Auto Job. Sends nothing.
 -- Trello: jobs come from NPCs (Tilent = Food, Rosa/Auber/Bink = Tech, Sebastian = Environmental); level 1 tasks are Clean Spills,
 -- Capsule Minigame 1 (click a button fast) and Scrub Dirt; 50 Zeni each at level 1. How tasks are given, shown and completed is unknown.

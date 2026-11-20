@@ -221,3 +221,7 @@ Visuals v5 shows selected-character live resources and condition fields when pre
 ## Sparkling shared-observer namecall constraint (SP-080)
 
 The shared outgoing observer runs before the original __namecall forwards. Observer callbacks must avoid Roblox Instance method calls (including HttpService:JSONEncode, GetFullName and IsA), because they can replace the active method and break the original remote call. Queue bounded plain-Lua snapshots and perform serialization/Instance inspection outside the hook. NPC trace v1 violated this and disrupted requests; v2 fixes the standalone observer without modifying the hub. Regression checks must model namecall dispatch state, not just callback ownership/cleanup. Raw v1 NPC captures are invalid for reward validation; see SP-080 in the Sparkling note.
+
+## Built-in Sparkling Power Level recorder (2026-11-20)
+
+Sparkling's POWER LEVEL TRACE is built into Recorders via src/SparklingPowerTrace.lua and tools/build_public.ps1, in both variants. It mounts idle near the top of the tab; reload the hub after installing the update. Users no longer need to execute a separate recorder script. Shared UI helpers and a Sparkling profile guard keep presentation and routing consistent. See [Sparkling SP-085](docs/games/sparkling.md) for the packaging correction, validation and capture workflow; keep all game-specific evidence in that continuous game note.

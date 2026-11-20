@@ -11,6 +11,7 @@ Last reviewed: 2026-11-20. This is the initial consolidated handoff from the ava
 - User-confirmed: a missed parry incurs cooldown (SP-030). Investigate the first failed attempt before the penalty; subsequent cooldown skips are not independent timing misses. Exact penalty onset and short-notice reset semantics remain unknown.
 - Current defense: shared mapped attack handling with PvP/PvE controls, style-specific exclusions, 1.25-second post-counter lockout and optional punch holding. Player range/focus settings remain; diagnostics record automatically.
 - Latest implementation: **v18.4 / SP-068**. Additional player-only style at normal speed 1.2; hits 3/4 skipped. 534 mock assertions and compilation; new-style live timing unverified. Cosmetic filtering verified in retained v18.2 logs.
+- Latest recording review: **SP-069** (2026-11-20). Retained set C inputs have seven counter receipts across 13 presses; capped totals cannot establish a rate. Recorded session is v18.3, not the installed v18.4 set-D update; no timing changes.
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -1820,3 +1821,30 @@ Three hit-3 HitOut events have nearby local Counter Parry receipts. All include 
 **Validation:** 534 mocked assertions pass: 88 for style D and independent NPC/player 260/300-ms rogue-heavy rotation; 64 cosmetic LOS; 65 style C; 189 shared-catalog/timing checks (updated only to expect v18.3's first 260-ms rogue-heavy seed); 60 earlier player-catalog/geometry; 36 standard policy; 26 ownership/target toggles; six settings/reload. Covers all new IDs/exclusions, speed rejection, player-only scope, additive offsets, range recovery, focus/PvP/manual/cooldown/stopped/typing/menu/death/ownership gates, punch holding and release cleanup. Source and staged/generated public/private builds compile. Exact-module transplant and hash checks preserve concurrent unrelated modules. No live Roblox control or gameplay input by this agent.
 
 **Handoff:** reload v18.4 for this opponent's new style. Verify actual player_set_d inputs before assessing timing results. Retain the 260/300-ms rogue-heavy trial until comparable executed outcomes exist. Known shared-heavy cooldown and fast-hit reactive timing remain unresolved. Automatic diagnostics continue; no extra recording was required to establish this catalog gap.
+
+
+## SP-069 — Set C counter receipts confirmed; recording predates v18.4 and hits detail cap (2026-11-20)
+
+**User:** "another one". Frozen snapshot of history 1795166202. At read: RUNNING, elapsed 375.804 s, attempts=16, selfCounterEvents=15, damageEvents=158, held=false, droppedLines=5104. Detailed events stop at 181.7887 s. Do not combine the later totals with the earlier retained decisions to claim 15/16 successes. Raw snapshot and analysis remain local.
+
+**Version/scope:** config contains the v18.3 260/300-ms rogue-heavy trial and player_set_c, but no playerSetD field. Therefore this is a v18.3 session, not a live test of installed v18.4. PvP/PvE=true, range=8, offset=0, hold=120 ms, Hold Punches=true. The retained main opponent uses player_set_c at normal speed 1.175. All 13 detailed automatic presses target that player/style. No new fighting-style mapping is needed from this retained section.
+
+| Set C hit | Retained automatic presses | Counter receipts following the press |
+| --- | --- | --- |
+| 1 (0-ms seed) | 6 | 3 |
+| 2 (20-ms seed) | 3 | 1 |
+| 3 (20-ms seed) | 2 | 2 |
+| 5 (100-ms seed) | 2 | 1 |
+| Total | 13 | 7 |
+
+**Observed positive evidence:** all seven counter receipts follow same-opponent HitOut within about 1 ms and an automatic F press 132–233 ms earlier. SELF_COUNTER shows one candidate attempt and inputConflicts=[] in each case. No unmatched F event occurs between the automatic press and its counter receipt; some later manual/unmatched presses occur after the counter and must not be counted as intervening. All 13 F_UP API calls report success (about 131–139 ms holds); no runtime/failed-input errors appear in retained detail. This supports working reactive inputs for set C, especially the two hit-3 examples; it remains client-side temporal attribution, not a general success guarantee.
+
+**Do not classify every other press as a missed parry:** of the six without a counter receipt, four have neither same-opponent HitOut nor a local damage/block/counter outcome within 600 ms. One hit-1 press has a BlockEffect aligned with HitOut at +162 ms. One hit-2 press at 88.4777 s has HitOut at +164 ms without a local outcome; the Blunt at +550 ms aligns with the opponent's subsequent hit 3 (started 88.8089), so it must not be attributed to the hit-2 press using only a broad window. The hit-5 counter at 160.341 s is surrounded by other Blunt effects, so a counter receipt does not mean the player took no damage during that sequence. Five other retained counter receipts have no recent automatic candidate and are excluded from the seven above. The final three automatic presses and later counter receipts lie beyond the retained detail and cannot be individually assessed.
+
+**Gates:** the full frozen footer reports 41 cooldown, 31 range, 20 attacker-facing, 12 self-facing, five manual-F, four approach-expiry and two stopped-track skips, plus 20 intentional late-hit skips and 48 unverified-style-speed skips. All 48 speed skips are visible in retained detail and use speed 1.000, distinct from the mapped normal 1.175. This does not justify widening the normal-speed guard. Known shared-heavy queues remain blocked by cooldown/facing; there are no retained rogue-heavy trial presses, so this recording cannot choose 260 versus 300 ms.
+
+**Cosmetic fix remains verified:** retained LOS_OBJECT entries exclude target_head_effect, local_head_effect and non-colliding thrown_effect objects (Part, FX3 MeshPart and asrushPart). There are no line_of_sight skips in the frozen totals. No further LOS widening is indicated.
+
+**Decision / validation:** findings-only update; keep gameplay source, timing constants and the installed v18.4 build unchanged. No new compile/mock run is appropriate for a documentation-only review. Analysis matches automatic attempts to actor-specific HitOut, counter events, intervening input and releases, and distinguishes later-combo damage from the earlier attempt. Neither 7/13 nor the capped 15/16 total should be advertised as an overall reliability estimate.
+
+**Handoff:** v18.4 is already installed but must be reloaded to start a session containing playerSetD. The existing recording supports retaining set C's current timing; it does not test the newly added set D. The recurring 12,000-line detail cap is a recorder limitation: later attempts/outcomes become unavailable despite continued totals. A future bounded segmented/compact recording design should preserve per-attempt evidence; do not silently infer omitted outcomes or repeatedly retune from footer ratios. No extra test was requested as a prerequisite to this analysis.

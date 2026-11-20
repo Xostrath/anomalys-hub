@@ -1462,3 +1462,29 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 **Implemented / untested live — Combat page v16.8:** a non-colliding BasePart under `Workspace.Thrown` is excluded from the line-of-sight ray (logged `exclusion=thrown_effect`); collidable Thrown parts still block, and up to 8 exclusions per check (was 5).
 
 **Next step:** decide whether Auto Parry should hold back the user's own M1 for the ~200 ms before a mapped NPC hit lands (asked the user).
+
+## SP-057 — Own M1 before the press makes counters fail; optional click hold (2026-11-19, Claude)
+
+**User:** asked for a toggle that holds their punches so they stop spoiling Auto Parry's counters.
+
+**Evidence (Verified from captures; 26 histories since 12:00, 737 presses):** every press sent its `Defend` request (55 / 55 checked in SP-056's two histories), so the failure is server-side. Outgoing `Requests.Action("MouseButton1", bool, lookVector)` is sent for each M1 click.
+
+| Your M1 sent, relative to the press | Presses | Failed |
+|---|---|---|
+| 0–100 ms before | 64 | 60 |
+| 100–200 ms before (none closer) | 50 | 43 |
+| Only after the press (0–250 ms) | 138 | 18 |
+| None from 400 ms before to 250 ms after | 396 | 107 |
+
+- **Offline replay of two hold policies** (failed presses with an M1 in the 200 ms before: 92):
+  - Holding from the NPC cue to the press would have removed every such M1 for **44**, at under 1% of all clicks.
+  - Also holding while the same NPC is mid-combo (0.6 s after its previous mapped hit) adds 18 more but holds 25% of all 6,105 clicks (0.8 s: +21, 32%).
+  - 27–30 remain uncoverable (the M1 came before the swing could be seen).
+- **Same-NPC gap between mapped hit starts:** median 549 ms (p25 466, p75 634).
+
+**Implemented / untested live — Combat page v17.2, "Hold Punches Before Parry (NPCs)", off by default:**
+- When an NPC cue is queued, outgoing `Requests.Action` `"MouseButton1"` FireServer calls are not sent until 30 ms after its scheduled press (logged `CLICK_HELD`). Nothing else is held (never `Defend`); player cues never set it; the hold is an expiring deadline cleared on stop.
+- **Shared hooks (SparklingCombatRecorder):** hooks installed from now on call the newest `forward` through `probe.Forward`, so later reloads update them. Hooks left from an earlier hub run in the same game session can't hold clicks; Auto Parry reports "needs a rejoin" (`CLICK_HOLD available=false`).
+- **Line-of-sight fix renumbered** v17.1 (was v16.8 in SP-056), after GPT's v17.
+
+**Next step:** a recording with the toggle on. Compare the counter rate with M1 in the cue window, and count `CLICK_HELD`.

@@ -1814,17 +1814,35 @@ end
 -- Reuse forwarding hooks across hub reloads. Inactive hooks simply forward.
 local probe = env.__AnomalySparklingRecorderProbeV1
 if type(probe) ~= "table" then probe = {Targets={}, Coverage={}, DirectMethods={}}; env.__AnomalySparklingRecorderProbeV1 = probe end
+-- Auto Parry's optional click hold (SP-057): while os.clock() < probe.HoldUntil, an outgoing Requests.Action
+-- "MouseButton1" FireServer is not sent (reported as "HELD"). Nothing else is ever held; errors forward.
+local function holdClick(source, self, ...)
+	local untilAt = probe.HoldUntil
+	if type(untilAt) ~= "number" or os.clock() >= untilAt or not source:find("FireServer", 1, true) then return false end
+	local ok, held = pcall(function(first)
+		return first == "MouseButton1" and self.Name == "Action" and self.Parent ~= nil and self.Parent.Name == "Requests"
+	end, ...)
+	return ok and held == true
+end
 local function forward(original, source, self, ...)
 	local callback, path = probe.Callback, probe.Targets[self]
 	if not callback or not path then return original(self, ...) end
 	probe.Serial=(probe.Serial or 0)+1
 	local id, started, args = probe.Serial, os.clock(), table.pack(...)
+	if holdClick(source, self, ...) then
+		pcall(callback, self, "HELD "..source, args, started, id, nil, path)
+		return
+	end
 	pcall(callback, self, "OUT "..source, args, started, id, nil, path)
 	-- The original runs exactly once, outside pcall: errors and yielding retain their behavior.
 	local result = table.pack(original(self, ...))
 	pcall(callback, self, "RETURN "..source, args, started, id, result, path)
 	return table.unpack(result, 1, result.n)
 end
+-- Hooks installed from here on call the newest forward through probe, so later hub reloads update it.
+-- Hooks left by an older hub run keep their own forward (no click hold) until the next rejoin.
+probe.Forward = forward
+local function current(...) return (probe.Forward or forward)(...) end
 local function installHooks()
 	local wrap = env.newcclosure or newcclosure or function(f) return f end
 	local hook, method = env.hookmetamethod or hookmetamethod, env.getnamecallmethod or getnamecallmethod
@@ -1835,10 +1853,10 @@ local function installHooks()
 				if not probe.Callback or not probe.Targets[self] then return original(self, ...) end
 				local valid, call = pcall(method)
 				if not valid or (call ~= "FireServer" and call ~= "InvokeServer") then return original(self, ...) end
-				return forward(original, "namecall "..call, self, ...)
+				return current(original, "namecall "..call, self, ...)
 			end))
 		end)
-		if ok then probe.Namecall = true; table.insert(probe.Coverage, "namecall FireServer/InvokeServer") end
+		if ok then probe.Namecall = true; probe.CanHold = true; table.insert(probe.Coverage, "namecall FireServer/InvokeServer") end
 	end
 	local hookFunction = env.hookfunction or hookfunction
 	for _, spec in ipairs({{"RemoteEvent","FireServer"},{"RemoteFunction","InvokeServer"}}) do
@@ -1849,7 +1867,7 @@ local function installHooks()
 		local original
 		local ok = pcall(function()
 			original = hookFunction(target[methodName], wrap(function(self, ...)
-				return forward(original, "direct "..methodName, self, ...)
+				return current(original, "direct "..methodName, self, ...)
 			end))
 		end)
 		if ok then probe.DirectMethods[methodName] = true; table.insert(probe.Coverage, "direct "..methodName) end
@@ -1859,6 +1877,10 @@ end
 -- Share the existing forwarding hooks with automatic-defense diagnostics.
 -- Only one activity owns the callback; manual recording and auto parry exclude each other.
 controller.IsSparklingRecording=function()return active~=nil end
+-- Click hold for Auto Parry: an expiring os.clock() deadline (nil clears). CanHold is false while hooks from an older
+-- hub run are installed (they predate the hold) or no namecall hook is available.
+controller.SparklingHoldClicks=function(untilAt) probe.HoldUntil=type(untilAt)=="number" and untilAt or nil end
+controller.SparklingCanHoldClicks=function() return probe.CanHold==true end
 controller.BeginSparklingParryObservation=function(callback)
  if active then return nil,"manual recorder active; outgoing observation unavailable"end
  local requests=rs:FindFirstChild("Requests")
@@ -4676,7 +4698,8 @@ end)()
 -- v16.5 (SP-049): Warrior Clan Rogue combo mapped for NPCs (hits 2, 3, 5 pressed; 1 and 4 too fast).
 -- v16.6 (SP-050): rogue heavy pressed at 0.30 s; heavy defer cut to 0.40 s (presses at 0.5 s landed after the hit).
 -- v16.7 (SP-051): rogue heavy ignores the facing checks (5/5 pressed were Perfect Counters; 6 skipped for facing hit us).
--- v16.8 (SP-056): non-colliding combat effects under Workspace.Thrown no longer count as line-of-sight obstacles.
+-- v17.1 (SP-056): non-colliding combat effects under Workspace.Thrown no longer count as line-of-sight obstacles.
+-- v17.2 (SP-057): optional "Hold Punches Before Parry": your M1 is held from an NPC cue until just after its press.
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -4736,6 +4759,8 @@ local windowFocused=true
 local sendingAttempt
 local nextPulse,nextScan,cooldownUntil=0,0,0
 local lastLocalAttack=-math.huge
+-- SP-057 click hold: deadline (os.clock) and the NPC cue that set it; see holdClicksFor.
+local clickHoldUntil,clickHoldCue=0,nil
 local lastCounterNotice
 local lastDamageAt
 local opponentCandidates={}
@@ -4749,7 +4774,7 @@ local diagnosticStatus,button
 local players=game:GetService("Players")
 -- Combat page options (user's reference layout, 2026-11-17). Auto Parry itself never turns on after a reload; only these options persist.
 local settingsPath=rootPath.."sparkling_combat_settings.json"
-local settings={Range=8,PvE=true,PvP=false,SkipKnocked=true,SkipOffScreen=false,TimingOffsetMs=0,HoldMs=120,Binds={}}
+local settings={Range=8,PvE=true,PvP=false,SkipKnocked=true,SkipOffScreen=false,TimingOffsetMs=0,HoldMs=120,HoldClicks=false,Binds={}}
 if type(readfile)=="function" then
  local ok,saved=pcall(function()return http:JSONDecode(readfile(settingsPath))end)
  if ok and type(saved)=="table" then
@@ -4886,7 +4911,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=per_style_catalog timingTrial=player_set_b_initial range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@npcCue->press+30ms"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -5080,6 +5105,8 @@ end
 local function stop(reason)
  local active=session and session.Open
  enabled=false;clearWatch(reason)
+ clickHoldUntil,clickHoldCue=0,nil
+ if controller.SparklingHoldClicks then controller.SparklingHoldClicks(nil)end
  local released=release("stop",true)
  if stopProbe then stopProbe();stopProbe=nil end
  if button then button.Text="Auto Parry: OFF"end
@@ -5174,6 +5201,12 @@ local function observe(model,track)
   DueAt=now+delay,SeenAt=now,Expires=now+math.max(.25,delay+.1,id==npcHeavy and .45 or 0),Deferrals=0,RangeUntil=rangeWait and now+.08 or nil,RangeChecks=0,Range=range,
   Heavy=id==npcHeavy or nil,AnyFacing=anyFacing})
  log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
+ -- SP-057: your own M1 sent between an NPC swing appearing and our press made 60 of 64 counters fail (26 histories);
+ -- clicks after the press were harmless. Hold M1 from now until just after the scheduled press. NPC cues only.
+ if settings.HoldClicks and targetKind(model)=="NPC" and controller.SparklingHoldClicks then
+  local untilAt=now+delay+.03
+  if untilAt>clickHoldUntil then clickHoldUntil,clickHoldCue=untilAt,serial;controller.SparklingHoldClicks(untilAt)end
+ end
  if rangeWait then log("RANGE_WAIT","windowMs=80 marginStuds=3 stepMs=20 "..detail.." "..geometry)end
 end
 local targetsLabel
@@ -5276,6 +5309,10 @@ local function start()
   local ok,disconnect,description=pcall(controller.BeginSparklingParryObservation,guarded("ActionProbe",function(remote,direction,args,started,id,result,path)
    if not session or not session.Open or started<session.Started then return end
    if direction:sub(1,4)=="OUT " and (args[1]=="MouseButton1" or (args[1]=="MouseButton2" and args[2]~="Up") or args[1]=="AerialM1" or args[1]=="Rush")then lastLocalAttack=os.clock()end
+   if direction:sub(1,5)=="HELD " then
+    session.HeldClicks=(session.HeldClicks or 0)+1
+    log("CLICK_HELD","cue="..tostring(clickHoldCue).." remainingMs="..math.floor((clickHoldUntil-os.clock())*1000).." total="..session.HeldClicks)
+   end
    correlateDefend(direction,args,id)
    log("ACTION","direction="..sample(direction).." call="..id.." requestStart="..string.format("%.4f",started-session.Started)
     .." path="..sample(path).." action="..sample(args[1]).." value="..sample(args[2]).." extra3="..sample(args[3]).." argc="..tostring(args.n or #args)
@@ -5286,6 +5323,11 @@ local function start()
  local requests=rs:FindFirstChild("Requests")
  log("COVERAGE",coverage.." CooldownNT="..tostring(requests and requests:FindFirstChild("CooldownNT")~=nil).." Effects="..tostring(requests and requests:FindFirstChild("Effects")~=nil))
  actor(ownCharacter);clockSample();save("RUNNING")
+ if settings.HoldClicks then
+  local can=controller.SparklingCanHoldClicks and controller.SparklingCanHoldClicks()
+  log("CLICK_HOLD","available="..tostring(can==true))
+  if not can then status.Text="Hold Punches is on but needs a rejoin: the click hook from an earlier hub run is still installed. Rejoin, then run the hub."end
+ end
 end
 local function toggleParry()if enabled then stop("Disabled.")else start()end end
 
@@ -5362,11 +5404,13 @@ local function timingBox(id,title,minimum,maximum,column)
 end
 timingBox("TimingOffsetMs","Timing offset (ms)",-80,150,0)
 timingBox("HoldMs","F hold (ms)",60,250,1)
-local skipSection=ui.Section(page,"Don't Parry If",96,true)
+local skipSection=ui.Section(page,"Don't Parry If",126,true)
 skipSection.Frame.LayoutOrder=2
 optionRow(skipSection.Body,0,"SkipKnocked","Don't Parry If Knocked",function()return settings.SkipKnocked end,setting("SkipKnocked"))
 optionRow(skipSection.Body,30,"SkipOffScreen","Don't Parry If Off Screen",function()return settings.SkipOffScreen end,setting("SkipOffScreen"))
-ui.Create("TextLabel",{Position=UDim2.fromOffset(14,66),Size=UDim2.new(1,-28,0,20),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Typing / menu: always pauses active input"},skipSection.Body)
+-- SP-057: holds your M1 clicks for the ~50 ms between an NPC swing appearing and the parry press.
+optionRow(skipSection.Body,60,"HoldClicks","Hold Punches Before Parry (NPCs)",function()return settings.HoldClicks end,setting("HoldClicks"))
+ui.Create("TextLabel",{Position=UDim2.fromOffset(14,96),Size=UDim2.new(1,-28,0,20),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Typing / menu: always pauses active input"},skipSection.Body)
 
 controller.Connect(input.InputBegan,function(object,processed)
  if closed or object.UserInputType~=Enum.UserInputType.Keyboard then return end

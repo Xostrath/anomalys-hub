@@ -4,13 +4,13 @@ Last reviewed: 2026-11-20. This is the initial consolidated handoff from the ava
 
 ## Read first
 
-**Current mode: shared NPC/player attack policy (Combat page v18.2 / diagnostics v7).** SP-066 repairs target-head and non-colliding Thrown cosmetic LOS blockers. New recordings show counter receipts after standard, Trainer and player_set_c automatic PvP inputs. Heavy reliability remains mixed; no timing change.
+**Current mode: shared NPC/player attack policy (Combat page v18.4 / diagnostics v7).** SP-068 adds player_set_d hits 1/2/5 from a new recording. Cosmetic exclusions are observed working; Claude’s v18.3 rogue-heavy 260/300-ms trial remains unchanged and inconclusive.
 
 - Universe: `10771972206`. Tutorial: `101713836627444`. Observed main world: `110405289082842`. Additional recorded place: `135537125271116` (place name/role not verified). User-supplied entry place: `120525873606470`.
-- Current objective: verify v18.2 cosmetic LOS exclusions against retained diagnostics (SP-066). False head/effect blockers were reproduced; real obstacles stay blocking. Preserve working hit-5 timing; distinguish automatic from unmatched counters.
+- Current objective: verify player_set_d automatic inputs after the newest catalog-gap repair (SP-068); retain separate NPC/player rogue-heavy timing trials until comparable outcomes exist.
 - User-confirmed: a missed parry incurs cooldown (SP-030). Investigate the first failed attempt before the penalty; subsequent cooldown skips are not independent timing misses. Exact penalty onset and short-notice reset semantics remain unknown.
 - Current defense: shared mapped attack handling with PvP/PvE controls, style-specific exclusions, 1.25-second post-counter lockout and optional punch holding. Player range/focus settings remain; diagnostics record automatically.
-- Latest implementation: **v18.2 / SP-066**. Scoped cosmetic LOS repair; both original failures reproduced, 446 mock assertions and compilation. Standard hit 5 had 5/5 counter receipts in one complete PvP encounter; rogue heavy 2/7, so do not generalize.
+- Latest implementation: **v18.4 / SP-068**. Additional player-only style at normal speed 1.2; hits 3/4 skipped. 534 mock assertions and compilation; new-style live timing unverified. Cosmetic filtering verified in retained v18.2 logs.
 - Keep the user's live session under their control unless the current chat has authorization to interact with it. The user normally reloads and tests the installed script themselves. Check for another chat's work before replacing files; do not infer session ownership from these notes.
 - Race availability, PowerLevel meaning, and maximum Ki are unresolved. No dedicated ESP-data report was available in the reviewed evidence.
 
@@ -26,7 +26,7 @@ Last reviewed: 2026-11-20. This is the initial consolidated handoff from the ava
 | Power ESP | Direct Character.PowerLevel numeric value; rounded whole numbers with commas | Numeric source observed; formatting compiled | Base, effective, or suppressed power? |
 | Ki ESP | Blue bar next to red health bar; requires known Ki and explicit positive MaxKi for fill | Ki observed; bar compiled | No verified MaxKi source; unknown max shows an empty track marked `?` |
 | Self ESP | Local player uses the same ESP renderer as others; independent of other-player master | Implemented after user clarification | Live correction still needs explicit validation |
-| Auto parry | v18.2 shared policies and player styles; corrected exact-target-head/non-colliding-Thrown LOS handling | SP-066: live PvP counter receipts; both LOS bugs reproduced; 446 mock checks and compilation | Cosmetic fix awaits live validation; heavy behavior remains unresolved/mixed |
+| Auto parry | v18.4 adds player_set_d; shared policies, cosmetics and v18.3 heavy trial retained | SP-068: new catalog observed; 534 mocked checks and compilation; cosmetic exclusion verified | New-style timing, fast hits and shared heavy unresolved; rogue-heavy trial lacks comparative outcomes |
 | NPC ESP (SP-V001…V005) | ESP tab "NPC ESP" card (`src/SparklingNpcESP.lua`): every Humanoid rig in Workspace that isn't a player character. Shows name/type, HP current/max, direct `PowerLevel` value if the model has one, distance, box. Types (v3, SP-V003): **ENEMY** = the model has a `PowerLevel` (child NumberValue/IntValue or attribute), **NPC** = no power level; each type has its own toggle. UI v3: Player ESP and NPC ESP are `ui.Section`s with checkmarks (`ui.CheckGrid`) and a 100–10,000 stud distance slider (`ui.Slider`) at the bottom | Implemented / untested live; both builds compile | Does the health rule hold for every NPC? Where do NPCs live, and do they carry PowerLevel? |
 | Combat page v11 (SP-T030) | Normal Auto Parry controls; no temporary single-hit filters | 174 mocked assertions and compilation passed; all-hit coverage/cleanup live-verified in SP-T031 | Preserve target context and distinguish conflicted counter receipts from automatic results |
 | Parry diagnostics v7 | Adds RANGE_WAIT/CHECK/ENTERED to existing request/state/outcome records | v6 state snapshots verified live in SP-T035; new geometry trace mocked in SP-T036 | Range entry is not a successful parry; live recovery outcomes outstanding |
@@ -1787,3 +1787,36 @@ No unmatched F event intervenes in these press/counter windows. Standard hit 5 i
 - No other timing, gate or catalog changed. Source and both variants compile; no live test yet.
 
 **Next step:** a rogue fight on v18.3. Compare Perfect Counter / Blunt for heavyDelayMs=260 vs 300. If 260 wins clearly, make it fixed; if it loses on late impacts, return to 300. Also an EX Wolf Fang fight for the Claw.
+
+
+## SP-068 — Another unmapped PvP combo; cosmetic filter verified; rogue-heavy trial inconclusive (2026-11-20)
+
+**User:** "new auto parry test". Reviewed frozen snapshots through 1795165947. Claude's concurrent v18.3/SP-067 change was present in source, installed/public builds and the newest two recordings; retain its independent NPC/player 260/300-ms rogue-heavy rotation. Findings primarily concern 1795165243 and 1795165947; earlier v18.2 histories were already reviewed in SP-067 and are used below only to check cosmetic filtering. Raw reports/player identifiers stay local.
+
+**Latest PvP recording 1795165947:** finalized Disabled at 185.311 s, droppedLines=0, held=false. Config v18.3, PvP/PvE=true, range=8, offset=0, hold=120 ms, Hold Punches=true. **Zero automatic inputs**, five self-counter receipts and 87 negative-health observations. All five counters are unmatched/manual-origin-unknown; none can be credited to this auto-parry session. No runtime errors. Six queued cues were all the known shared heavy 102483335944327, and all six were cooldown-blocked. Two other mapped decisions failed facing and six were out of range. There were no LOS skips, so the cosmetic fix is not the cause of zero inputs. The 1,058 unmapped skips include frequent ambient/reaction animations and are not an attack count.
+
+**Observed new style, player_set_d (actual fighting-style name unknown):** anonymous actor 2 has a distinct five-animation sequence. Same-actor adjacent transitions within 1.2 s: 1->2=22, 2->3=14, 3->4=8, 4->5=7; other transitions/repeats also occur. These are different IDs from the standard, shared NPC, player_set_b and player_set_c catalogs.
+
+| Hit | Animation | Starts, all speeds | Matched normal-speed HitOut | Median (range) | Initial v18.4 seed |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 80038210953396 | 35 | 22 | 251 ms (234–268) | 80 ms |
+| 2 | 99203841295550 | 25 | 21 | 184 ms (166–216) | 0 ms |
+| 3 | 111392139942881 | 20 | 15 | 100 ms (66–117) | Skip |
+| 4 | 120956971139764 | 15 | 7 | 85 ms (65–101) | Skip |
+| 5 | 121955051073038 | 10 | 5 | 267 ms (251–269) | 80 ms |
+
+Matching uses the first same-actor HitOut within 600 ms and before the next candidate start; requiring >250 ms since the previous candidate start does not change these matches. Every matched start has speed 1.200. Other starts reuse the IDs at speed 1.000 or 2.000, without matched impacts under this method; their meaning remains unverified. Normal-speed start counts are 28/22/15/7/5. Local Blunt occurs immediately beside 19/18/7/6/4 of the respective matched HitOut events. This supports attack mapping; client receipt intervals are not server parry windows.
+
+Three hit-3 HitOut events have nearby local Counter Parry receipts. All include multiple unmatched F presses: one before animation start (roughly 99–147 ms before) and another only 29–48 ms before HitOut. These do not establish a reliable reactive timing for a 66–117-ms hit. Preserve the established short-lead exclusion for hits 3/4. Initial seeds on hits 1/2/5 leave approximately 171/184/187 ms of median observed lead; they are trials, not calibrated success claims. The two frequent 2-second tracks 86878004337726 / 111852511691817 and common movement/reaction IDs stay unmapped.
+
+**NPC v18.3 recording 1795165243:** finalized Teleport at 279.455 s, droppedLines=0, held=false. 29 automatic presses, 21 self-counter receipts and 36 negative-health observations. By mapped animation, local counter receipts within 600 ms of a press: rogue hit 2 11/15, hit 3 6/8, hit 5 4/5; rogue heavy 0/1. These are temporal associations, not blanket proof of server input acceptance.
+
+**Rogue-heavy rotation is not decided by this test:** three heavy cues were queued. The first chose 260 ms and actually pressed at +267 ms (24.8827 s); F released successfully after 132.5 ms. No Counter/Perfect Counter/Blunt/Sharp/BlockEffect result followed within 600 ms. The other 300-ms and 260-ms cues were blocked by the remaining counter cooldown (~751/784 ms). Thus there is only one executed trial and no comparable 300-ms outcome. Do not declare 260 ms superior, convert it to fixed timing, or roll back Claude's trial from this evidence. The newest player fight had no rogue-heavy input at all.
+
+**v18.2 cosmetic fix — verified observed behavior in retained logs:** LOS_OBJECT reports target_head_effect exclusions in 1795162254 (five distinct logged objects) and 1795164047 (one). Non-colliding thrown_effect exclusions appear in 1795162254 (two), 1795163589 (one), 1795164047 (one), and 1795164356 (three). These are object-log counts, not successful-parry counts. One remaining blocker in the long PvP capture is another character's HumanoidRootPart, which is not a cosmetic head effect; no broad live-character exclusion added. The newest NPC run only encounters already-supported Zvanishdummy/local-head objects; the newest player run has no LOS_OBJECT entries. Do not infer an increased success rate solely from the filter working. Long older histories remain detail-capped as documented in SP-067.
+
+**Implemented / untested live — v18.4:** add player_set_d hits 1/2/5 at 80/0/80 ms plus user offset; recognize and skip hits 3/4. New IDs are player-only and require the observed normal speed 1.2 within 0.025, reusing player_set_c's scoped speed-check pattern. Speed-1/2 repeats are logged as unverified_style_speed rather than triggering F. Config and queued diagnostics identify the new style. Existing catalogs, player_set_c speed=1.175 behavior, cooldowns, range/facing, cosmetic LOS, optional punch holding and input cleanup stay intact. Preserve v18.3 rogue-heavy rotation exactly; no cross-game timings/remotes imported.
+
+**Validation:** 534 mocked assertions pass: 88 for style D and independent NPC/player 260/300-ms rogue-heavy rotation; 64 cosmetic LOS; 65 style C; 189 shared-catalog/timing checks (updated only to expect v18.3's first 260-ms rogue-heavy seed); 60 earlier player-catalog/geometry; 36 standard policy; 26 ownership/target toggles; six settings/reload. Covers all new IDs/exclusions, speed rejection, player-only scope, additive offsets, range recovery, focus/PvP/manual/cooldown/stopped/typing/menu/death/ownership gates, punch holding and release cleanup. Source and staged/generated public/private builds compile. Exact-module transplant and hash checks preserve concurrent unrelated modules. No live Roblox control or gameplay input by this agent.
+
+**Handoff:** reload v18.4 for this opponent's new style. Verify actual player_set_d inputs before assessing timing results. Retain the 260/300-ms rogue-heavy trial until comparable executed outcomes exist. Known shared-heavy cooldown and fast-hit reactive timing remain unresolved. Automatic diagnostics continue; no extra recording was required to establish this catalog gap.

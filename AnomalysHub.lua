@@ -2761,7 +2761,19 @@ local FIELDS={
  {Label="Race",Resolve=function(target)return show(attr(target,"Race"))end},
  -- User confirmed (2026-11-19) that Trait is the race variant, e.g. Traditional.
  {Label="Race Variant",Resolve=function(target)return show(attr(target,"Trait"))end},
- -- Profile SkillMastery is a JSON list (empty "[]" for the user so far); GravityMastery is a number.
+ -- Profile GravityMastery is a number (1 for the user, hidden scan 2026-11-19); not replicated for other players.
+ -- Unlock thresholds from the in-game guide: Kaioken 10, Power Release 80, Golden 100, Astral State 120.
+ -- Trained by the Gravity Chamber machine/shadow, fighting under planet gravity and Gravity Augmenting Apples (Trello).
+ {Label="Gravity Mastery",Resolve=function(target)
+  if target~=localPlayer then return OWN_ONLY end
+  local amount=tonumber(own("GravityMastery"))
+  if not finite(amount)then return profile and "0" or "Loading profile..." end
+  for _,goal in ipairs({{10,"Kaioken"},{80,"Power Release"},{100,"Golden"},{120,"Astral State"}})do
+   if amount<goal[1] then return number(amount).." · next "..goal[1].." ("..goal[2]..", "..number(goal[1]-amount).." to go)"end
+  end
+  return number(amount).." · past every listed requirement (120)"
+ end},
+ -- Profile SkillMastery is a JSON list (empty "[]" for the user so far).
  {Label="Form Mastery",Resolve=function(target)
   if target~=localPlayer then return OWN_ONLY end
   if not profile then return "Loading profile..." end
@@ -2773,8 +2785,7 @@ local FIELDS={
     table.insert(parts,type(key)=="number" and tostring(item) or (tostring(key).." "..tostring(item)))
    end
   end
-  local gravity=number(own("GravityMastery"))
-  return (#parts>0 and table.concat(parts,", ") or "No skill/form mastery yet")..(gravity and (" · Gravity "..gravity) or "")
+  return #parts>0 and table.concat(parts,", ") or "No skill/form mastery yet"
  end},
  -- Trello (Limit Breaking): progress stops at 100k / 250k / 450k / 700k / 1M BP until a bar (right side of the screen) is filled by
  -- fighting. Character@Limit is 0 or 1 across players in the Profile Scan, read here as breaks done; Character.LimitBreak is that bar's
@@ -2881,7 +2892,7 @@ setOpen(false)
 
 -- Profile rows: label on the left, value on the right.
 -- Label column 38%, value column 62%; long values (stats, relationships, mastery) get two-line rows.
-local TALL={["Stats"]=true,["Temporary Stats"]=true,["Injuries"]=true,["Relationships"]=true,["Form Mastery"]=true,["Karma"]=true,["Emotion"]=true}
+local TALL={["Stats"]=true,["Temporary Stats"]=true,["Injuries"]=true,["Relationships"]=true,["Form Mastery"]=true,["Gravity Mastery"]=true,["Karma"]=true,["Emotion"]=true}
 local section=ui.Section(page,"Profile",0,true)
 section.Frame.LayoutOrder=2
 local values,rowLabels,rowHeights,rowY={},{},{},0

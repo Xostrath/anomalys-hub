@@ -1411,3 +1411,11 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 **Why Heaven (Trello):** "Dying in Pietra will send you to Heaven or Hell" and "you lose 10% of CEXP and Power Level and [are] set straight to the afterlife"; Pietra is "a battle grounds planet… higher gravity", with Pietra Wave Defense spawning groups of NPCs. Elsewhere a death respawns you at the hospital. Heaven vs Hell follows Karma (neutral or positive → Heaven). **Inference:** place 120023577538065 is Pietra (the death went straight to the afterlife; the rogues spawn there in groups). Not confirmed by a location label.
 
 **Expected cost:** 10% of CEXP (1,808 → about 1,627 if nothing was gained) and 10% of Power Level; the next Varrik check will show it.
+
+## SP-053 — Visuals: Gravity Mastery row (2026-11-19, Claude)
+
+**User:** "add mastery gravity to the visuals".
+
+**Source:** the profile's `GravityMastery` number (hidden scan 2026-11-19: `GravityMastery=1` for the user). It was previously only a " · Gravity N" suffix on Form Mastery. It is not replicated for other players (characters carry `GravityAugment`, 0 for everyone scanned, meaning unknown), so other players show "Hidden (only shown for you)".
+
+**Implemented / untested live — Visuals:** a "Gravity Mastery" row shows the value and the next unlock from the in-game guide: Kaioken 10, Power Release (TriHuman) 80, Golden (Acrosian) 100, Astral State (Alien) 120, e.g. "1 · next 10 (Kaioken, 9 to go)". The suffix on Form Mastery was removed.

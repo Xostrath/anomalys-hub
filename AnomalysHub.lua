@@ -2544,7 +2544,7 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Sparkling Visuals v5.2: requested row cleanup, injuries >=70%, Zeni parser fix and honest Race Potential label (SP-048). Read-only; sends no game requests.
+-- Sparkling Visuals v5.3: CEXP reading saved per account and character (SP-094). v5.2: row cleanup, injuries >=70%, Zeni parser fix and honest Race Potential label (SP-048). Read-only; sends no game requests.
 -- Each field reads only a source confirmed in a capture. Unconfirmed fields say so instead of guessing (2026-11-17).
 -- Recorders -> Sparkling Profile Scan finds the sources for the rest.
 local env=(getgenv and getgenv()) or shared
@@ -2698,14 +2698,22 @@ end
 
 -- CEXP (SP-047, CEXP Finder 2026-11-19): choosing "Can you check my combat experience? (5000 Zeni)" makes the server send
 -- Requests.Dialogue {msg="You have 1808 combat experience. ...", npc=Workspace.NPCs.Varrik}. Listen for that line and remember it.
-local cexpPath="AnomalyHub/universal/sparkling_cexp_value.txt"
-local cexp={}
+-- SP-094: the last reading is saved per account and per character (profile CharacterName), so another account or slot never shows
+-- it. The old shared file (sparkling_cexp_value.txt) can't say whose reading it was and is no longer read.
+local cexpPath="AnomalyHub/universal/sparkling_cexp_"..tostring(localPlayer.UserId)..".json"
+local cexpSaved
 if type(readfile)=="function"then
  local ok,text=pcall(readfile,cexpPath)
- -- Logical and keeps only the first match capture; match first, then check ok.
- local value,at
- if ok then value,at=tostring(text):match("^(%d+)%s+(%d+)")end
- if value then cexp.Value,cexp.At=tonumber(value),tonumber(at) or os.time()end
+ cexpSaved=ok and decode(text)
+end
+if type(cexpSaved)~="table" then cexpSaved={}end
+-- Readings heard before the profile scan names the character wait under "?" and move to the character once it is known.
+local function cexpCharacter()return profile and type(profile.CharacterName)=="string" and profile.CharacterName~="" and profile.CharacterName or nil end
+local function cexpEntry()
+ local name=cexpCharacter()
+ if name and type(cexpSaved["?"])=="table" then cexpSaved[name]=cexpSaved["?"];cexpSaved["?"]=nil end
+ local entry=cexpSaved[name or "?"]
+ return type(entry)=="table" and finite(entry.Value) and finite(entry.At) and entry or nil
 end
 local dialogue=rs:FindFirstChild("Requests") and rs.Requests:FindFirstChild("Dialogue")
 if dialogue and dialogue:IsA("RemoteEvent")then
@@ -2714,19 +2722,22 @@ if dialogue and dialogue:IsA("RemoteEvent")then
   local amount=type(msg)=="string" and msg:match("[Yy]ou have%s+([%d,]+)%s+combat experience")
   amount=amount and tonumber((amount:gsub(",","")))
   if not amount then return end
-  cexp.Value,cexp.At=amount,os.time()
+  cexpSaved[cexpCharacter() or "?"]={Value=amount,At=os.time()}
   if type(writefile)=="function"then
    if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
-   pcall(writefile,cexpPath,amount.." "..cexp.At)
+   pcall(writefile,cexpPath,http:JSONEncode(cexpSaved))
   end
  end)
 end
+-- Shared with the Dashboard session stats (SP-094).
+controller.SparklingCexp=cexpEntry
 -- Sources from the Profile Scan (2026-11-17). Character attributes/values replicate for every player; the stats menu is yours only.
 -- A field marked (?) is a likely mapping that still needs confirming.
 local FIELDS={
  -- Not in the client profile (scan v3); only Varrik reveals it (SP-047): the last answer heard is shown with its age.
  {Label="Combat Experience (CEXP)",SelfOnly=true,Resolve=function()
-  if not cexp.Value then return "Ask Varrik (5,000 Zeni) to read it"end
+  local cexp=cexpEntry()
+  if not cexp then return "Ask Varrik (5,000 Zeni) to read it"end
   local age=os.time()-cexp.At
   local ago=age<90 and "just now" or age<5400 and (math.floor(age/60).." min ago") or age<172800 and (math.floor(age/3600).." h ago") or (math.floor(age/86400).." days ago")
   return number(cexp.Value).." (Varrik, "..ago..")"
@@ -5508,6 +5519,214 @@ controller.Connect(run.Heartbeat,function(dt)
  if os.clock()>=nextSave then nextSave=os.clock()+30;saveCounts()end
 end)
 controller.RegisterCleanup(saveCounts)
+
+end)()
+;(function()
+-- Sparkling session stats (Dashboard), modelled on the Gohan and Beyond Nen SESSION STATS cards (SP-094). Read-only: uses the hub's PL meter
+-- (Power Tracker), the CEXP reading Visuals keeps, your inventory Zeni label and replicated character values. Sends no game requests.
+-- Carries across server hops; a new session starts after 15 minutes away, on another character, or with Reset Session.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local ui=controller.UI
+if not ui or not ui.Pages.Home then return end
+local players=game:GetService("Players")
+local http=game:GetService("HttpService")
+local run=game:GetService("RunService")
+local player=players.LocalPlayer
+local file="AnomalyHub/universal/sparkling_session_"..tostring(player.UserId)..".json"
+local AWAY_RESET=900
+
+local function finite(v)return type(v)=="number" and v==v and math.abs(v)<math.huge end
+local function commas(n)
+ local rounded=math.floor(math.abs(n)+.5)
+ local digits=tostring(rounded):reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,","")
+ return (n<0 and rounded>0 and "-" or "")..digits
+end
+local function signed(n)return (n>0 and "+" or "")..commas(n)end
+
+-- Current readings. Profile PL (FetchData/DataUpdated via Power Tracker) is used for gains: live battle power jumps with forms.
+local function profilePower()
+ local meter=controller.SparklingPowerStats
+ local ok,data=pcall(function()return meter and meter.Get()end)
+ local pl=ok and type(data)=="table" and data.ProfilePL
+ return finite(pl) and pl or nil
+end
+local function characterName()
+ local getter=controller.SparklingProfile
+ local ok,profile=pcall(function()return getter and (getter())end)
+ local name=ok and type(profile)=="table" and profile.CharacterName
+ return type(name)=="string" and name~="" and name or nil
+end
+-- The inventory "Zeni: n" label updates live as jobs pay (SP-044, same parser as Visuals).
+local function zeni()
+ local gui=player:FindFirstChildOfClass("PlayerGui")
+ local label=gui and gui:FindFirstChild("Inventory")
+ label=label and label:FindFirstChild("hh",true)
+ if not label or not label:IsA("TextLabel")then return nil end
+ local digits,suffix=(label.Text:gsub("<[^>]*>","")):match("[Zz]eni:%s*([%d,%.]+)%s*([kKmM]?)")
+ local amount=digits and tonumber((digits:gsub(",","")))
+ if not amount then return nil end
+ suffix=(suffix or ""):lower()
+ return math.floor(amount*(suffix=="k" and 1e3 or suffix=="m" and 1e6 or 1)+.5),suffix~=""
+end
+-- Character@EventWins replicates (Profile Scan 2026-11-17).
+local function eventWins()
+ local value=player.Character and player.Character:GetAttribute("EventWins")
+ return finite(value) and value or nil
+end
+local function cexpReading()
+ local getter=controller.SparklingCexp
+ local ok,entry=pcall(function()return getter and getter()end)
+ return ok and type(entry)=="table" and finite(entry.Value) and entry or nil
+end
+
+-- Session model (same shape as Beyond Nen's: counters only add rises seen within one source, so a hop or respawn never counts a jump).
+local function newSession(now)
+ return {StartedAt=now,Counters={Zeni=0,EventWins=0,Hops=0,Deaths=0},Samples={}}
+end
+local session=newSession(os.time())
+local function restore(data,now)
+ if type(data)~="table" or data.Version~=1 or data.UserId~=player.UserId or not finite(data.SavedAt) or data.SavedAt>now
+  or now-data.SavedAt>AWAY_RESET or not finite(data.StartedAt) or data.StartedAt>now then return end
+ session.StartedAt=data.StartedAt
+ session.Character=type(data.Character)=="string" and data.Character or nil
+ session.StartPL=finite(data.StartPL) and data.StartPL or nil
+ session.CurrentPL=finite(data.CurrentPL) and data.CurrentPL or nil
+ session.CexpBase=finite(data.CexpBase) and data.CexpBase or nil
+ session.CexpBaseAt=finite(data.CexpBaseAt) and data.CexpBaseAt or nil
+ for key in pairs(session.Counters)do
+  local saved=type(data.Counters)=="table" and data.Counters[key]
+  session.Counters[key]=finite(saved) and saved>=0 and saved or 0
+ end
+ if type(data.JobId)=="string" and data.JobId~="" and game.JobId~="" and data.JobId~=game.JobId then session.Counters.Hops+=1 end
+end
+if type(readfile)=="function" and type(isfile)=="function" then
+ local ok,data=pcall(function()return isfile(file) and http:JSONDecode(readfile(file))end)
+ if ok then restore(data,os.time())end
+end
+local saveOk=true
+local function save()
+ if type(writefile)~="function" then saveOk=false;return end
+ if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ local ok,body=pcall(http.JSONEncode,http,{Version=1,UserId=player.UserId,JobId=game.JobId,StartedAt=session.StartedAt,SavedAt=os.time(),
+  Character=session.Character,StartPL=session.StartPL,CurrentPL=session.CurrentPL,CexpBase=session.CexpBase,CexpBaseAt=session.CexpBaseAt,Counters=session.Counters})
+ saveOk=ok and pcall(writefile,file,body)
+end
+local function reset()
+ local character=session.Character
+ session=newSession(os.time())
+ session.Character=character
+ session.StartPL=profilePower();session.CurrentPL=session.StartPL
+ local reading=cexpReading()
+ session.CexpBase,session.CexpBaseAt=reading and reading.Value,reading and reading.At
+ save()
+end
+-- Rises only, 3 s after a source first appears (replicated data settles); the previous sample must come from the same character.
+local function observe(key,value,ready)
+ if not finite(value)then session.Samples[key]=nil;return end
+ local previous=session.Samples[key]
+ session.Samples[key]={Value=value,Character=player.Character,Ready=ready}
+ if ready and previous and previous.Ready and previous.Character==player.Character and value>previous.Value then
+  session.Counters[key]+=value-previous.Value
+ end
+end
+
+-- Card (Beyond Nen layout: 2-column tiles, Reset Session, status line).
+local card=ui.Card(ui.Pages.Home,"SESSION STATS","Counts gains during this session. Carries across server hops; resets after 15 minutes away or on another character.",446)
+card.LayoutOrder=-2
+local grid=ui.Create("Frame",{Position=UDim2.fromOffset(14,68),Size=UDim2.new(1,-28,0,280),BackgroundTransparency=1},card)
+ui.Create("UIGridLayout",{CellPadding=UDim2.fromOffset(8,8),CellSize=UDim2.new(.5,-4,0,64),FillDirectionMaxCells=2,SortOrder=Enum.SortOrder.LayoutOrder},grid)
+local labels={}
+for order,definition in ipairs({{"Time","SESSION TIME"},{"Power","POWER LEVEL / GAINED"},{"PowerRate","PL / HOUR"},{"Cexp","COMBAT EXP (VARRIK)"},
+ {"Zeni","ZENI EARNED"},{"EventWins","EVENT WINS GAINED"},{"Hops","SERVER HOPS"},{"Deaths","DEATHS"}})do
+ local tile=ui.Create("Frame",{LayoutOrder=order,BackgroundColor3=ui.Colors.Surface,BorderSizePixel=0},grid)
+ ui.Create("UICorner",{CornerRadius=UDim.new(0,7)},tile)
+ ui.Create("TextLabel",{Position=UDim2.fromOffset(12,7),Size=UDim2.new(1,-24,0,16),BackgroundTransparency=1,Font=Enum.Font.Gotham,
+  Text=definition[2],TextColor3=ui.Colors.Muted,TextSize=9,TextXAlignment=Enum.TextXAlignment.Left},tile)
+ labels[definition[1]]=ui.Create("TextLabel",{Position=UDim2.fromOffset(12,27),Size=UDim2.new(1,-24,0,26),BackgroundTransparency=1,
+  Font=Enum.Font.GothamSemibold,Text="--",TextColor3=ui.Colors.Text,TextSize=13,TextTruncate=Enum.TextTruncate.AtEnd,TextXAlignment=Enum.TextXAlignment.Left},tile)
+end
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,404),Size=UDim2.new(1,-28,0,30),BackgroundTransparency=1,Font=Enum.Font.Gotham,
+ Text="Reading your stats...",TextColor3=ui.Colors.Muted,TextSize=9,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left},card)
+ui.Button(card,"Reset Session",14,360,164,function()reset()end)
+
+local zeniRounded=false
+local function render()
+ local elapsed=math.max(0,os.time()-session.StartedAt)
+ local function rate(value)return elapsed>=60 and commas(value*3600/elapsed) or "--" end
+ labels.Time.Text=string.format("%dh %02dm %02ds",math.floor(elapsed/3600),math.floor(elapsed/60)%60,elapsed%60)
+ local pl=session.CurrentPL
+ local gained=pl and session.StartPL and pl-session.StartPL
+ labels.Power.Text=pl and string.format("%s  (%s)",commas(pl),signed(gained or 0)) or "Reading profile..."
+ labels.PowerRate.Text=gained and (elapsed>=60 and signed(gained*3600/elapsed) or "Measuring...") or "--"
+ local reading=cexpReading()
+ if reading then
+  local sinceStart=session.CexpBase and reading.At~=session.CexpBaseAt and reading.Value-session.CexpBase
+  labels.Cexp.Text=commas(reading.Value)..(sinceStart and "  ("..signed(sinceStart)..")" or "")
+ else labels.Cexp.Text="Ask Varrik (5,000 Zeni)"end
+ labels.Zeni.Text=session.Samples.Zeni and string.format("%s  (%s/h)",commas(session.Counters.Zeni),rate(session.Counters.Zeni)) or "Open inventory once"
+ labels.EventWins.Text=session.Samples.EventWins and string.format("%s  (%s/h)",
+  session.Counters.EventWins%1==0 and tostring(session.Counters.EventWins) or string.format("%.1f",session.Counters.EventWins),
+  elapsed>=60 and string.format("%.1f",session.Counters.EventWins*3600/elapsed) or "--") or "Not detected"
+ labels.Hops.Text=tostring(session.Counters.Hops)
+ labels.Deaths.Text=tostring(session.Counters.Deaths)
+ status.Text=not saveOk and "Tracking this run. File saving is unavailable."
+  or zeniRounded and "Zeni shows in thousands (k), so Zeni earned is rounded to that."
+  or "Stats update live. PL uses your saved profile value (forms don't count); CEXP only updates when Varrik reads it."
+end
+
+local sourceSeen={}
+local function sample()
+ -- Another character on this account starts a new session.
+ local name=characterName()
+ if name then
+  if session.Character and session.Character~=name then session=newSession(os.time());session.Character=name;save()
+  elseif not session.Character then session.Character=name end
+ end
+ local pl=profilePower()
+ if pl then
+  session.CurrentPL=pl
+  if not session.StartPL then session.StartPL=pl end
+ end
+ local reading=cexpReading()
+ if reading and not session.CexpBase then session.CexpBase,session.CexpBaseAt=reading.Value,reading.At end
+ local now=os.clock()
+ local amount,rounded=zeni()
+ zeniRounded=rounded==true
+ sourceSeen.Zeni=amount and (sourceSeen.Zeni or now) or nil
+ observe("Zeni",amount,sourceSeen.Zeni and now-sourceSeen.Zeni>=3)
+ local wins=eventWins()
+ sourceSeen.EventWins=wins and (sourceSeen.EventWins or now) or nil
+ observe("EventWins",wins,sourceSeen.EventWins and now-sourceSeen.EventWins>=3)
+end
+
+local deathConnection
+local function hookCharacter(character)
+ if deathConnection then deathConnection:Disconnect();deathConnection=nil end
+ sourceSeen.EventWins=nil
+ local humanoid=character and (character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid",10))
+ if not humanoid or not humanoid:IsA("Humanoid")then return end
+ local counted=humanoid.Health<=0
+ deathConnection=humanoid.Died:Connect(function()
+  if counted then return end
+  counted=true;session.Counters.Deaths+=1;save();render()
+ end)
+end
+controller.Connect(player.CharacterAdded,function(character)task.spawn(hookCharacter,character)end)
+controller.Connect(player.OnTeleport,function(state)if state==Enum.TeleportState.Started then save()end end)
+local tick,saveTick=0,0
+controller.Connect(run.Heartbeat,function(dt)
+ tick+=dt;saveTick+=dt
+ if tick>=1 then tick=0;sample();render()end
+ if saveTick>=15 then saveTick=0;save()end
+end)
+controller.RegisterCleanup(function()
+ save()
+ if deathConnection then deathConnection:Disconnect();deathConnection=nil end
+end)
+task.spawn(hookCharacter,player.Character)
+sample();save();render()
 
 end)()
 ;(function()

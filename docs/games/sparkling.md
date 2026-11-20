@@ -2375,3 +2375,42 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Bounds / output:** at most three workers and three scripts, 1.5 MB per source, 45-second deadline, late results ignored, periodic manifest saves. Local output prefix AnomalyHub/universal/sparkling_pl_sources with timestamp/nonce history, numbered source files and _latest.json manifest. Saved sources remain local. The existing hub and other diagnostics are unchanged. Canonical helper is tools/diagnostics/SparklingPLSourceCapture.lua; optional standalone installed as SparklingPLSourceCapture.lua in the executor workspace. Run once using loadstring(readfile("SparklingPLSourceCapture.lua"))(); no combat needed.
 
 **Validation:** Luau compilation passed; checked that discovery has only the three explicit targets and no recursive scan, require, FireServer or InvokeServer. Installed file hash matches the prepared helper. No live execution, successful source extraction or grant behavior is claimed. Next: inspect the resulting manifest and available source callsites; handle unavailable targets honestly, and select a specific recording only if the source supplies a concrete relevant action. No new grant candidate is established merely by preparing this capture.
+
+## SP-094 — Dashboard SESSION STATS; Visuals CEXP saved per account (2026-11-20, Claude)
+
+**User:** "make a dashboard live tracker just like gohan and beyond nen", and "combat exp in visuals persist on different accounts".
+
+**Bug (source inspection):**
+- Visuals v5.2 saved the last Varrik CEXP reading to one shared file, `sparkling_cexp_value.txt`.
+- Any account or character slot on the same PC therefore showed the last reading heard by any account.
+
+**Fixed — Visuals v5.3:**
+- Readings are saved in `sparkling_cexp_<UserId>.json`, keyed by the profile `CharacterName`.
+- A reading heard before the profile scan names the character is held under "?" and moves to the character once it's known.
+- The old shared file isn't read any more, because it can't say whose reading it was. Each character needs one new Varrik check.
+- The entry is exposed as `controller.SparklingCexp`.
+
+**New — `src/SparklingSession.lua` (SESSION STATS card, top of Dashboard):**
+- **Layout:** the same as Beyond Nen's SESSION STATS (2-column tiles, Reset Session, status line), with Gohan's tile set adapted to Sparkling.
+- **Tiles:**
+  - session time;
+  - power level and gain: profile PL from the Power Tracker meter, so forms don't inflate it;
+  - PL / hour;
+  - combat exp: last Varrik reading plus the gain since the session's first reading;
+  - Zeni earned, from the inventory "Zeni:" label (rises only), with a per-hour rate;
+  - event wins gained: `Character@EventWins`, rises only;
+  - server hops;
+  - deaths.
+- **Counting rule:** rises are counted only after a source has been stable for 3 s and only within the same character. Respawns and hops never count as gains.
+- **Persistence:** saved per account in `sparkling_session_<UserId>.json` and restored after a hop (JobId change = +1 hop).
+- **New session:** after 15 min away, on a different CharacterName, or with Reset Session.
+- **Sends no game requests.** The existing LIVE SESSION card (Power Tracker, SP-090) is unchanged and sits below it.
+- Built into both variants after the CEXP tracker.
+
+**Checks:** source, Visuals and both variants compile. No live run.
+
+**Next step:** load the hub and check the tiles fill in:
+- PL after the first profile read;
+- Zeni after a job pays;
+- that a hop keeps the session and adds 1 hop;
+- on a second account, that Visuals CEXP shows "Ask Varrik" until that account is checked.

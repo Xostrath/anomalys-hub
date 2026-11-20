@@ -12,7 +12,7 @@ This summary supersedes dated historical handoffs below; compare current source,
 
 | Area | Latest established result | Still unknown / next action |
 | --- | --- | --- |
-| PL grant candidate audit | SP-095: three source gaps captured; limit bars are display-only and command IDs come from server List. No demonstrated PL grant. | One-shot CommandMenu List helper installed/compiled, awaiting execution. Inspect returned catalog; no command execution yet. |
+| PL grant candidate audit | SP-101: server returned ten menu commands; none advertises PL. Limit bars are display-only. | Current menu lead closed; no direct grant established. Do not repeat identical captures or infer hidden command IDs. |
 | Sparkling daily reward | SP-075 / SP-079: early claim unsuccessful; eligible claim produced one capsule; sequential duplicate claim produced no second capsule. | No arbitrary item or CEXP grant established. No repeat of the same daily test needed. |
 | Power Level recorder | SP-088: v2 live capture saved 1,500 events across two parts, with 75 PL changes, combat cues, health changes and three profile reads. | No declared total limit or error; actor scope remains partial (35 studs / eight actors; 432 unwatched effects omitted). Normal v2 workflow now observed live. |
 | PL tracking panel | SP-090: moved to Dashboard → LIVE SESSION with the two-column session tiles used by Beyond Nen/Gohan. Profile/live PL, signed net, PL/min, time and reading age; Refresh profile / Reset session. | 120 mock checks across 14 scenarios, both build variants compile, installed hash verified. Dashboard visibility awaits live use; this measures changes and does not grant PL. |
@@ -2571,3 +2571,13 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 3. Spectate someone from General > Spectate for ~20 s (orbit, zoom, stop).
 4. Stop the recorder.
 5. Read the file. Then fix Spectate and add Sparkling row → player click-to-spectate.
+
+## SP-101 — Command catalog received; no advertised PL award command (2026-11-20)
+
+**Verified live read:** history 1795205358_6540D2D5 in place 94737939156598 returned a table in 0.066 s. Ten entries, no reported serialization limits or error; latest and history files match. This validates the one-shot catalog helper from SP-095. The helper issued the normal CommandMenu List read only; no Run/Request execution, grant test or profile-change measurement occurred.
+
+**Returned catalog:** Interact entries Spar, Dap, Game (Rock Paper Scissors), Reset (Reset Relations); Summons entry Pod (Space Pod); Commands entries Pay, Give, Apologize, Invite and TailWrap. Spar advertises a 300-second spar and another request to end it. Pay takes target/amount and says Give Zeni to a player. Give takes target/text and says Equip the item first. These labels support intended transfer semantics, not creation of arbitrary Zeni/items. Server validation of execution is still untested. None of the ten entries advertises PL, a PL amount or a progression reward command.
+
+**Conclusion / limits:** the current account/place catalog supplies no concrete PL-grant candidate, so the command-menu branch ends here unless new evidence appears. This is a negative result for the returned menu, not proof that hidden, permission-dependent or other-place commands cannot exist. Do not invent IDs, interpret Give as a spawn API, or ask for another identical menu/combat recording. The earlier display-only limit-bar result stands. No direct self-grant route has been established across the reviewed evidence.
+
+**Handoff:** keep the active objective explicit but distinguish an investigation lead from an established capability. Revisit only with a specific new award callsite or relevant normal-action capture; existing data does not justify a PL-grant button. No runtime/hub modifications were made, so no compilation is applicable to this review. Raw catalog remains local; this sanitized result is shared. Preserve concurrent SP-096 session dashboard changes.

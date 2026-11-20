@@ -1406,7 +1406,7 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 
 **User:** "why did I go to heaven?"
 
-**Evidence:** history 1795128862 (15:54:22, place **120023577538065**, 1,056 s): the session ended with `STOP Character changed or died`; the CEXP tracker counted `Deaths=1`. All Warrior Clan Rogue fights since 15:30 (histories 1795127425 → 1795128862) were on this place, together with players (`BroInBum` attacking from 614 s on; health 128 at 918 s). The detail log hit its 12,000-line cap at ~918 s (6,450 lines dropped), so the last ~137 s before the death — what landed the final hit or a grip — were not recorded.
+**Evidence:** history 1795128862 (15:54:22, place **120023577538065**, 1,056 s): the session ended with `STOP Character changed or died`; the CEXP tracker counted `Deaths=1`. All Warrior Clan Rogue fights since 15:30 (histories 1795127425 → 1795128862) were on this place, together with players (a player attacking from 614 s on; health 128 at 918 s). The detail log hit its 12,000-line cap at ~918 s (6,450 lines dropped), so the last ~137 s before the death — what landed the final hit or a grip — were not recorded.
 
 **Why Heaven (Trello):** "Dying in Pietra will send you to Heaven or Hell" and "you lose 10% of CEXP and Power Level and [are] set straight to the afterlife"; Pietra is "a battle grounds planet… higher gravity", with Pietra Wave Defense spawning groups of NPCs. Elsewhere a death respawns you at the hospital. Heaven vs Hell follows Karma (neutral or positive → Heaven). **Inference:** place 120023577538065 is Pietra (the death went straight to the afterlife; the rogues spawn there in groups). Not confirmed by a location label.
 
@@ -1429,3 +1429,23 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 **Fixed / untested live:** the match runs first, then `ok` is checked. After a reload, the row should read "1,808 (Varrik, N h ago)".
 
 **Same bug in Auto Job (source inspection):** the Floor Staff progress read (`local a,b=amount and amount.Text:match(...)`) lost the total, so "10/10" was never seen as finished and logs printed `progress=N/nil`; finishing relied on the Restart box instead. Fixed (both captures assigned directly). Untested live: the next Floor Staff run should log `PROGRESS N/10` and `DONE` at 10/10.
+
+## SP-055 — Second CEXP reading: 1,808 → 3,950 in 107 minutes, despite one death (2026-11-19, Claude)
+
+**Evidence (Verified from captures):** Varrik checks at 15:25:53 (1,808) and 17:21:42 (3,950); CEXP tracker history line plus 12 Auto Parry histories in between (`cexp_window` breakdown). Sanitized: player names removed, and SP-052's player name was replaced with "a player".
+
+| Period | Activity | Hits landed | Hits taken | Counters |
+|---|---|---|---|---|
+| 15:30–16:12 | Warrior Clan Rogues, place 120023577538065 (+ one player from ~16:00) | 586 rogues + 94 player | 231 + 65 | 84 + 6 perfect, 9 |
+| 16:12 | **Death** (SP-052) | | | |
+| 16:16–16:28 | PvP against the same player, same place | 237 | 113 | 33 |
+| ~16:30–17:07 | Auto Job: 115 jobs paid, +24,772 Zeni | — | — | — |
+| 17:12–17:16 | Shadow, place 85995124525570 | 159 | 51 | 33 |
+
+- **Net +2,142 CEXP** from about 925 non-Shadow hits landed (586 rogue, 331 player, 8 unclear): roughly **2.3 CEXP per landed hit** on average, more if the death took 10%. Rogues and PvP happened in the same window, so a single reading cannot split them.
+- **The death did not wipe the gain.** At most about 10% of the CEXP held at 16:12 was lost (unknown, likely under ~300).
+- **The place after the death:** PvP continued on place 120023577538065 at 16:16. If the death went straight to the afterlife, the afterlife is in the same place, or the user came back; SP-052's Pietra inference stays unconfirmed.
+- **Shadow:** again consistent with no CEXP (the 15:25 reading had +0 after 943 Shadow hits).
+- **Tracker caveat:** `PLGained`=313,963 adds every upward Power Level tick (the shown PL drops and recovers with fatigue/injury/health), so it overstates the gain; the net change is 67,314 → 99,183 = **+31,869**. Use the PL field in the history line.
+
+**Next step:** one source per Varrik check (5,000 Zeni each), e.g. 15 minutes of rogues only, then 15 minutes of PvP only, to price each source.

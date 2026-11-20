@@ -2731,7 +2731,7 @@ local FIELDS={
   local ago=age<90 and "just now" or age<5400 and (math.floor(age/60).." min ago") or age<172800 and (math.floor(age/3600).." h ago") or (math.floor(age/86400).." days ago")
   return number(cexp.Value).." (Varrik, "..ago..")"
  end},
- {Label="Battle Power",Resolve=function(target)return show(value(target,"PowerLevel"))end},
+ {Label="Live Battle Power",Resolve=function(target)return show(value(target,"PowerLevel"))end},
  {Label="Health",Optional=true,Resolve=function(target)
   local hum=target.Character and target.Character:FindFirstChildOfClass("Humanoid")
   if not hum or not finite(hum.Health)then return nil end
@@ -3349,6 +3349,143 @@ end
 finder.Button=ui.Button(finderCard,"Start CEXP Finder",14,72,180,startFinder,colors.AccentSoft)
 finder.Button.Size=UDim2.new(1,-28,0,34)
 controller.RegisterCleanup(function()stopFinder("Unloaded.")end)
+
+end)()
+;(function()
+-- Sparkling Power Tracker v1: profile endpoint net, live PL and elapsed-session rate.
+local controller=((getgenv and getgenv()) or shared).__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local player=game:GetService("Players").LocalPlayer
+local rs=game:GetService("ReplicatedStorage")
+local run=game:GetService("RunService")
+local ui=controller.UI
+if not ui or not ui.Pages.Visuals then return end
+if controller.SparklingPowerStats then return end
+local meter={Active=true,Epoch=0,Revision=0,NeedsSeed=true,Busy=false,LastAttempt=-math.huge,Status="Waiting for character"}
+controller.SparklingPowerStats=meter
+local function finite(v)return type(v)=="number" and v==v and math.abs(v)<math.huge end
+local function livePower()
+ local char=player.Character
+ local value=char and char:FindFirstChild("PowerLevel")
+ local n=value and value:IsA("ValueBase") and value.Value
+ return finite(n) and n or nil
+end
+local function accept(value,source)
+ if not finite(value)then return false end
+ meter.Profile=value;meter.ProfileAt=os.clock();meter.Source=source
+ if meter.Baseline==nil then meter.Baseline=value;meter.Started=os.clock()end
+ meter.Status="Tracking";return true
+end
+function meter.Get()
+ local elapsed=meter.Started and math.max(0,os.clock()-meter.Started) or nil
+ local net=meter.Profile and meter.Baseline and meter.Profile-meter.Baseline or nil
+ return {ProfilePL=meter.Profile,LivePL=livePower(),Baseline=meter.Baseline,Net=net,
+  PerMinute=net and elapsed and elapsed>=10 and net*60/elapsed or nil,
+  Elapsed=elapsed,ProfileAge=meter.ProfileAt and os.clock()-meter.ProfileAt or nil,
+  Source=meter.Source,Status=meter.Status,Busy=meter.Busy,Scope="since spawn or Reset session; includes idle time"}
+end
+local function fetchRemote()
+ local requests=rs:FindFirstChild("Requests")
+ local remote=requests and requests:FindFirstChild("FetchData")
+ return remote and remote:IsA("RemoteFunction") and remote or nil
+end
+function meter.Refresh(reset)
+ if not meter.Active or meter.Busy or os.clock()-meter.LastAttempt<5 then return end
+ if not player.Character then meter.Status="Waiting for character";return end
+ local remote=fetchRemote()
+ if not remote then meter.Status="Profile read unavailable";return end
+ meter.Busy=true;meter.LastAttempt=os.clock();meter.Status=reset and "Resetting session..." or "Reading profile..."
+ local epoch,character,revision=meter.Epoch,player.Character,meter.Revision
+ local done,ok,value=false,false,nil
+ task.spawn(function()
+  ok,value=pcall(function()return remote:InvokeServer()end)
+  done=true
+ end)
+ local deadline=os.clock()+8
+ while not done and os.clock()<deadline and meter.Active and epoch==meter.Epoch do task.wait(.05)end
+ if not done then
+  if meter.Active and epoch==meter.Epoch then meter.Status="Profile read timed out; live PL remains available"end
+  -- Keep one request in flight; late responses cannot replace a newer session.
+  task.spawn(function()
+   while not done and meter.Active do task.wait(.25)end
+   meter.Busy=false
+   if done and meter.Active and epoch~=meter.Epoch and player.Character then task.spawn(function()meter.Refresh(false)end)end
+  end)
+  return
+ end
+ meter.Busy=false
+ if not meter.Active then return end
+ if epoch~=meter.Epoch or player.Character~=character then
+  if player.Character then task.spawn(function()meter.Refresh(false)end)end
+  return
+ end
+ local power=ok and type(value)=="table" and rawget(value,"PowerLevel") or nil
+ if not finite(power)then meter.Status="Profile read failed; latest known value retained";return end
+ -- A profile event received during the read takes precedence over a potentially older response.
+ if meter.NeedsSeed or meter.Revision==revision then
+  meter.NeedsSeed=false;accept(power,"FetchData")
+ else meter.Status="Tracking"end
+ if reset and meter.Profile~=nil then meter.Baseline=meter.Profile;meter.Started=os.clock()end
+end
+function meter.Reset()meter.Refresh(true)end
+local function characterChanged()
+ meter.Epoch+=1;meter.Character=player.Character;meter.Revision=0;meter.NeedsSeed=true
+ meter.Profile=nil;meter.ProfileAt=nil;meter.Source=nil;meter.Baseline=nil;meter.Started=nil
+ meter.Status=meter.Character and "New character; reading baseline..." or "Waiting for character"
+ -- Reset read debounce for a new character, without overlapping any pending request.
+ meter.LastAttempt=-math.huge
+ if meter.Character then task.spawn(function()meter.Refresh(false)end)end
+end
+local requests=rs:FindFirstChild("Requests")
+local updated=requests and requests:FindFirstChild("DataUpdated")
+if updated and updated:IsA("RemoteEvent")then
+ controller.Connect(updated.OnClientEvent,function(data)
+  if not meter.Active or meter.NeedsSeed or meter.Character~=player.Character or not player.Character then return end
+  local power=type(data)=="table" and rawget(data,"PowerLevel")
+  if finite(power)then meter.Revision+=1;accept(power,"DataUpdated")end
+ end)
+end
+local card=ui.Card(ui.Pages.Visuals,"YOUR POWER LEVEL",
+ "Profile net gain for this session. PL/min includes idle time. Live power can change with output and form.",260)
+card.LayoutOrder=0
+local labels={}
+for i,title in ipairs({"Profile PL","Live battle power","Net profile gain","Profile PL / min"})do
+ local y=68+(i-1)*22
+ ui.Create("TextLabel",{Position=UDim2.fromOffset(14,y),Size=UDim2.new(.52,-14,0,22),BackgroundTransparency=1,
+  Font=Enum.Font.Gotham,TextSize=11,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text=title},card)
+ labels[i]=ui.Create("TextLabel",{Position=UDim2.new(.52,0,0,y),Size=UDim2.new(.48,-14,0,22),BackgroundTransparency=1,
+  Font=Enum.Font.GothamSemibold,TextSize=11,TextColor3=ui.Colors.Text,TextXAlignment=Enum.TextXAlignment.Right,Text="Waiting..."},card)
+end
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,160),Size=UDim2.new(1,-28,0,42),BackgroundTransparency=1,
+ Font=Enum.Font.Gotham,TextSize=10,TextColor3=ui.Colors.Muted,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left,Text="Reading profile..."},card)
+local refresh=ui.Button(card,"Refresh profile",14,212,135,function()task.spawn(function()meter.Refresh(false)end)end,ui.Colors.AccentSoft)
+local reset=ui.Button(card,"Reset session",160,212,135,function()task.spawn(meter.Reset)end,ui.Colors.AccentSoft)
+refresh.Size=UDim2.new(.5,-18,0,34);reset.Size=refresh.Size;reset.Position=UDim2.new(.5,4,0,212)
+local function format(value,signed)
+ if not finite(value)then return "Unavailable"end
+ local rounded=math.floor(math.abs(value)+.5)
+ local digits=tostring(rounded):reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,","")
+ return (rounded>0 and (value<0 and "-" or signed and "+" or "") or "")..digits
+end
+local function render()
+ local data=meter.Get()
+ labels[1].Text=format(data.ProfilePL);labels[2].Text=format(data.LivePL)
+ labels[3].Text=format(data.Net,true)
+ labels[4].Text=data.Net~=nil and data.PerMinute==nil and "Measuring..." or format(data.PerMinute,true)
+ local time=data.Elapsed and string.format("%02d:%02d",math.floor(data.Elapsed/60),math.floor(data.Elapsed%60)) or "--:--"
+ local age=data.ProfileAge and string.format("%.0fs ago",data.ProfileAge) or "not received"
+ status.Text=data.Status.."\nSession "..time.." · profile updated "..age
+end
+controller.Connect(player.CharacterAdded,characterChanged)
+local elapsed=0
+controller.Connect(run.Heartbeat,function(dt)
+ if not meter.Active then return end
+ elapsed+=dt;if elapsed<.5 then return end;elapsed=0
+ if player.Character~=meter.Character then characterChanged()end
+ render()
+end)
+controller.RegisterCleanup(function()meter.Active=false;meter.Epoch+=1 end)
+characterChanged();render()
 
 end)()
 ;(function()
@@ -5040,7 +5177,7 @@ controller.RegisterCleanup(function()stop("Unloaded.");state.Closed=true end)
 
 end)()
 ;(function()
--- Sparkling CEXP tracker v1 (SP-048). CEXP is only revealed by Varrik's paid check (SP-047), so this counts what you do between
+-- Sparkling CEXP tracker v2: legacy positive-only PL counter retired (SP-089). CEXP is only revealed by Varrik's paid check (SP-047), so this counts what you do between
 -- checks; comparing consecutive checks shows which activities give CEXP. Trello: "You gain CombatEXP through queues, fighting and
 -- quests"; a completed queue gives 100 (200 for Battle type). Read-only: listens to events the game already sends you.
 -- Effects formats are from the parry diagnostics: ("EmitReferenceParticle", yourCharacter, "HitOut") = your hit landed,
@@ -5056,8 +5193,8 @@ local player=players.LocalPlayer
 
 local COUNTS="AnomalyHub/universal/sparkling_cexp_counters.json"
 local HISTORY="AnomalyHub/universal/sparkling_cexp_history.txt"
-local KEYS={"HitsLanded","HitsTaken","Counters","PerfectCounters","ShadowSeconds","ShadowHits","OtherFightSeconds","PLGained","ZeniEarned","JobsPaid","Deaths"}
-local counts={Since=os.time()}
+local KEYS={"HitsLanded","HitsTaken","Counters","PerfectCounters","ShadowSeconds","ShadowHits","OtherFightSeconds","ZeniEarned","JobsPaid","Deaths"}
+local counts={Since=os.time(),PLTrackingVersion=2}
 for _,key in ipairs(KEYS)do counts[key]=0 end
 local function folder()
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
@@ -5067,7 +5204,12 @@ if type(readfile)=="function"then
  -- (v1 wrote `local got,data=ok and pcall(...)`, which keeps only pcall's first result, so saved counts were lost on every reload.)
  local got,data=false,nil
  if ok and type(text)=="string" then got,data=pcall(function()return http:JSONDecode(text)end)end
- if got and type(data)=="table" then for key,value in pairs(data)do if counts[key]~=nil and tonumber(value)then counts[key]=tonumber(value)end end end
+ if got and type(data)=="table" then
+  for key,value in pairs(data)do if counts[key]~=nil and key~="PLTrackingVersion" and tonumber(value)then counts[key]=tonumber(value)end end
+  -- Preserve the old total only as explicitly legacy evidence; never add to it or report it as net gain.
+  local legacy=tonumber(data.LegacyPLUpwardSum or data.PLGained)
+  if legacy and legacy==legacy and math.abs(legacy)<math.huge then counts.LegacyPLUpwardSum=legacy end
+ end
 end
 local function saveCounts()
  if type(writefile)~="function" then return end
@@ -5127,7 +5269,7 @@ if dialogue and dialogue:IsA("RemoteEvent")then
    if ok and type(text)=="string"then for value in text:gmatch("CEXP=(%d+)")do previous=tonumber(value)end end
   end
   local parts={os.date("%Y-%m-%d %H:%M:%S"),"CEXP="..amount,"change="..(previous and tostring(amount-previous) or "first"),
-   "PL="..tostring(power() and math.floor(power()) or "?"),"Zeni="..tostring(zeni() or "?"),"minutes="..math.floor((os.time()-counts.Since)/60)}
+   "PL="..tostring(power() and math.floor(power()) or "?"),"PLSource=live","PLGainMetric=retired_positive_sum","Zeni="..tostring(zeni() or "?"),"minutes="..math.floor((os.time()-counts.Since)/60)}
   for _,key in ipairs(KEYS)do table.insert(parts,key.."="..math.floor(counts[key]))end
   local line=table.concat(parts," ")
   if type(writefile)=="function"then
@@ -5141,7 +5283,7 @@ if dialogue and dialogue:IsA("RemoteEvent")then
  end)
 end
 -- Once a second: time in the Inner World or in other fights, Power Level and Zeni gains, deaths.
-local lastPL,lastZeni,dead,nextSave,elapsed=power(),zeni(),false,os.clock()+30,0
+local lastZeni,dead,nextSave,elapsed=zeni(),false,os.clock()+30,0
 controller.Connect(run.Heartbeat,function(dt)
  elapsed+=dt
  if elapsed<1 then return end
@@ -5154,9 +5296,7 @@ controller.Connect(run.Heartbeat,function(dt)
  elseif humanoid then dead=false end
  shadowNow=inShadowWorld(root)
  if shadowNow then counts.ShadowSeconds+=step elseif os.clock()-lastHitAt<5 then counts.OtherFightSeconds+=step end
- local pl=power()
- if pl and lastPL and pl>lastPL then counts.PLGained+=pl-lastPL end
- lastPL=pl or lastPL
+ -- Profile net gain and rate now live in SparklingPowerTracker; live recovery is never accumulated here.
  local money=zeni()
  if money and lastZeni and money>lastZeni then
   counts.ZeniEarned+=money-lastZeni

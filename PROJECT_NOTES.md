@@ -225,3 +225,7 @@ The shared outgoing observer runs before the original __namecall forwards. Obser
 ## Built-in Sparkling Power Level recorder (2026-11-20)
 
 Sparkling's POWER LEVEL TRACE is built into Recorders via src/SparklingPowerTrace.lua and tools/build_public.ps1, in both variants. It mounts idle near the top of the tab; reload the hub after installing the update. Users no longer need to execute a separate recorder script. Shared UI helpers and a Sparkling profile guard keep presentation and routing consistent. See [Sparkling SP-085](docs/games/sparkling.md) for the packaging correction, validation and capture workflow; keep all game-specific evidence in that continuous game note.
+
+## Sparkling PL tracking panel (2026-11-20)
+
+src/SparklingPowerTracker.lua is assembled into both variants and mounts YOUR POWER LEVEL in Visuals, separately from the detailed recorder. It exposes own profile/live readings, signed session net and elapsed-time rate using the existing UI helpers. See [Sparkling SP-089](docs/games/sparkling.md) for source freshness, session/reset semantics, legacy counter migration and validation; game-specific findings remain in that game's continuous note.

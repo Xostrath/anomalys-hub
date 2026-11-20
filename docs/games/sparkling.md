@@ -1759,3 +1759,31 @@ No unmatched F event intervenes in these press/counter windows. Standard hit 5 i
 **Validation:** before-fix fixture reproduces both head-effect and non-colliding-Thrown failures (eight assertions). After-fix 446 mocked assertions pass: 64 targeted LOS assertions plus all 382 v18.1 checks. Tests use ancestry-aware raycasts to verify exact target and local head effects, Zvanishdummy, nested non-colliding Thrown effect, walls behind cosmetics, multiple effects, collidable debris/head, unrelated and prefix-lookalike names, wrong/nested folders, and iteration cap. Existing timing, player/NPC scope, focus, ownership, manual F, cooldown, approach, cleanup and settings checks pass. Source, staged public/private and regenerated public/private builds compile. No live session control or agent gameplay inputs. Reused this game's existing LOS policy; no cross-game timings or semantics imported.
 
 **Handoff:** reload v18.2 to remove these confirmed false LOS blockers. The recordings support retaining current standard hit-5 timing and newly shared Trainer coverage; rogue-heavy reliability remains mixed and shared-heavy cooldown remains unresolved. Next retained diagnostics should distinguish target_head_effect/thrown_effect exclusions from actual obstacles. Do not widen facing/range or retune all attacks just to increase the input count. Automatic recording continues.
+
+## SP-067 — Shadow and rogue NPC results on v18.x; rogue heavy timing trial (2026-11-20, Claude)
+
+**User:** "more auto parry test for you". New since SP-066: 1795162218 (brief toggle), 1795162254 (PvP, 1303 s), 1795163589 and 1795164047 (PvP vs Plunder-style players, the second ended in death), 1795164356 (Warrior Clan Rogues, place 120023577538065, 603 s, ended in death). All are v18.2. Also re-read the NPC part of 1795156077 (Shadow). Raw reports and identifiers stay local.
+
+**NPC evidence (Verified from captures):**
+- **Shadow (1795156077, retained first 235 s):** 56 counters / 64 presses (88%), 22 held clicks, 0 presses inside 1.25 s of a 0.5 s notice. The Shadow's two rogue-heavy presses both took Blunt.
+- **Warrior Clan Rogues (1795164356):** retained first ~299 s: 29 counters / 36 presses (81%): hit 2 14/16, hit 3 6/8, hit 5 7/8, heavy 2/4. Footer for all 603 s: 72 attempts, 54 self-counter receipts, 164 damage events (footer totals, not per-press attribution). 0 presses inside the lockout.
+- Rogue hits taken in the retained part, by most recent NPC animation within 600 ms: hit 1 17, hit 2 8, hit 3 5, hit 4 5, hit 5 3, heavy 3. Hits 1 and 4 stay skipped (too fast; 119 `npc_late_hit` skips in the footer). Many others follow 180435571 / 12034165582, which look like idle/reaction tracks, not attacks.
+- Wolf Fang Claw: no EX Wolf Fang in these runs; still untested.
+
+**Rogue heavy `126361551838373`, pooled over every recording with a press (13 histories, NPC and player targets):**
+- 74 presses, all at 300–366 ms after the start: 31 Perfect Counter, 25 Blunt, 18 no outcome (usually our punch interrupted the heavy).
+  - NPC targets: 29 / 15 / 17.
+  - Player targets: 2 / 10 / 2.
+- Every Perfect Counter arrived 400–435 ms after the start, i.e. at least 100 ms after F. Ten of the 25 Blunts landed earlier, at 383–402 ms (83–102 ms after F).
+- Unpressed heavies hit us a median 418 ms after the start (p10 400, p90 448; n=147).
+- Neither an own M1 more than 200 ms before F nor time since the last counter notice (1.25 s or more) separates the outcomes.
+- Earlier manual Perfect Counters (SP-050) came from presses 0.25–0.37 s after the start.
+- Reading: with a fixed 0.30 s press, the early impacts don't leave enough lead.
+
+**Implemented / untested live — Combat page v18.3:**
+- The rogue heavy press now alternates **260 / 300 ms** per target type (separate NPC and player counters, user offset still added).
+- Cues log `trial=npc_rogue_heavy` / `player_rogue_heavy heavyDelayMs=260|300`. Config: `heavy@260/300ms`.
+- The shared catalog (SP-064) still applies the same policy to players.
+- No other timing, gate or catalog changed. Source and both variants compile; no live test yet.
+
+**Next step:** a rogue fight on v18.3. Compare Perfect Counter / Blunt for heavyDelayMs=260 vs 300. If 260 wins clearly, make it fixed; if it loses on late impacts, return to 300. Also an EX Wolf Fang fight for the Claw.

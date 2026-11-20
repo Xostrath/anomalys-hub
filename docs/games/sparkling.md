@@ -2426,3 +2426,42 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Concrete next read prepared:** tools/diagnostics/SparklingCommandCatalog.lua (also installed as a standalone executor-workspace file) makes exactly one normal CommandMenu List request and saves the bounded response locally under AnomalyHub/universal/sparkling_command_catalog, with timestamp/nonce history and _latest.json. It never invokes Run or Request, selects a player, executes a command or changes profile values. Eight-second timeout, no retry, per-environment pending-read lock retained until an underlying timed-out call returns, late result ignored; response copy bounded by 2,000 nodes, 200 entries per table, depth five and 2,048 characters per string. Initial save failure prevents the request. This read is justified by the observed menu callsite rather than guessed arguments.
 
 **Validation / handoff:** catalog helper compiles and installed hash matches; it has not yet run live. Run loadstring(readfile("SparklingCommandCatalog.lua"))() once, then inspect the returned IDs/labels/argument metadata before selecting any action. A returned command is not proof of a permission bypass or a successful grant. Keep raw catalog/source local. Existing hub artifacts and concurrent SP-094 Dashboard/CEXP changes preserved. No further combat recording is needed to obtain the catalog.
+
+## SP-096 — SESSION STATS: spars, clearer PL / hour; LIVE SESSION card removed (2026-11-20, Claude)
+
+**User:** "remove live session, also pl/hour seems to be bugged it says +10,990 … add spars, spars should be based off fights with players and if you knocked them".
+
+**PL / hour (Verified from the saved session file):**
+- The value was arithmetically right: `sparkling_session_<UserId>.json` held StartPL 157,254.7 → CurrentPL 157,855.3 over 195 s, i.e. +600 PL, which is ≈ +11,077 / h.
+- The tile showed the bare signed number, which reads like an amount gained.
+- It now shows `+11,077 / h (+185 / min)`.
+
+**LIVE SESSION removed:**
+- Power Tracker v1.2 no longer builds its Dashboard card.
+- The meter (`controller.SparklingPowerStats`: FetchData seed + DataUpdated) is unchanged; SESSION STATS reads profile PL from it.
+
+**Spars (Implemented / untested live):**
+
+*Hit pairing*
+- `Requests.Effects ("EmitReferenceParticle", character, "HitOut" | "Blunt")`: HitOut = that character landed a hit, Blunt = it was hit.
+- Your HitOut paired with a player's Blunt within 30 ms, within 20 studs, is your hit on them. Your Blunt paired with their HitOut is their hit on you.
+- Checked offline on PvP history 1795169031 (Verified from capture): 139 of the 170 pairs within 150 ms arrived within 5 ms. The rest, 30–150 ms apart, look coincidental, so the window is 30 ms.
+
+*When a fight counts*
+- A spar is counted at 3 traded hits with at least one of them yours.
+- A fight ends after 30 s without hits.
+
+*Result*
+- **Won:** a `Knocked` child is added to their character (the game's client scripts check `FindFirstChild("Knocked")`), or they die, within 10 s of your last hit.
+- **Lost:** the same happens to you within 10 s of their last hit.
+- That `Knocked` replicates for other players is unverified; a `Dead` marker on another actor was seen in a Power Trace.
+
+*Display and log*
+- Tile: `SPARS (WON / LOST)`. The counters persist with the session.
+- Local log `sparkling_spars_latest.txt` (not committed) records each spar start, win, loss and end.
+
+**Checks:** both variants compile. No live run.
+
+**Next step:**
+- Spar a player and knock them, then check the tile and the spar log (start, WON).
+- If no WON appears after a knock, `Knocked` doesn't replicate and the result needs another signal.

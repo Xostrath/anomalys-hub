@@ -3363,7 +3363,7 @@ controller.RegisterCleanup(function()stopFinder("Unloaded.")end)
 
 end)()
 ;(function()
--- Sparkling Power Tracker v1.1: Dashboard live-session measurements, not a PL grant mechanism.
+-- Sparkling Power Tracker v1.2: profile PL meter for Dashboard SESSION STATS (its own LIVE SESSION card removed, SP-096); not a PL grant mechanism.
 local controller=((getgenv and getgenv()) or shared).__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
 local player=game:GetService("Players").LocalPlayer
@@ -3456,54 +3456,17 @@ if updated and updated:IsA("RemoteEvent")then
   if finite(power)then meter.Revision+=1;accept(power,"DataUpdated")end
  end)
 end
-local card=ui.Card(ui.Pages.Home,"LIVE SESSION",
- "Your power and gains this session. Restarts on a new character or Reset session; rates include idle time.",374)
-card.LayoutOrder=-1
-local grid=ui.Create("Frame",{Position=UDim2.fromOffset(14,68),Size=UDim2.new(1,-28,0,208),BackgroundTransparency=1},card)
-ui.Create("UIGridLayout",{CellPadding=UDim2.fromOffset(8,8),CellSize=UDim2.new(.5,-4,0,64),
- FillDirectionMaxCells=2,SortOrder=Enum.SortOrder.LayoutOrder},grid)
-local labels={}
-for i,definition in ipairs({{"ProfilePL","PROFILE PL"},{"LivePL","LIVE BATTLE POWER"},
- {"NetPL","NET PROFILE GAIN"},{"Rate","PROFILE PL / MIN"},{"Time","SESSION TIME"},{"Age","PROFILE UPDATED"}})do
- local tile=ui.Create("Frame",{LayoutOrder=i,BackgroundColor3=ui.Colors.Surface,BorderSizePixel=0},grid)
- ui.Create("UICorner",{CornerRadius=UDim.new(0,7)},tile)
- ui.Create("TextLabel",{Position=UDim2.fromOffset(12,7),Size=UDim2.new(1,-24,0,16),BackgroundTransparency=1,
-  Font=Enum.Font.Gotham,TextSize=9,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text=definition[2]},tile)
- labels[i]=ui.Create("TextLabel",{Name=definition[1].."Value",Position=UDim2.fromOffset(12,27),Size=UDim2.new(1,-24,0,26),BackgroundTransparency=1,
-  Font=Enum.Font.GothamSemibold,TextSize=13,TextColor3=ui.Colors.Text,TextXAlignment=Enum.TextXAlignment.Left,
-  TextTruncate=Enum.TextTruncate.AtEnd,Text="Waiting..."},tile)
-end
-local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,332),Size=UDim2.new(1,-28,0,30),BackgroundTransparency=1,
- Font=Enum.Font.Gotham,TextSize=10,TextColor3=ui.Colors.Muted,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left,Text="Reading profile..."},card)
-local refresh=ui.Button(card,"Refresh profile",14,290,135,function()task.spawn(function()meter.Refresh(false)end)end,ui.Colors.AccentSoft)
-local reset=ui.Button(card,"Reset session",160,290,135,function()task.spawn(meter.Reset)end,ui.Colors.AccentSoft)
-refresh.Size=UDim2.new(.5,-18,0,34);reset.Size=refresh.Size;reset.Position=UDim2.new(.5,4,0,290)
-local function format(value,signed)
- if not finite(value)then return "Unavailable"end
- local rounded=math.floor(math.abs(value)+.5)
- local digits=tostring(rounded):reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,","")
- return (rounded>0 and (value<0 and "-" or signed and "+" or "") or "")..digits
-end
-local function render()
- local data=meter.Get()
- labels[1].Text=format(data.ProfilePL);labels[2].Text=format(data.LivePL)
- labels[3].Text=format(data.Net,true)
- labels[4].Text=data.Net~=nil and data.PerMinute==nil and "Measuring..." or format(data.PerMinute,true)
- local time=data.Elapsed and string.format("%02d:%02d",math.floor(data.Elapsed/60),math.floor(data.Elapsed%60)) or "--:--"
- local age=data.ProfileAge and string.format("%.0fs ago",data.ProfileAge) or "not received"
- labels[5].Text=time;labels[6].Text=age
- status.Text=data.Status
-end
+-- The LIVE SESSION card was removed at the user's request (SP-096); Dashboard SESSION STATS (SparklingSession.lua) shows profile PL
+-- from this meter. The meter itself (controller.SparklingPowerStats) is unchanged.
 controller.Connect(player.CharacterAdded,characterChanged)
 local elapsed=0
 controller.Connect(run.Heartbeat,function(dt)
  if not meter.Active then return end
  elapsed+=dt;if elapsed<.5 then return end;elapsed=0
  if player.Character~=meter.Character then characterChanged()end
- render()
 end)
 controller.RegisterCleanup(function()meter.Active=false;meter.Epoch+=1 end)
-characterChanged();render()
+characterChanged()
 
 end)()
 ;(function()
@@ -5525,6 +5488,7 @@ end)()
 -- Sparkling session stats (Dashboard), modelled on the Gohan and Beyond Nen SESSION STATS cards (SP-094). Read-only: uses the hub's PL meter
 -- (Power Tracker), the CEXP reading Visuals keeps, your inventory Zeni label and replicated character values. Sends no game requests.
 -- Carries across server hops; a new session starts after 15 minutes away, on another character, or with Reset Session.
+-- SP-096: spars (fights with players) and their knock results; PL / hour shown as a rate with its per-minute pace.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -5533,6 +5497,7 @@ if not ui or not ui.Pages.Home then return end
 local players=game:GetService("Players")
 local http=game:GetService("HttpService")
 local run=game:GetService("RunService")
+local rs=game:GetService("ReplicatedStorage")
 local player=players.LocalPlayer
 local file="AnomalyHub/universal/sparkling_session_"..tostring(player.UserId)..".json"
 local AWAY_RESET=900
@@ -5583,7 +5548,7 @@ end
 
 -- Session model (same shape as Beyond Nen's: counters only add rises seen within one source, so a hop or respawn never counts a jump).
 local function newSession(now)
- return {StartedAt=now,Counters={Zeni=0,EventWins=0,Hops=0,Deaths=0},Samples={}}
+ return {StartedAt=now,Counters={Zeni=0,EventWins=0,Hops=0,Deaths=0,Spars=0,SparWins=0,SparLosses=0},Samples={}}
 end
 local session=newSession(os.time())
 local function restore(data,now)
@@ -5633,13 +5598,13 @@ local function observe(key,value,ready)
 end
 
 -- Card (Beyond Nen layout: 2-column tiles, Reset Session, status line).
-local card=ui.Card(ui.Pages.Home,"SESSION STATS","Counts gains during this session. Carries across server hops; resets after 15 minutes away or on another character.",446)
+local card=ui.Card(ui.Pages.Home,"SESSION STATS","Counts gains during this session. Carries across server hops; resets after 15 minutes away or on another character.",518)
 card.LayoutOrder=-2
-local grid=ui.Create("Frame",{Position=UDim2.fromOffset(14,68),Size=UDim2.new(1,-28,0,280),BackgroundTransparency=1},card)
+local grid=ui.Create("Frame",{Position=UDim2.fromOffset(14,68),Size=UDim2.new(1,-28,0,352),BackgroundTransparency=1},card)
 ui.Create("UIGridLayout",{CellPadding=UDim2.fromOffset(8,8),CellSize=UDim2.new(.5,-4,0,64),FillDirectionMaxCells=2,SortOrder=Enum.SortOrder.LayoutOrder},grid)
 local labels={}
 for order,definition in ipairs({{"Time","SESSION TIME"},{"Power","POWER LEVEL / GAINED"},{"PowerRate","PL / HOUR"},{"Cexp","COMBAT EXP (VARRIK)"},
- {"Zeni","ZENI EARNED"},{"EventWins","EVENT WINS GAINED"},{"Hops","SERVER HOPS"},{"Deaths","DEATHS"}})do
+ {"Zeni","ZENI EARNED"},{"EventWins","EVENT WINS GAINED"},{"Spars","SPARS (WON / LOST)"},{"Hops","SERVER HOPS"},{"Deaths","DEATHS"}})do
  local tile=ui.Create("Frame",{LayoutOrder=order,BackgroundColor3=ui.Colors.Surface,BorderSizePixel=0},grid)
  ui.Create("UICorner",{CornerRadius=UDim.new(0,7)},tile)
  ui.Create("TextLabel",{Position=UDim2.fromOffset(12,7),Size=UDim2.new(1,-24,0,16),BackgroundTransparency=1,Font=Enum.Font.Gotham,
@@ -5647,9 +5612,9 @@ for order,definition in ipairs({{"Time","SESSION TIME"},{"Power","POWER LEVEL / 
  labels[definition[1]]=ui.Create("TextLabel",{Position=UDim2.fromOffset(12,27),Size=UDim2.new(1,-24,0,26),BackgroundTransparency=1,
   Font=Enum.Font.GothamSemibold,Text="--",TextColor3=ui.Colors.Text,TextSize=13,TextTruncate=Enum.TextTruncate.AtEnd,TextXAlignment=Enum.TextXAlignment.Left},tile)
 end
-local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,404),Size=UDim2.new(1,-28,0,30),BackgroundTransparency=1,Font=Enum.Font.Gotham,
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,476),Size=UDim2.new(1,-28,0,30),BackgroundTransparency=1,Font=Enum.Font.Gotham,
  Text="Reading your stats...",TextColor3=ui.Colors.Muted,TextSize=9,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left},card)
-ui.Button(card,"Reset Session",14,360,164,function()reset()end)
+ui.Button(card,"Reset Session",14,432,164,function()reset()end)
 
 local zeniRounded=false
 local function render()
@@ -5659,7 +5624,8 @@ local function render()
  local pl=session.CurrentPL
  local gained=pl and session.StartPL and pl-session.StartPL
  labels.Power.Text=pl and string.format("%s  (%s)",commas(pl),signed(gained or 0)) or "Reading profile..."
- labels.PowerRate.Text=gained and (elapsed>=60 and signed(gained*3600/elapsed) or "Measuring...") or "--"
+ -- A rate, not an amount: e.g. +600 PL in 3 min 15 s shows "+11,077 / h (+185 / min)" (user read the bare number as a gain, SP-096).
+ labels.PowerRate.Text=gained and (elapsed>=60 and string.format("%s / h  (%s / min)",signed(gained*3600/elapsed),signed(gained*60/elapsed)) or "Measuring...") or "--"
  local reading=cexpReading()
  if reading then
   local sinceStart=session.CexpBase and reading.At~=session.CexpBaseAt and reading.Value-session.CexpBase
@@ -5669,15 +5635,126 @@ local function render()
  labels.EventWins.Text=session.Samples.EventWins and string.format("%s  (%s/h)",
   session.Counters.EventWins%1==0 and tostring(session.Counters.EventWins) or string.format("%.1f",session.Counters.EventWins),
   elapsed>=60 and string.format("%.1f",session.Counters.EventWins*3600/elapsed) or "--") or "Not detected"
+ labels.Spars.Text=string.format("%d  (%d W · %d L)",session.Counters.Spars,session.Counters.SparWins,session.Counters.SparLosses)
  labels.Hops.Text=tostring(session.Counters.Hops)
  labels.Deaths.Text=tostring(session.Counters.Deaths)
  status.Text=not saveOk and "Tracking this run. File saving is unavailable."
   or zeniRounded and "Zeni shows in thousands (k), so Zeni earned is rounded to that."
-  or "Stats update live. PL uses your saved profile value (forms don't count); CEXP only updates when Varrik reads it."
+  or "Stats update live. PL uses your saved profile value (forms don't count); CEXP only updates when Varrik reads it. A spar = 3+ hits traded with a player; won if you knock them."
 end
+
+-- Spars (SP-096, user: "based off fights with players and if you knocked them").
+-- Requests.Effects ("EmitReferenceParticle", character, msg): "HitOut" = that character landed a hit, "Blunt" = it was hit (self Blunt was
+-- followed by damage 88% of the time, SP-073). Your HitOut paired with a player's Blunt within 30 ms (real pairs arrive together: 139 of 170 within 5 ms in PvP history 1795169031), within 20 studs, is your hit on
+-- them; your Blunt paired with their HitOut is their hit on you. Three exchanged hits (at least one yours) make a spar.
+-- Result: a "Knocked" child added to their character (the game's own scripts check FindFirstChild("Knocked")), or their death, within
+-- 10 s of your last hit = won; you knocked or killed within 10 s of their last hit = lost. A fight ends after 30 s without hits.
+-- Which-player pairing is temporal and geometric; logged to sparkling_spars_latest.txt (local only) for checking.
+local PAIR,SPAR_HITS,RESULT_WINDOW,FIGHT_IDLE=.03,3,10,30
+local sparPath="AnomalyHub/universal/sparkling_spars_latest.txt"
+local sparLines,fights,lastSelf,lastOther={},{},{},{}
+local function sparLog(text)
+ if #sparLines>=400 then table.remove(sparLines,1)end
+ table.insert(sparLines,os.date("%H:%M:%S").." "..text)
+ if type(writefile)=="function" then pcall(writefile,sparPath,"SPARKLING SPARS // pairing is temporal (30 ms) and within 20 studs; results from Knocked/death within 10 s\n"..table.concat(sparLines,"\n"))end
+end
+local function distanceTo(model)
+ local mine=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+ local theirs=model and model:FindFirstChild("HumanoidRootPart")
+ return mine and theirs and (mine.Position-theirs.Position).Magnitude or math.huge
+end
+local function countSpar(fight,why)
+ if fight.Counted then return end
+ fight.Counted=true;session.Counters.Spars+=1
+ sparLog(string.format("SPAR %s with %s (yours %d, theirs %d)",why,fight.Name,fight.Mine,fight.Theirs))
+end
+local function credit(other,mine)
+ local now=os.clock()
+ local fight=fights[other]
+ if not fight or now-fight.Last>FIGHT_IDLE then fight={Name=other.Name,Mine=0,Theirs=0,Started=now};fights[other]=fight end
+ fight.Last=now
+ if mine then fight.Mine+=1;fight.LastMine=now else fight.Theirs+=1;fight.LastTheirs=now end
+ if fight.Mine>=1 and fight.Mine+fight.Theirs>=SPAR_HITS then countSpar(fight,"started")end
+end
+local function knocked(other,how)
+ local fight=fights[other]
+ local now=os.clock()
+ if not fight or not fight.LastMine or now-fight.LastMine>RESULT_WINDOW then return end
+ countSpar(fight,"counted on knock")
+ session.Counters.SparWins+=1;fights[other]=nil
+ sparLog(string.format("WON vs %s (%s %.1f s after your last hit; yours %d, theirs %d)",fight.Name,how,now-fight.LastMine,fight.Mine,fight.Theirs))
+ save()
+end
+local function selfKnocked(how)
+ local now,best,bestOther=os.clock()
+ for other,fight in pairs(fights)do
+  if fight.LastTheirs and now-fight.LastTheirs<=RESULT_WINDOW and (not best or fight.LastTheirs>best.LastTheirs)then best,bestOther=fight,other end
+ end
+ if not best then return end
+ countSpar(best,"counted on knock")
+ session.Counters.SparLosses+=1;fights[bestOther]=nil
+ sparLog(string.format("LOST vs %s (you %s %.1f s after their last hit; yours %d, theirs %d)",best.Name,how,now-best.LastTheirs,best.Mine,best.Theirs))
+ save()
+end
+local effects=rs:FindFirstChild("Requests") and rs.Requests:FindFirstChild("Effects")
+if effects and effects:IsA("RemoteEvent")then
+ controller.Connect(effects.OnClientEvent,function(kind,model,message)
+  if kind~="EmitReferenceParticle" or (message~="HitOut" and message~="Blunt") or typeof(model)~="Instance" then return end
+  local now=os.clock()
+  local partner=message=="HitOut" and "Blunt" or "HitOut"
+  if model==player.Character then
+   lastSelf[message]=now
+   local best,bestDistance
+   for other,seen in pairs(lastOther)do
+    local at=seen[partner]
+    local distance=other.Character==seen.Model and distanceTo(seen.Model) or math.huge
+    if at and now-at<=PAIR and distance<=20 and (not bestDistance or distance<bestDistance)then best,bestDistance=other,distance end
+   end
+   if best then lastOther[best][partner]=nil;credit(best,message=="HitOut")end
+  else
+   local other=players:GetPlayerFromCharacter(model)
+   if not other or other==player then return end
+   local seen=lastOther[other]
+   if not seen or seen.Model~=model then seen={Model=model};lastOther[other]=seen end
+   seen[message]=now
+   local at=lastSelf[partner]
+   if at and now-at<=PAIR and distanceTo(model)<=20 then lastSelf[partner]=nil;seen[message]=nil;credit(other,message=="Blunt")end
+  end
+ end)
+end
+-- Knock / death watches on every player's character, including yours.
+local watches={}
+local function watchCharacter(other,character)
+ if watches[other] then for _,connection in ipairs(watches[other])do connection:Disconnect()end end
+ watches[other]={}
+ if not character then return end
+ local function onKnock(how)if other==player then selfKnocked(how)else knocked(other,how)end end
+ table.insert(watches[other],character.ChildAdded:Connect(function(child)if child.Name=="Knocked" then onKnock("knocked")end end))
+ task.spawn(function()
+  local humanoid=character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid",10)
+  if humanoid and humanoid:IsA("Humanoid") and character.Parent and watches[other] then
+   table.insert(watches[other],humanoid.Died:Connect(function()if not character:FindFirstChild("Knocked") then onKnock("died")end end))
+  end
+ end)
+end
+local function watchPlayer(other)
+ watchCharacter(other,other.Character)
+ controller.Connect(other.CharacterAdded,function(character)watchCharacter(other,character)end)
+end
+for _,other in ipairs(players:GetPlayers())do watchPlayer(other)end
+controller.Connect(players.PlayerAdded,watchPlayer)
+controller.Connect(players.PlayerRemoving,function(other)
+ watchCharacter(other,nil);watches[other]=nil;fights[other]=nil;lastOther[other]=nil
+end)
 
 local sourceSeen={}
 local function sample()
+ for other,fight in pairs(fights)do
+  if os.clock()-fight.Last>FIGHT_IDLE then
+   fights[other]=nil
+   if fight.Counted then sparLog(string.format("ENDED vs %s, no knock (yours %d, theirs %d)",fight.Name,fight.Mine,fight.Theirs))end
+  end
+ end
  -- Another character on this account starts a new session.
  local name=characterName()
  if name then
@@ -5724,6 +5801,8 @@ end)
 controller.RegisterCleanup(function()
  save()
  if deathConnection then deathConnection:Disconnect();deathConnection=nil end
+ for _,list in pairs(watches)do for _,connection in ipairs(list)do connection:Disconnect()end end
+ table.clear(watches)
 end)
 task.spawn(hookCharacter,player.Character)
 sample();save();render()

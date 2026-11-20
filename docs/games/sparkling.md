@@ -1496,3 +1496,29 @@ Matching uses the first same-actor HitOut within 600 ms and before the next mapp
 **Source:** the character attribute `EventWins` replicates for every player (Profile Scan 2026-11-17: values 1.5, 0 and 4 on three characters). The profile table also holds `EventWins` (own only), used as the fallback. No in-game display is documented in the Trello or Game Research notes.
 
 **Implemented / untested live — Visuals:** an "Event Wins" row for any selected player (attribute first, then your profile).
+
+## SP-059 — PlunderTrainer combo mapped; manual F mashing (2026-11-19, Claude)
+
+**User:** "auto parry for you to do" (new recording, history 1795148185, laptop-job place 102793290484692, ~103 s, ended in death). Hold Punches was **off** (`holdClicks=false`), so SP-057 is still untested.
+
+**Evidence (Verified from capture):**
+- One NPC, `PlunderTrainer`, did nearly all the damage (HP 167 → 1, mostly 3.61 per hit). Only 8 cues were queued; 448 swings were skipped as `unmapped_animation`.
+- **Its combo is a separate animation set** (only in this capture, only on that NPC; all seen at phase 0, speed 1.25). Order from same-actor sequences, with the attacker's HitOut after the swing is seen:
+
+| Hit | Animation | Median impact (min–max) | Starts / impacts |
+|---|---|---|---|
+| 1 | 115562914490424 | 218 ms (216–233) | 22 / 18 |
+| 2 | 139627968387116 | 167 ms (166–185) | 18 / 17 |
+| 3 | 92411449150342 | 118 ms (100–135) | 14 / 14 |
+| 4 | 124959370864638 | 267 ms (251–269) | 10 / 10 |
+| 5 | 80989963053908 | 184 ms (168–200) | 10 / 9 |
+
+  Hit 4 is sometimes replaced by the rogue heavy `126361551838373`. The trainer also uses the shared heavy `102483335944327` (after wind-up `88670347816269`).
+- **Counter window:** the user's own two counters on hit 3 came from F pressed ~148 ms before impact (14–31 ms *before* hit 3 was visible), matching the ~150+ ms lead used for the other combos.
+- **Manual F mashing:** the user pressed F by hand about every 200 ms throughout the fight. Most presses ended in Blunt or a block. A failed press starts the 5 s counter cooldown, which also blocks Auto Parry (two heavy cues were skipped for `counter_cooldown`).
+- **Rogue heavy at 0.30 s:** 0/3 here (hit landed 98–115 ms after the press, about 400–417 ms after the swing, the same timing that went 5/5 on rogues in SP-050). Press 2 had the user's own M1 2 ms after F and their own PBlock already set. n=3, not retuned.
+- Unmapped and left alone: `123910713670259` (4/4 hit, 464–684 ms) and `88418489809399` (300–1151 ms) are too spread for a fixed delay.
+
+**Implemented / untested live — Combat page v17.3:** trainer hits 1 / 2 / 4 / 5 are pressed after 40 / 0 / 80 / 0 ms (~178 / 167 / 187 / 184 ms of lead); hit 3 is skipped as too fast (`npc_late_hit`). NPCs only: players using these animations stay unmapped (`trainerStyle=player`). Cues log `style=plunder_trainer`. These are trial seeds from one recording.
+
+**Next step:** a trainer fight with Auto Parry on, no manual F, and Hold Punches on (after a rejoin). Compare the counter rate per hit.

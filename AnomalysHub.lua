@@ -4708,6 +4708,7 @@ end)()
 -- v16.7 (SP-051): rogue heavy ignores the facing checks (5/5 pressed were Perfect Counters; 6 skipped for facing hit us).
 -- v17.1 (SP-056): non-colliding combat effects under Workspace.Thrown no longer count as line-of-sight obstacles.
 -- v17.2 (SP-057): optional "Hold Punches Before Parry": your M1 is held from an NPC cue until just after its press.
+-- v17.3 (SP-059): PlunderTrainer combo mapped for NPCs (hits 1, 2, 4, 5 pressed; 3 too fast).
 -- Timing seeds remain experimental; live evidence and limitations are recorded in the game notes.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
@@ -4756,6 +4757,15 @@ lateHits['78875817992139']=1;lateHits['92958519453859']=4
 -- so it is pressed at a fixed 0.30 s. NPCs only.
 local rogueHeavy='126361551838373'
 attacks[rogueHeavy]=.30;rogueHits[rogueHeavy]="heavy"
+-- PlunderTrainer combo (SP-059, history 1795148185, laptop-job place, 1 trainer, all seen at phase 0, speed 1.25). Order from
+-- same-actor sequences: hit1 115562914490424 -> hit2 139627968387116 -> hit3 92411449150342 -> hit4 124959370864638 ->
+-- hit5 80989963053908 (hit 4 is sometimes the rogue heavy instead). Attacker HitOut a median 218 / 167 / 118 / 267 / 184 ms after
+-- the swing is seen. The user's own counters on it came ~148 ms before impact, matching the ~150+ ms lead used above, so hit 3 is
+-- skipped; hit 1 presses after 40 ms, hit 4 after 80 ms, hits 2 and 5 at once. NPCs only; trial seeds from one recording.
+local trainerHits={['115562914490424']=1,['139627968387116']=2,['92411449150342']=3,['124959370864638']=4,['80989963053908']=5}
+attacks['115562914490424']=.04;attacks['139627968387116']=0;attacks['92411449150342']=0
+attacks['124959370864638']=.08;attacks['80989963053908']=0
+lateHits['92411449150342']=3
 -- SP-052: additional player combo, observed repeatedly in order with same-actor HitOut.
 -- Style name unknown. Initial seeds are a trial, not server parry-window measurements.
 -- This is a different animation set; the standard combo's skipped IDs stay skipped.
@@ -4919,7 +4929,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=per_style_catalog timingTrial=player_set_b_initial range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@npcCue->press+30ms"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 npcHeavyTrial=102483335944327@260/320/380ms npcRogue=hit2,hit3@0,hit5@80ms,heavy@300ms;skip1,4 npcTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 playerSetB=all5@40/0/0/40/20ms rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@npcCue->press+30ms"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -5175,6 +5185,8 @@ local function observe(model,track)
  if playerMove then detail=detail.." style=player_set_b hit="..playerMove.Hit.." timing=initial_trial" end
  if rogueHits[id] and targetKind(model)~="NPC" then skip("unmapped_animation",detail.." rogueStyle=player");return end
  if rogueHits[id] then detail=detail.." style=rogue hit="..rogueHits[id] end
+ if trainerHits[id] and targetKind(model)~="NPC" then skip("unmapped_animation",detail.." trainerStyle=player");return end
+ if trainerHits[id] then detail=detail.." style=plunder_trainer hit="..trainerHits[id] end
  if lateHits[id] then skip(targetKind(model)=="NPC" and "npc_late_hit" or "player_late_hit","stage=observe hit="..lateHits[id].." "..detail);return end
  if id==immediateHit5 then delay=math.max(0,settings.TimingOffsetMs/1000);detail=detail.." trial="..(targetKind(model)=="NPC" and "npc_hit5_seed0" or "player_hit5_seed0") end
  if id==npcHeavy then

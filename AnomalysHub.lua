@@ -5809,6 +5809,139 @@ sample();save();render()
 
 end)()
 ;(function()
+-- Sparkling damage numbers (SP-097, user request): floating numbers over whoever you hit (players and NPCs), shown only on your screen.
+-- Evidence (Power Trace 1795203129 part 2): your HitOut, the target's "Blunt" and its Humanoid health drop arrive together (within ~2 ms),
+-- e.g. HitOut 53.32866, Blunt 53.32974, health -1.21 at 53.33015. So a target's health drop counts as your damage only when your HitOut
+-- and its Blunt both fall within 60 ms of it. Skill hits without a HitOut are not attributed. Optional: damage you take, in red.
+-- Read-only: listens to Requests.Effects and replicated health; sends no game requests.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local ui=controller.UI
+local page=ui and (ui.Pages.ESP or ui.Pages.Visuals)
+if not page then return end
+local players=game:GetService("Players")
+local rs=game:GetService("ReplicatedStorage")
+local run=game:GetService("RunService")
+local tweens=game:GetService("TweenService")
+local http=game:GetService("HttpService")
+local player=players.LocalPlayer
+
+local WINDOW,MAX_SHOWN=.06,40
+local settingsPath="AnomalyHub/universal/sparkling_damage_numbers.json"
+local settings={Enabled=true,Taken=false}
+if type(readfile)=="function" then
+ local ok,saved=pcall(function()return http:JSONDecode(readfile(settingsPath))end)
+ if ok and type(saved)=="table" then for key,value in pairs(saved)do if type(value)==type(settings[key])then settings[key]=value end end end
+end
+local function saveSettings()
+ if type(writefile)~="function" then return end
+ if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ pcall(writefile,settingsPath,http:JSONEncode(settings))
+end
+
+-- Numbers live beside the hub window (same isolated root), so hiding the hub doesn't hide them.
+local root=ui.Gui and ui.Gui.Parent or ui.Gui
+local holder=Instance.new("Folder");holder.Name="AnomalyDamageNumbers";holder.Parent=root
+local shown=0
+local function format(amount)return amount<10 and string.format("%.1f",amount) or tostring(math.floor(amount+.5))end
+local function pop(model,amount,maxHealth,taken)
+ if shown>=MAX_SHOWN then return end
+ local anchor=model:FindFirstChild("Head") or model:FindFirstChild("HumanoidRootPart")
+ if not anchor or not anchor:IsA("BasePart") then return end
+ shown+=1
+ -- Big hits (10%+ of max health) are larger and gold; damage you take is red.
+ local big=type(maxHealth)=="number" and maxHealth>0 and amount>=maxHealth*.1
+ local color=taken and Color3.fromRGB(255,90,90) or big and Color3.fromRGB(255,206,84) or Color3.fromRGB(255,255,255)
+ local start=Vector3.new((math.random()-.5)*2.4,1.6+math.random()*.6,0)
+ local gui=Instance.new("BillboardGui")
+ gui.Name="Damage";gui.Adornee=anchor;gui.AlwaysOnTop=true;gui.LightInfluence=0;gui.MaxDistance=250
+ gui.Size=UDim2.fromOffset(120,40);gui.StudsOffsetWorldSpace=start;gui.ResetOnSpawn=false
+ local label=Instance.new("TextLabel")
+ label.Size=UDim2.fromScale(1,1);label.BackgroundTransparency=1;label.Font=Enum.Font.GothamBlack
+ label.Text=(taken and "-" or "")..format(amount);label.TextColor3=color;label.TextSize=big and 26 or 20
+ label.TextStrokeColor3=Color3.new(0,0,0);label.TextStrokeTransparency=.25
+ label.Parent=gui;gui.Parent=holder
+ local info=TweenInfo.new(.9,Enum.EasingStyle.Quad,Enum.EasingDirection.Out)
+ tweens:Create(gui,info,{StudsOffsetWorldSpace=start+Vector3.new(0,2.2,0)}):Play()
+ task.delay(.35,function()
+  if gui.Parent then tweens:Create(label,TweenInfo.new(.55),{TextTransparency=1,TextStrokeTransparency=1}):Play()end
+ end)
+ task.delay(.95,function()gui:Destroy();shown-=1 end)
+end
+
+-- Your HitOut times and each model's latest Blunt (Requests.Effects, as in the spar counter and CEXP tracker).
+local lastHitOut,blunts,pending=-math.huge,{},{}
+local effects=rs:FindFirstChild("Requests") and rs.Requests:FindFirstChild("Effects")
+if effects and effects:IsA("RemoteEvent")then
+ controller.Connect(effects.OnClientEvent,function(kind,model,message)
+  if kind~="EmitReferenceParticle" or typeof(model)~="Instance" then return end
+  if model==player.Character and message=="HitOut" then lastHitOut=os.clock()
+  elseif message=="Blunt" and model~=player.Character then blunts[model]=os.clock() end
+ end)
+end
+-- Health drops wait one short window so the effect events (which can arrive just after) are seen before deciding.
+local watched={}
+local function watch(model)
+ if watched[model] or model==nil then return end
+ local humanoid=model:FindFirstChildOfClass("Humanoid") or model:WaitForChild("Humanoid",5)
+ if not humanoid or not humanoid:IsA("Humanoid") or watched[model] or not model.Parent then return end
+ local last=humanoid.Health
+ watched[model]=humanoid.HealthChanged:Connect(function(health)
+  local drop=last-health;last=health
+  if drop>0.01 and drop==drop and drop<math.huge then
+   table.insert(pending,{Model=model,Amount=drop,Max=humanoid.MaxHealth,At=os.clock()})
+  end
+ end)
+end
+local function unwatch(model)
+ if watched[model] then watched[model]:Disconnect();watched[model]=nil end
+ blunts[model]=nil
+end
+local live=workspace:FindFirstChild("Live") or workspace:WaitForChild("Live",10)
+if live then
+ for _,model in ipairs(live:GetChildren())do task.spawn(watch,model)end
+ controller.Connect(live.ChildAdded,function(model)task.spawn(watch,model)end)
+ controller.Connect(live.ChildRemoved,unwatch)
+end
+controller.Connect(run.Heartbeat,function()
+ local now=os.clock()
+ for index=#pending,1,-1 do
+  local drop=pending[index]
+  if now-drop.At>=WINDOW then
+   table.remove(pending,index)
+   local model=drop.Model
+   if model.Parent then
+    if model==player.Character then
+     if settings.Taken then pop(model,drop.Amount,drop.Max,true)end
+    elseif settings.Enabled then
+     local blunt=blunts[model]
+     if math.abs(drop.At-lastHitOut)<=WINDOW and blunt and math.abs(drop.At-blunt)<=WINDOW then pop(model,drop.Amount,drop.Max,false)end
+    end
+   end
+  end
+ end
+end)
+
+-- ESP page controls.
+local section=ui.Section(page,"Damage Numbers",72,true)
+local function row(y,key,label)
+ local box
+ box=ui.Checkbox(section.Body,label,label..(settings[key] and ": ON" or ": OFF"),function()
+  settings[key]=not settings[key];saveSettings()
+  box.Text=label..(settings[key] and ": ON" or ": OFF")
+ end)
+ box.Position=UDim2.fromOffset(14,y)
+end
+row(0,"Enabled","Damage Numbers (your hits)")
+row(30,"Taken","Damage You Take")
+controller.RegisterCleanup(function()
+ for model in pairs(watched)do unwatch(model)end
+ holder:Destroy()
+end)
+
+end)()
+;(function()
 -- Combat page v18.5 / diagnostics v7: ping compensation (SP-073). v18.4 added recorded player_set_d (SP-068); v18.3 rogue-heavy trial retained.
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.

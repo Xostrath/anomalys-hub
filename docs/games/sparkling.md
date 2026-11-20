@@ -2465,3 +2465,28 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Next step:**
 - Spar a player and knock them, then check the tile and the spar log (start, WON).
 - If no WON appears after a knock, `Knocked` doesn't replicate and the result needs another signal.
+
+## SP-097 — Floating damage numbers (2026-11-20, Claude)
+
+**User:** "add damage numbers", then chose floating numbers on hits.
+
+**Evidence (Verified from captures):**
+- **Same packet:** in Power Trace 1795203129 part 2, your `HitOut`, the target's `Blunt` and its replicated Humanoid health drop arrive within ~2 ms of each other. For example: HitOut 53.32866, Blunt 53.32974, health −1.21 at 53.33015.
+- **Offline check:** across the saved Power Trace JSONL files, crediting a drop only when your HitOut and the target's Blunt are both within 60 ms of it matched 36 of 39 actor health drops. The other 3 had no HitOut of yours nearby.
+- **Scale:** max health there was ~53, so hits are a few HP, and numbers under 10 show one decimal.
+
+**Implemented / untested live — `src/SparklingDamageNumbers.lua` (ESP page, "Damage Numbers" section):**
+- **Toggles:** "Damage Numbers (your hits)" (default on) and "Damage You Take" (default off, shown in red).
+  - Saved in `sparkling_damage_numbers.json`.
+- **What's watched:** every Humanoid under `Workspace.Live`, players and NPCs.
+- **Attribution:** health drops wait 60 ms, then count only when they match your HitOut and the target's Blunt within that window. Skill hits without a HitOut aren't shown.
+- **Display:**
+  - A BillboardGui over the head rises 2.2 studs and fades over ~0.9 s.
+  - Hits of 10%+ of max health are larger and gold.
+  - At most 40 are shown at once.
+  - The numbers are parented beside the hub window, so hiding the hub keeps them.
+- **Visibility:** only you see them. No game requests.
+
+**Checks:** source and both variants compile. No live run.
+
+**Next step:** hit an NPC and a player and check the numbers match their health bar. Then report whether skill hits should also show.

@@ -2490,3 +2490,23 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Checks:** source and both variants compile. No live run.
 
 **Next step:** hit an NPC and a player and check the numbers match their health bar. Then report whether skill hits should also show.
+
+## SP-098 — Damage numbers: none on the Inner World Shadow; ScreenGui container (2026-11-20, Claude)
+
+**User:** "damage numbers dont pop up".
+
+**Evidence (Verified from captures):**
+- `sparkling_damage_numbers.json` was written at 13:18:24 (Enabled=true), so the module loaded and its toggle worked.
+- Auto Parry history 1795205896 (13:18–13:19) had only two actors: you and your Inner World Shadow.
+  - 53 self HitOut, 48 Shadow Blunt, each pair ~1 ms apart. So the hit pairing matched.
+- The Auto Shadow log reads the Shadow's `health=1000000000/1000000000`.
+  - Numbers come from the target's health dropping, and the Shadow's never drops.
+  - So no number can appear on it. This is expected, not attribution failing.
+- Real NPC/player health drops were matched offline in SP-097 (36 of 39).
+
+**Changed / untested live:**
+- The numbers are now under their own ScreenGui (`AnomalyDamageNumbers`, beside the hub window), the same structure as the ESP BillboardGuis. Before, they sat under a bare Folder.
+- Showing on non-Shadow targets is still unconfirmed live, so the rendering path is the remaining unknown.
+- Both variants compile.
+
+**Next step:** hit an NPC (e.g. a Warrior Clan Rogue) or a player with Damage Numbers on. If nothing pops there, the rendering or the health replication needs a capture.

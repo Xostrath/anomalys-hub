@@ -5840,9 +5840,12 @@ local function saveSettings()
  pcall(writefile,settingsPath,http:JSONEncode(settings))
 end
 
--- Numbers live beside the hub window (same isolated root), so hiding the hub doesn't hide them.
+-- Numbers live in their own ScreenGui beside the hub window (same isolated root), so hiding the hub doesn't hide them. The ESP's
+-- BillboardGuis render from inside a ScreenGui, so this uses the same structure rather than a bare Folder (SP-098).
+-- Your own Inner World Shadow has 1,000,000,000 health that never drops (Auto Shadow log), so it never shows numbers.
 local root=ui.Gui and ui.Gui.Parent or ui.Gui
-local holder=Instance.new("Folder");holder.Name="AnomalyDamageNumbers";holder.Parent=root
+local holder=Instance.new("ScreenGui");holder.Name="AnomalyDamageNumbers";holder.ResetOnSpawn=false;holder.IgnoreGuiInset=true
+holder.ZIndexBehavior=Enum.ZIndexBehavior.Sibling;holder.Parent=root
 local shown=0
 local function format(amount)return amount<10 and string.format("%.1f",amount) or tostring(math.floor(amount+.5))end
 local function pop(model,amount,maxHealth,taken)
@@ -5856,7 +5859,7 @@ local function pop(model,amount,maxHealth,taken)
  local start=Vector3.new((math.random()-.5)*2.4,1.6+math.random()*.6,0)
  local gui=Instance.new("BillboardGui")
  gui.Name="Damage";gui.Adornee=anchor;gui.AlwaysOnTop=true;gui.LightInfluence=0;gui.MaxDistance=250
- gui.Size=UDim2.fromOffset(120,40);gui.StudsOffsetWorldSpace=start;gui.ResetOnSpawn=false
+ gui.Size=UDim2.fromOffset(120,40);gui.StudsOffsetWorldSpace=start
  local label=Instance.new("TextLabel")
  label.Size=UDim2.fromScale(1,1);label.BackgroundTransparency=1;label.Font=Enum.Font.GothamBlack
  label.Text=(taken and "-" or "")..format(amount);label.TextColor3=color;label.TextSize=big and 26 or 20

@@ -2673,6 +2673,10 @@ local FORM_NAMES={
  Android21={default={"Majin Form"}},
  Janemba={default={"Darkness"}},
 }
+-- Side-form tools -> display names. Names from the guide's "Side Forms - <name>" topics; "False SSJ" is the tool name (Forms Scan).
+local SIDE_FORMS={["False SSJ"]="False Super Saiyan",["False Super Saiyan"]="False Super Saiyan",["Potential Unleashed"]="Potential Unleashed",
+ Kaioken="Kaioken",Enraged="Enraged",["Selflessness State"]="Selflessness State",["Flow State"]="Flow State",["Pure Progress"]="Pure Progress",
+ ["Adrenaline Rush"]="Adrenaline Rush",["Majin Mark"]="Majin Mark"}
 -- Shared with Auto Meditation (stops at the 400 Ki cap).
 controller.SparklingProfile=function()return profile,profileAt end
 controller.SparklingRefreshProfile=refreshProfile
@@ -2845,11 +2849,25 @@ local FIELDS={
   local races=FORM_NAMES[race]
   local names=races and (races[trait] or races.default) or {"Form 1","Form 2","Form 3","Form 4","Form 5"}
   local parts={}
+  -- Owned main forms (SP-106): the profile has no unlock list, and a Saiyan still on FSSJ had all five at exactly 1 with
+  -- Character@Form=0 (Forms Scan 1795240246). So a slot counts once its mastery is above 1 or @Form has reached it.
+  local current=tonumber(attr(target,"Form")) or 0
   for index,name in ipairs(names)do
    if index>5 then break end
    local amount=tonumber(own("FormMastery"..index))
    amount=finite(amount) and math.clamp(amount,0,100) or 0
-   table.insert(parts,name.." "..number(amount).."%")
+   if amount>1 or current>=index then table.insert(parts,name.." "..number(amount).."%")end
+  end
+  if #parts==0 then table.insert(parts,"No main form yet")end
+  -- Side forms are tools (Forms Scan: Backpack "False SSJ", "Potential Unleashed"); their mastery storage isn't found yet.
+  local owned={}
+  for _,holder in ipairs({localPlayer:FindFirstChildOfClass("Backpack"),localPlayer.Character})do
+   if holder then
+    for _,tool in ipairs(holder:GetChildren())do
+     local side=tool:IsA("Tool") and SIDE_FORMS[tool.Name]
+     if side and not owned[side] then owned[side]=true;table.insert(parts,side.." (side form, mastery not found yet)")end
+    end
+   end
   end
   local list=decode(own("SkillMastery"))
   if type(list)=="table" then
@@ -3394,7 +3412,7 @@ controller.RegisterCleanup(function()stopFinder("Unloaded.")end)
 -- Forms Scan (SP-105): which forms you own and where False Super Saiyan's mastery lives aren't in any capture. The profile has
 -- FormMastery1-5 but no unlocked-forms key; the guide says a Talent Card Reset removes FSSJ, so TalentCards, tools, SlotData and the
 -- game's own Forms Mastery panel are all dumped. One snapshot, local file only, sends nothing.
-local formsCard=ui.Card(ui.Pages.Recorders,"SPARKLING FORMS SCAN","Open the game's Forms Mastery panel (FORMS button) first, then press Scan. Saves your full profile data, tools, attributes and that panel's text, to find your unlocked forms and False Super Saiyan's mastery. Local file only.",170)
+local formsCard=ui.Card(ui.Pages.Recorders,"SPARKLING FORMS SCAN","Scan: one snapshot of your profile data, tools and attributes. Watch: press it, turn on False SSJ and fight in it; it logs what changes for 3 minutes, to find where its mastery is kept. Local files only.",170)
 formsCard.LayoutOrder=32
 local formsStatus=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,40),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
  TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Ready. Output: sparkling_forms_scan_latest.txt"},formsCard)
@@ -3485,7 +3503,88 @@ local function formsScan()
   formsBusy=false
  end)
 end
-ui.Button(formsCard,"Scan Forms",14,72,180,formsScan,colors.AccentSoft).Size=UDim2.new(1,-28,0,34)
+ui.Button(formsCard,"Scan Forms",14,72,180,formsScan,colors.AccentSoft).Size=UDim2.new(.5,-18,0,34)
+-- Watch (SP-106): the first scan found no FSSJ mastery field (profile SkillMastery lists 3 skills, not False SSJ; FormMastery1-5 all 1),
+-- so this records what changes while you use it: profile values every 10 s, character attributes, and the character's SideForm folder.
+local watching={Active=false,Connections={}}
+local NOISY={CameraLooker=true,LastPress=true,LastTick=true,Airborne=true,Combo=true,Running=true,Sprinting=true,AggroTime=true}
+local function stopWatch(reason)
+ if not watching.Active then return end
+ watching.Active=false
+ for _,connection in ipairs(watching.Connections)do connection:Disconnect()end
+ table.clear(watching.Connections)
+ table.insert(watching.Lines,"STOP "..reason)
+ if type(writefile)=="function"then pcall(writefile,"AnomalyHub/universal/sparkling_forms_watch_latest.txt",table.concat(watching.Lines,"\n"))end
+ watching.Button.Text="Watch False SSJ (3 min)"
+ formsStatus.Text="Watch saved ("..#watching.Lines.." lines, sparkling_forms_watch_latest.txt). "..reason
+end
+local function startWatch()
+ if watching.Active then stopWatch("Stopped.");return end
+ local character=localPlayer.Character
+ if not character then formsStatus.Text="Wait for your character.";return end
+ watching.Active=true;watching.Started=os.clock()
+ watching.Lines={"SPARKLING FORMS WATCH v1 // READ ONLY","place="..game.PlaceId.." unix="..os.time()}
+ watching.Button.Text="Stop Watch"
+ formsStatus.Text="Watching: turn on False SSJ now and fight or train in it. Stops after 3 minutes."
+ local function log(text)if #watching.Lines<4000 then table.insert(watching.Lines,string.format("%.1f %s",os.clock()-watching.Started,text))end end
+ table.insert(watching.Connections,character.AttributeChanged:Connect(function(key)
+  if not NOISY[key] and not key:find("Cooldown",1,true) then log("CHAR @"..key.."="..tostring(character:GetAttribute(key)):sub(1,160))end
+ end))
+ local side=character:FindFirstChild("SideForm")
+ local function describeSide(object)
+  local parts={}
+  for key,value in pairs(object:GetAttributes())do table.insert(parts,"@"..key.."="..tostring(value):sub(1,80))end
+  return object:GetFullName().." ["..object.ClassName.."]"..(object:IsA("ValueBase") and ("="..tostring(object.Value):sub(1,80)) or "").." "..table.concat(parts," ")
+ end
+ if side then
+  for _,object in ipairs(side:GetDescendants())do log("SIDEFORM existing "..describeSide(object))end
+  table.insert(watching.Connections,side.DescendantAdded:Connect(function(object)
+   log("SIDEFORM added "..describeSide(object))
+   if object:IsA("ValueBase") then table.insert(watching.Connections,object.Changed:Connect(function()log("SIDEFORM value "..describeSide(object))end))end
+   table.insert(watching.Connections,object.AttributeChanged:Connect(function()log("SIDEFORM attr "..describeSide(object))end))
+  end))
+  table.insert(watching.Connections,side.DescendantRemoving:Connect(function(object)log("SIDEFORM removed "..object:GetFullName())end))
+ else log("SIDEFORM folder missing")end
+ -- Character values (NumberValue etc.) that change, outside body parts.
+ for _,object in ipairs(character:GetChildren())do
+  if object:IsA("ValueBase") then
+   local last=object.Value
+   table.insert(watching.Connections,object.Changed:Connect(function()
+    local now=object.Value
+    if type(now)=="number" and type(last)=="number" and math.abs(now-last)<1e-6 then return end
+    if object.Name~="PowerLevel" and object.Name~="Ki" then log("VALUE "..object.Name.."="..tostring(now):sub(1,120))end
+    last=now
+   end))
+  end
+ end
+ task.spawn(function()
+  local started=watching.Started
+  refreshProfile()
+  repeat task.wait(.2) until not profileScanning
+  local before={}
+  if profile then for key,item in pairs(profile)do before[key]=item end end
+  log("PROFILE baseline keys="..(profile and "ok" or "none"))
+  while watching.Active and watching.Started==started do
+   task.wait(10)
+   if not (watching.Active and watching.Started==started) then break end
+   refreshProfile()
+   repeat task.wait(.2) until not profileScanning
+   if profile then
+    for key,item in pairs(profile)do
+     if before[key]~=item and key~="PowerLevel" and key~="Ki" and key~="Hunger" and key~="Fatigue" then
+      log("PROFILE "..key.." "..tostring(before[key]):sub(1,300).." -> "..tostring(item):sub(1,300))
+      before[key]=item
+     end
+    end
+   end
+   if type(writefile)=="function"then pcall(writefile,"AnomalyHub/universal/sparkling_forms_watch_latest.txt",table.concat(watching.Lines,"\n"))end
+   if os.clock()-started>=180 then stopWatch("Auto-stopped after 3 minutes.")end
+  end
+ end)
+end
+watching.Button=ui.Button(formsCard,"Watch False SSJ (3 min)",14,72,180,startWatch,colors.AccentSoft)
+watching.Button.Position=UDim2.new(.5,4,0,72);watching.Button.Size=UDim2.new(.5,-18,0,34)
+controller.RegisterCleanup(function()stopWatch("Unloaded.")end)
 
 end)()
 ;(function()

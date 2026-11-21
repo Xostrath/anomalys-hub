@@ -2721,3 +2721,32 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Next step:** open the game's Forms Mastery panel, press Scan Forms, then:
 - filter the Visuals row to the forms you own;
 - add FSSJ mastery from wherever it's stored.
+
+## SP-106 — Forms Scan result: FSSJ is a side-form tool; Form Mastery shows owned forms only (2026-11-20, Claude)
+
+**User:** ran the Forms Scan ("done").
+
+**Evidence (Verified from capture: Forms Scan unix 1795240246, place 135537125271116; Saiyan Traditional, PL ~216K, 20 event wins):**
+- **Main-form slots:** `FormMastery1`–`5` are all exactly **1**, and `Character@Form=0`.
+  - The guide says Super Saiyan needs FSSJ mastered first, so no main form is owned yet. 1 looks like the starting value (inference).
+- **False SSJ is a tool.** It's in the Backpack, on hotbar slot 5 (`SlotData` "5":"False SSJ") and shows in the Inventory. `Character@FalseSSJCooldown` is set, so it has been used.
+- **The guide calls it a side form.** `ReplicatedStorage.NEWUI.KiMenu.GuideTopics` has "Side Forms - False Super Saiyan", alongside Kaioken, Potential Unleashed, Enraged, Flow State, Selflessness State, Pure Progress, Adrenaline Rush and Majin Mark. Controls: Ctrl+M1 turns off the main form, Ctrl+M2 the side form; T instant-transforms "if your next form is mastered".
+- **Other side forms:** Potential Unleashed is also a Backpack tool. The character has a `SideForm` folder, contents not dumped in this scan.
+- **No FSSJ mastery field found.**
+  - `SkillMastery` holds 3 skills (Aerial Spike 7.26, Galactical Crash 6.36, Galactic Force 6.39), not False SSJ.
+  - The False SSJ tool has no attributes or values.
+  - No other profile key is form-related.
+- **`PlayerGui.FormsMastery` doesn't exist in this place,** although an earlier job recording (1795169598) saw it. It may only be created when opened.
+- `GravityMastery` = 58.9 (was 1 on Nov 17).
+
+**Changed / untested live — Visuals:**
+- **Main forms:** a form is listed only once its mastery is above 1 or `@Form` has reached its slot. Otherwise the row shows "No main form yet". The rule is an inference from this one scan.
+- **Side forms:** those you own are listed from your Backpack and character tools (alias "False SSJ" → False Super Saiyan), marked "mastery not found yet".
+- **Forms Scan card — new Watch mode (3 min, local `sparkling_forms_watch_latest.txt`).** It logs:
+  - profile keys that change, every 10 s (except PL, Ki, Hunger and Fatigue);
+  - character attribute changes (cooldowns and movement noise skipped);
+  - character ValueBase changes;
+  - the `SideForm` folder's contents, additions, value and attribute changes.
+- Both variants compile.
+
+**Next step:** Watch while using False SSJ in a fight. Whatever rises is its mastery; then show it in the row.

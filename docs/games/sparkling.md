@@ -2750,3 +2750,23 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - Both variants compile.
 
 **Next step:** Watch while using False SSJ in a fight. Whatever rises is its mastery; then show it in the row.
+
+## SP-107 — FSSJ watch: no client-side mastery value changes while in the form (2026-11-20, Claude)
+
+**User:** "done, i didnt fight mastery goes up through form usage".
+
+**Evidence (Verified from capture: Forms Watch unix 1795240453, place 135537125271116, 180 s, False SSJ on from ~7.9 s):**
+- **Turning FSSJ on** set `Character@SideAdd` from 0 to **27,013.1**. This is the side form's power addition; it didn't change afterwards.
+- **No profile change.** The profile was diffed every 10 s from 10.5 s until the line cap at 161.7 s (~150 s in form). No key changed apart from the excluded PL, Ki, Hunger and Fatigue.
+  - FormMastery1–5 stayed at 1, and `SkillMastery` didn't move.
+  - Between the Forms Scan and this watch, `SkillMastery` rose (Aerial Spike 7.2550 → 7.2740), so profile copies do refresh.
+- **No other character change.** The `SideForm` folder stayed empty, with nothing added, and no character attribute changed except dash, hit and attacker state.
+- **Conclusion (inference):** FSSJ mastery isn't in the client's profile mirror or on the character. It is likely server-side, sent only when the game displays it.
+- **Watch bugs:** Fatigue and Hunger ticks (~10 per second) filled the 4,000-line cap at 161.7 s. The first profile read also failed, so 60 keys were logged as nil → value at 10.5 s.
+
+**Fixed / untested live:**
+- The watch now logs Fatigue, Hunger, Focus, injury, PL and Ki only on jumps of 5 or more.
+- The first successful profile read becomes the baseline without being logged.
+- Both variants compile.
+
+**Next step:** find where the game shows FSSJ mastery to the player. Then capture that screen with the Job Recorder, which logs incoming remotes and new GUI text.

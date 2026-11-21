@@ -3552,7 +3552,9 @@ local function startWatch()
    table.insert(watching.Connections,object.Changed:Connect(function()
     local now=object.Value
     if type(now)=="number" and type(last)=="number" and math.abs(now-last)<1e-6 then return end
-    if object.Name~="PowerLevel" and object.Name~="Ki" then log("VALUE "..object.Name.."="..tostring(now):sub(1,120))end
+    -- Fatigue/Hunger/Focus/injuries tick constantly (they filled the first watch's 4000 lines); only big jumps are logged.
+    local ticking=object.Name=="PowerLevel" or object.Name=="Ki" or object.Name=="Fatigue" or object.Name=="Hunger" or object.Name=="Focus" or object.Name:find("Inj$")
+    if not ticking or (type(now)=="number" and type(last)=="number" and math.abs(now-last)>=5) then log("VALUE "..object.Name.."="..tostring(now):sub(1,120))end
     last=now
    end))
   end
@@ -3561,15 +3563,23 @@ local function startWatch()
   local started=watching.Started
   refreshProfile()
   repeat task.wait(.2) until not profileScanning
-  local before={}
-  if profile then for key,item in pairs(profile)do before[key]=item end end
-  log("PROFILE baseline keys="..(profile and "ok" or "none"))
+  -- The first profile read that succeeds becomes the baseline silently (watch 1795240453 logged all 60 keys as nil -> value).
+  local before
+  local function baseline()
+   if before or not profile then return end
+   before={}
+   for key,item in pairs(profile)do before[key]=item end
+   log("PROFILE baseline ok")
+  end
+  baseline()
   while watching.Active and watching.Started==started do
    task.wait(10)
    if not (watching.Active and watching.Started==started) then break end
    refreshProfile()
    repeat task.wait(.2) until not profileScanning
-   if profile then
+   local first=not before
+   baseline()
+   if profile and not first then
     for key,item in pairs(profile)do
      if before[key]~=item and key~="PowerLevel" and key~="Ki" and key~="Hunger" and key~="Fatigue" then
       log("PROFILE "..key.." "..tostring(before[key]):sub(1,300).." -> "..tostring(item):sub(1,300))

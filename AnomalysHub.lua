@@ -3940,6 +3940,8 @@ end)()
 -- your position to settle, scans all of Workspace up to 3 times (any name containing "bed"), and logs the nearest clickables when none match.
 -- With no bed (or one that doesn't heal) it waits for you to lie in one yourself, remembers that bed per place in sparkling_beds.json,
 -- and resumes at 1%.
+-- v2.2 (SP-109, user: "it never got out the bed"): after healing it checks you can walk and tries Space / the bed / jump until you can;
+-- healing that stalls at 10% or less counts as done; every run keeps its own log file.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -3958,7 +3960,9 @@ if not page then return end
 
 local SEARCH,REACH,INJURY_LIMIT,HEALED_AT=400,5,90,1
 -- Rest phase limits: bed search radius (studs), heal-progress check (s), clicks per bed, beds tried, whole rest (s).
-local BED_SEARCH,HEAL_CHECK,BED_USES,BEDS_TRIED,REST_CAP=1000,15,3,2,600
+local BED_SEARCH,HEAL_CHECK,BED_USES,BEDS_TRIED,REST_CAP=1000,15,3,2,1800
+-- Healing that stalls this low (%) counts as healed (SP-109).
+local PLATEAU_OK=10
 local INJURIES={HeadInj="Head",TorsoInj="Torso",LeftArmInj="Left arm",RightArmInj="Right arm",LeftLegInj="Left leg",RightLegInj="Right leg"}
 -- Waiting for you to lie in a bed yourself: give up after this long with no healing, or once healing stalls this long (s).
 local MANUAL_WAIT,HEAL_STALL=600,90
@@ -3973,10 +3977,14 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- pcall(writefile,path,"SPARKLING AUTO SHADOW FARM v2.1 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
+ local body="SPARKLING AUTO SHADOW FARM v2.2 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
   .." SHADOW = the Shadow's fields (looking for an owner tag), POWER = your PowerLevel, PAUSE = chat/menu open, FOCUS = Roblox window focus.\n"
   .."REST = injury rest phase: BED scan/path/use, NEARBY = closest clickables when no bed matched, BEDSTATE = sit/anchor/position after using the bed,"
-  .." HEAL = worst injury while resting, WAITBED = waiting for you to lie in a bed (your clicks/prompts and what was learned).\n"..table.concat(state.Lines,"\n"))
+  .." HEAL = worst injury while resting, WAITBED = waiting for you to lie in a bed (your clicks/prompts and what was learned),"
+  .." BEDATTR = character attributes the bed changed, GETUP = each way tried to get out of the bed and whether you could move.\n"..table.concat(state.Lines,"\n")
+ pcall(writefile,path,body)
+ -- Each run also keeps its own file: a new start used to overwrite the only log (SP-109 lost a stuck-in-bed run this way).
+ if state.RunPath then pcall(writefile,state.RunPath,body)end
 end
 
 local section=ui.Section(page,"Auto Farm",106,true)
@@ -4230,8 +4238,48 @@ local function bedState(humanoid,root)
   humanoid.SeatPart and humanoid.SeatPart:GetFullName():sub(-60) or "none",tostring(root.Anchored),tostring(humanoid.PlatformStand),
   (tostring(humanoid:GetState()):gsub("Enum.HumanoidStateType.","")),root.Position.X,root.Position.Y,root.Position.Z)
 end
-local function getUp(run,humanoid,root)
- if humanoid.Sit or root.Anchored or humanoid.PlatformStand then tap(Enum.KeyCode.Space);log("PRESS Space (get up)");waitFor(run,1);log("BEDSTATE after getting up "..bedState(humanoid,root))end
+-- Getting out of the bed (SP-109). User: "you get locked into place" in a bed, and v2.1 "never got out the bed". v2.1 pressed Space only
+-- when Sit/Anchored/PlatformStand was set, so any other lock left you there. Now it tests whether you can actually walk (6 studs ahead,
+-- 1.5 s), and if not tries in turn: Space, clicking the bed again (beds may toggle), Space, jump; it stops with a clear status if
+-- you're still stuck. The attributes the bed changed are logged (BEDATTR) so the real lock can be identified.
+local function snapshot(character)
+ local copy={}
+ for key,value in pairs(character:GetAttributes())do copy[key]=value end
+ return copy
+end
+local function canMove(run,humanoid,root)
+ local start=root.Position
+ humanoid:MoveTo(start+root.CFrame.LookVector*6)
+ local deadline=os.clock()+1.5
+ while os.clock()<deadline and (root.Position-start).Magnitude<=1.5 do
+  if not waitFor(run,.1)then return false,0 end
+ end
+ local moved=(root.Position-start).Magnitude
+ humanoid:MoveTo(root.Position)
+ return moved>1.5,moved
+end
+local function getUp(run,character,humanoid,root,bed,before)
+ log(string.format("BEDSTATE before getting up %s walkSpeed=%.1f jumpPower=%.1f",bedState(humanoid,root),humanoid.WalkSpeed,humanoid.JumpPower))
+ if before then
+  for key,value in pairs(character:GetAttributes())do
+   if before[key]~=value and not key:find("Cooldown",1,true) and key~="CameraLooker" and key~="LastPress" and key~="LastTick" then
+    log("BEDATTR @"..key.." "..tostring(before[key]):sub(1,60).." -> "..tostring(value):sub(1,60))
+   end
+  end
+ end
+ local steps={"none","space","bed","space","jump"}
+ for attempt,step in ipairs(steps)do
+  if step=="space" then tap(Enum.KeyCode.Space)
+  elseif step=="bed" then if bed then useBed(bed,root,1)else step="bed(unknown)" end
+  elseif step=="jump" then humanoid.Jump=true end
+  if step~="none" and not waitFor(run,1)then return false end
+  local free,moved=canMove(run,humanoid,root)
+  if not alive(run)then return false end
+  log(string.format("GETUP try=%d via=%s moved=%.1f free=%s %s walkSpeed=%.1f",attempt,step,moved,tostring(free),bedState(humanoid,root),humanoid.WalkSpeed))
+  if free then return true end
+ end
+ stop("Healed, but couldn't get out of the bed (tried Space, the bed and jumping). See the Auto Shadow log.")
+ return false
 end
 -- Leaving the Inner World may move you; wait until your position holds still for 1.5 s (up to 6 s) before searching.
 local function settle(run,root)
@@ -4258,7 +4306,7 @@ end
 -- start falling, the bed you used (last clicked detector or prompt, else your seat, else the nearest clickable) is saved for this place.
 local function manualRest(run,character,humanoid,root,why)
  local started,mouse=os.clock(),player:GetMouse()
- local lastUse,connections=nil,{}
+ local lastUse,connections,before=nil,{},snapshot(character)
  log("WAITBED start ("..why..") "..bedState(humanoid,root));save()
  table.insert(connections,input.InputBegan:Connect(function(io)
   if io.UserInputType~=Enum.UserInputType.MouseButton1 then return end
@@ -4296,10 +4344,18 @@ local function manualRest(run,character,humanoid,root,why)
     save()
    end
   end
-  if worst<=HEALED_AT then
+  -- Healing that stalls at a low level counts as done (SP-109), so a bed that stops short of 1% can't hold the farm forever.
+  local plateau=healing and os.clock()-progressAt>HEAL_STALL and worst<=PLATEAU_OK
+  if worst<=HEALED_AT or plateau then
    finish()
-   log(string.format("REST done (you chose the bed) secs=%.0f worst=%.1f %s",os.clock()-started,worst,bedState(humanoid,root)))
-   getUp(run,humanoid,root)
+   log(string.format("REST done (you chose the bed)%s secs=%.0f worst=%.1f %s",plateau and " plateau" or "",os.clock()-started,worst,bedState(humanoid,root)))
+   local bed
+   if lastUse and lastUse.Holder.Parent then
+    local object=lastUse.Kind=="prompt" and lastUse.Holder:FindFirstChildOfClass("ProximityPrompt") or lastUse.Holder:FindFirstChildOfClass("ClickDetector")
+    local position=holderPosition(lastUse.Holder)
+    if object and position then bed={Object=object,Holder=lastUse.Holder,Position=position,Kind=lastUse.Kind}end
+   end
+   if not getUp(run,character,humanoid,root,bed,before)then return end
    state.Rests+=1;return true
   end
   if not healing and os.clock()-started>MANUAL_WAIT then finish();stop(string.format("No bed used in %d min (injuries at %d%%).",MANUAL_WAIT/60,math.floor(worst)));return end
@@ -4354,26 +4410,30 @@ local function rest(run,character,humanoid,root,limb,amount)
    if not alive(run)then return end
    log("BED unreachable "..bed.Holder:GetFullName():sub(-80))
   else
+   local attributes=snapshot(character)
    for use=1,BED_USES do
     local before=worstInjury(character) or 0
     local how=useBed(bed,root,use)
     log(string.format("BED use=%d via=%s worst=%.1f %s",use,how,before,bedState(humanoid,root)))
     if not waitFor(run,1)then return end
     log("BEDSTATE "..bedState(humanoid,root))
-    -- Healing must show within HEAL_CHECK seconds; after that, any progress keeps the wait going until 1% or the rest cap.
-    local checkAt,best,nextLog=os.clock()+HEAL_CHECK,before,0
+    -- Healing must show within HEAL_CHECK seconds; after that, it waits until 1%, or until healing stalls for HEAL_STALL seconds
+    -- (done if the worst injury is at PLATEAU_OK or less, otherwise stop). REST_CAP is a last-resort limit.
+    local checkAt,best,nextLog,progressAt=os.clock()+HEAL_CHECK,before,0,os.clock()
     while true do
      local worst,name=worstInjury(character)
      worst=worst or 0
-     if worst<=HEALED_AT then
-      log(string.format("REST done secs=%.0f worst=%.1f %s",os.clock()-started,worst,bedState(humanoid,root)))
-      getUp(run,humanoid,root)
+     local stalled=checkAt==math.huge and os.clock()-progressAt>HEAL_STALL
+     if worst<=HEALED_AT or (stalled and worst<=PLATEAU_OK) then
+      log(string.format("REST done%s secs=%.0f worst=%.1f %s",stalled and " plateau" or "",os.clock()-started,worst,bedState(humanoid,root)))
+      if not getUp(run,character,humanoid,root,bed,attributes)then return end
       state.Rests+=1;return true
      end
+     if stalled then stop(string.format("Healing stopped at %d%% for %ds.",math.floor(worst),HEAL_STALL));return end
      if os.clock()-started>REST_CAP then stop(string.format("Rested %d min and injuries are still at %d%%.",REST_CAP/60,math.floor(worst)));return end
      if os.clock()>=nextLog then nextLog=os.clock()+5;log(string.format("HEAL worst=%.1f limb=%s %s",worst,tostring(name),bedState(humanoid,root)))end
      status.Text=string.format("Resting in bed: worst injury %s %d%% (resume at %d%%). Bed rests: %d",INJURIES[name] or "?",math.floor(worst),HEALED_AT,state.Rests)
-     if worst<best-.5 then best=worst;checkAt=math.huge end
+     if worst<best-.5 then best=worst;checkAt=math.huge;progressAt=os.clock()end
      if os.clock()>=checkAt then log(string.format("HEAL none after %ds (worst %.1f)",HEAL_CHECK,worst));break end
      if not waitFor(run,1)then return end
     end
@@ -4389,6 +4449,7 @@ local function toggle()
  local character=player.Character
  local humanoid=character and character:FindFirstChildOfClass("Humanoid")
  if not humanoid or humanoid.Health<=0 then status.Text="Wait until your character is alive.";return end
+ state.RunPath="AnomalyHub/universal/sparkling_auto_shadow_"..os.time()..".txt"
  state.Enabled=true;state.Lines={};state.Character=character;state.Entries=0;state.Kicks=0;state.Clicks=0;state.Tries=0
  state.UnfocusedClicks=0;state.UnfocusedJ=0;state.Aims=0;state.Rests=0;state.Resting=false;state.Walking=false
  state.InWorld=false;state.MissingSince=nil;state.NextJ=0;state.NextMove=0;state.NextClick=0;state.NextPower=0;state.NextSave=0;state.Paused=false

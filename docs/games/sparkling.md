@@ -2788,3 +2788,38 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - Both variants compile.
 
 **Next step:** confirm the timer runs while FSSJ is on and stops when it's off. Note the time when SSJ unlocks; that gives the first data point for how long mastery takes.
+
+## SP-109 — Auto Shadow v2.2: gets out of the bed, plateau handling, per-run logs (2026-11-20, Claude)
+
+**User:** "also check the auto shadow, it never got out the bed". Earlier: "you get locked into place" in a bed.
+
+**Evidence:**
+- **The rest's log is lost.** `sparkling_auto_shadow_latest.txt` now holds a later run (~9:05–9:25 PM) whose worst injury was 18%, with no rest. The bed-rest run sat between the v2.1 install (~5:17 PM) and that start, and was overwritten when the later run began: every START reset the single log file.
+- **No bed was learned:** there is no `sparkling_beds.json`. So either a bed was found by name (normal path) or the wait-for-you path never saw healing start.
+- **The other recordings don't help:** the two Auto Parry recordings from that window (5:13–5:36 and 8:03–8:39 PM) hold no bed or injury state.
+- **Likely causes in v2.1 (source inspection):**
+  1. After healing it pressed Space only if `Sit`, `Anchored` or `PlatformStand` was set. Any other lock left you in the bed, and the farm then pressed J in bed, which may do nothing.
+  2. It waited for every injury to reach ≤ 1%. A bed that stops short kept it waiting until the 10-minute cap (or forever on the wait-for-you path).
+
+**Changed / untested live — v2.2:**
+
+*Getting up*
+- After healing it tests whether you can actually walk: 6 studs ahead within 1.5 s.
+- If you can't, it tries in turn: Space, clicking the bed again, Space, then jump, testing movement after each.
+- If you're still stuck, it stops with "Healed, but couldn't get out of the bed".
+- **Logs:**
+  - GETUP: each try, distance moved, bed state and WalkSpeed.
+  - BEDATTR: every character attribute that changed between before the bed and getting up, to identify the real lock.
+  - BEDSTATE: also logs WalkSpeed and JumpPower.
+
+*Healing*
+- If healing makes no progress for 90 s with the worst injury at 10% or less, it counts as healed (logged as "plateau").
+- Above 10% it stops.
+- The total rest cap is raised from 10 to 30 min, as a last resort only.
+
+*Logs*
+- Every run also writes `sparkling_auto_shadow_<unix>.txt`, so a new start no longer overwrites a rest.
+
+**Checks:** source and both variants compile. No mock or live run.
+
+**Next step:** let a rest run to the end, then read GETUP and BEDATTR in that run's log to see what the bed's lock is and what releases it.

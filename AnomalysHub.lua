@@ -3391,6 +3391,102 @@ finder.Button=ui.Button(finderCard,"Start CEXP Finder",14,72,180,startFinder,col
 finder.Button.Size=UDim2.new(1,-28,0,34)
 controller.RegisterCleanup(function()stopFinder("Unloaded.")end)
 
+-- Forms Scan (SP-105): which forms you own and where False Super Saiyan's mastery lives aren't in any capture. The profile has
+-- FormMastery1-5 but no unlocked-forms key; the guide says a Talent Card Reset removes FSSJ, so TalentCards, tools, SlotData and the
+-- game's own Forms Mastery panel are all dumped. One snapshot, local file only, sends nothing.
+local formsCard=ui.Card(ui.Pages.Recorders,"SPARKLING FORMS SCAN","Open the game's Forms Mastery panel (FORMS button) first, then press Scan. Saves your full profile data, tools, attributes and that panel's text, to find your unlocked forms and False Super Saiyan's mastery. Local file only.",170)
+formsCard.LayoutOrder=32
+local formsStatus=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,40),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="Ready. Output: sparkling_forms_scan_latest.txt"},formsCard)
+local formsBusy=false
+local FORM_WORDS={"false","ssj","saiyan","form","mastery","transform","mode","evo","kaioken","namek","majin","golden","will","oozaru"}
+local function formWord(text)
+ text=tostring(text):lower()
+ for _,word in ipairs(FORM_WORDS)do if text:find(word,1,true)then return true end end
+ return false
+end
+local function formsScan()
+ if formsBusy or controller.IsUnloaded()then return end
+ formsBusy=true;formsStatus.Text="Reading your profile..."
+ task.spawn(function()
+  local ok,err=pcall(function()
+   refreshProfile()
+   local deadline=os.clock()+15
+   repeat task.wait(.2) until not profileScanning or os.clock()>deadline
+   local lines={"SPARKLING FORMS SCAN v1 // READ ONLY","place="..game.PlaceId.." unix="..os.time()}
+   local function log(s)if #lines<5000 then table.insert(lines,s)end end
+   local function attributes(object)
+    local parts={}
+    for key,value in pairs(object:GetAttributes())do table.insert(parts,"@"..key.."="..tostring(value):sub(1,120))end
+    table.sort(parts)
+    return table.concat(parts," ")
+   end
+   if profile then
+    local keys={}
+    for key in pairs(profile)do table.insert(keys,key)end
+    table.sort(keys)
+    for _,key in ipairs(keys)do log("PROFILE "..key.." ["..type(profile[key]).."]="..tostring(profile[key]):gsub("[\r\n]"," "):sub(1,600))end
+   else log("PROFILE not found (getgc unavailable or no profile table)")end
+   local character=localPlayer.Character
+   log("PLAYER_ATTR "..attributes(localPlayer))
+   if character then log("CHAR_ATTR "..attributes(character))end
+   for _,holder in ipairs({localPlayer:FindFirstChildOfClass("Backpack"),character})do
+    if holder then
+     for _,tool in ipairs(holder:GetChildren())do
+      if tool:IsA("Tool") or tool:IsA("HopperBin") then
+       log("TOOL "..holder.Name.."."..tool.Name.." "..attributes(tool))
+       for _,child in ipairs(tool:GetDescendants())do
+        if child:IsA("ValueBase") then log("TOOL_VALUE "..child:GetFullName().."="..tostring(child.Value):sub(1,120))end
+       end
+      end
+     end
+    end
+   end
+   -- Character values/folders with form-like names (e.g. a FalseSSJ value or a Forms folder).
+   if character then
+    for _,object in ipairs(character:GetDescendants())do
+     if formWord(object.Name) and not object:IsA("BasePart") and not object:IsA("Accessory") then
+      log("CHAR_OBJ "..object:GetFullName().." ["..object.ClassName.."]"..(object:IsA("ValueBase") and ("="..tostring(object.Value):sub(1,120)) or "").." "..attributes(object))
+     end
+    end
+   end
+   local gui=localPlayer:FindFirstChildOfClass("PlayerGui")
+   local panel=gui and gui:FindFirstChild("FormsMastery")
+   if panel then
+    for _,object in ipairs(panel:GetDescendants())do
+     local text=(object:IsA("TextLabel") or object:IsA("TextButton")) and (" text="..string.format("%q",object.Text:sub(1,160))) or ""
+     local shown=object:IsA("GuiObject") and (" visible="..tostring(object.Visible)) or ""
+     local size=object:IsA("GuiObject") and string.format(" size=%.3f,%d/%.3f,%d",object.Size.X.Scale,object.Size.X.Offset,object.Size.Y.Scale,object.Size.Y.Offset) or ""
+     log("PANEL "..object:GetFullName().." ["..object.ClassName.."]"..shown..size..text.." "..attributes(object))
+    end
+   else log("PANEL PlayerGui.FormsMastery missing")end
+   if gui then
+    local count=0
+    for _,object in ipairs(gui:GetDescendants())do
+     if (object:IsA("TextLabel") or object:IsA("TextButton")) and not (panel and object:IsDescendantOf(panel)) and formWord(object.Text) then
+      count+=1;if count>300 then break end
+      log("UI "..object:GetFullName().." visible="..tostring(object.Visible).." text="..string.format("%q",object.Text:sub(1,160)))
+     end
+    end
+   end
+   local count=0
+   for _,object in ipairs(rs:GetDescendants())do
+    if formWord(object.Name) then
+     count+=1;if count>400 then log("RS limit 400");break end
+     log("RS "..object:GetFullName().." ["..object.ClassName.."]"..(object:IsA("ValueBase") and ("="..tostring(object.Value):sub(1,120)) or ""))
+    end
+   end
+   log("END")
+   if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+   local saved=type(writefile)=="function" and pcall(writefile,"AnomalyHub/universal/sparkling_forms_scan_latest.txt",table.concat(lines,"\n"))
+   formsStatus.Text=saved and ("Saved "..#lines.." lines to sparkling_forms_scan_latest.txt.") or "Save failed."
+  end)
+  if not ok then formsStatus.Text="Scan failed: "..tostring(err):sub(1,120)end
+  formsBusy=false
+ end)
+end
+ui.Button(formsCard,"Scan Forms",14,72,180,formsScan,colors.AccentSoft).Size=UDim2.new(1,-28,0,34)
+
 end)()
 ;(function()
 -- Sparkling Power Tracker v1.2: profile PL meter for Dashboard SESSION STATS (its own LIVE SESSION card removed, SP-096); not a PL grant mechanism.

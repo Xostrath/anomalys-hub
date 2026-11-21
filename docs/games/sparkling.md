@@ -2694,3 +2694,30 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Checks:** source and both variants compile. No live check yet.
 
 **Next step:** compare the row with the in-game Forms Mastery panel.
+
+## SP-105 — Form Mastery: owned forms and FSSJ need a scan (2026-11-20, Claude)
+
+**User:** "only have it show the forms i got, and it doesnt show mastery for fssj".
+
+**Evidence so far (source / captures):**
+- **No owned-forms field.** The profile's 60 keys (reward-test key list) include `FormMastery1`–`5`, `TalentCards`, `SlotData`, `SkillMastery`, `Ability` and `Trait`, but nothing that marks a form as unlocked.
+- **The game's own panel lists every form.** Its source (`formNames` / `pushForms`) lists every form of your race and trait, with no unlock check in the code captured.
+- **FSSJ isn't a form slot.** The in-game guide says Saiyans (except Legendary) get False Super Saiyan at ~30–50k BP and must master it to unlock Super Saiyan, and a Talent Card Reset removes it.
+  - That suggests it's tied to `TalentCards` or a skill, not a form slot.
+  - Another player's character carried `@FalseSSJCooldown`, so it's a usable ability.
+  - Where its mastery is stored isn't known; `SkillMastery` has been "[]" in every capture.
+- **Captures are stale.** The only profile values captured (hidden scan, Nov 17) are from an older character.
+
+**Implemented / untested live — Visuals Forms Scan (Recorders):**
+- One button, local file `sparkling_forms_scan_latest.txt`, sends nothing. It writes:
+  - every profile key and value;
+  - player and character attributes;
+  - Backpack and character tools, with their attributes and values;
+  - character objects with form-like names;
+  - the full `PlayerGui.FormsMastery` panel tree (text, visibility, sizes, attributes);
+  - other PlayerGui text and ReplicatedStorage names matching form words.
+- Both variants compile.
+
+**Next step:** open the game's Forms Mastery panel, press Scan Forms, then:
+- filter the Visuals row to the forms you own;
+- add FSSJ mastery from wherever it's stored.

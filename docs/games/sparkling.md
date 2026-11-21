@@ -2770,3 +2770,21 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - Both variants compile.
 
 **Next step:** find where the game shows FSSJ mastery to the player. Then capture that screen with the Job Recorder, which logs incoming remotes and new GUI text.
+
+## SP-108 — Side forms: time in form instead of hidden mastery (2026-11-20, Claude)
+
+**User:** asked where the game shows FSSJ mastery: "i dont" (it isn't shown anywhere in game).
+
+**Evidence:**
+- **Not on the client:** SP-107 found no client-side value that changes while you're in FSSJ.
+- **Not in research:** the Trello, the in-game guide and the Discord exports in research give no duration or rate for mastering FSSJ. They say only "master it", "fight while in it", and T instant-transforms "if your next form is mastered".
+- **So the mastery number can't be read; it is only known server-side** (inference from SP-107 plus this answer).
+
+**Changed / untested live — Visuals:**
+- Each owned side form now shows its **time in form**, tracked locally, e.g. "False Super Saiyan · 12 min in form · mastery hidden by the game".
+- **On / off:** a side form counts as on while `Character@SideAdd` > 0 (0 → 27,013 when FSSJ turned on, SP-107).
+- **Which form:** the side form whose `<ToolName without spaces>Cooldown` character attribute is newest (`FalseSSJCooldown`). It is re-checked 0.5 s after SideAdd changes, in case the cooldown attribute arrives late.
+- **Saving:** seconds are saved per character to local `sparkling_side_forms_<UserId>.json` every 30 s and when the form turns off. Time before this version isn't counted.
+- Both variants compile.
+
+**Next step:** confirm the timer runs while FSSJ is on and stops when it's off. Note the time when SSJ unlocks; that gives the first data point for how long mastery takes.

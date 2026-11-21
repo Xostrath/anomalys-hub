@@ -2677,6 +2677,68 @@ local FORM_NAMES={
 local SIDE_FORMS={["False SSJ"]="False Super Saiyan",["False Super Saiyan"]="False Super Saiyan",["Potential Unleashed"]="Potential Unleashed",
  Kaioken="Kaioken",Enraged="Enraged",["Selflessness State"]="Selflessness State",["Flow State"]="Flow State",["Pure Progress"]="Pure Progress",
  ["Adrenaline Rush"]="Adrenaline Rush",["Majin Mark"]="Majin Mark"}
+-- Side-form time in form (SP-108). The game never sends side-form mastery to the client (Forms Watch 1795240453: nothing changed in
+-- ~150 s of FSSJ) and doesn't show it, so this times it locally instead: Character@SideAdd goes above 0 while a side form is on
+-- (0 -> 27013 for FSSJ), and the form is the one whose "<ToolName without spaces>Cooldown" attribute is newest (FalseSSJCooldown).
+-- Seconds are saved per character in sparkling_side_forms_<UserId>.json.
+local sidePath="AnomalyHub/universal/sparkling_side_forms_"..localPlayer.UserId..".json"
+local sideTime={Data={},Active=nil,Since=nil}
+if type(readfile)=="function" then
+ local ok,saved=pcall(function()return http:JSONDecode(readfile(sidePath))end)
+ if ok and type(saved)=="table" then sideTime.Data=saved end
+end
+local function sideCharacter()return tostring(own("CharacterName") or attr(localPlayer,"CharacterName") or "?")end
+local function sideFlush()
+ if not (sideTime.Active and sideTime.Since) then return end
+ local key=sideTime.Key or sideCharacter()
+ local entry=type(sideTime.Data[key])=="table" and sideTime.Data[key] or {}
+ entry[sideTime.Active]=(tonumber(entry[sideTime.Active]) or 0)+(os.clock()-sideTime.Since)
+ sideTime.Data[key]=entry;sideTime.Since=os.clock()
+ if type(writefile)=="function" then
+  if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  pcall(writefile,sidePath,http:JSONEncode(sideTime.Data))
+ end
+end
+local function activeSideForm(character)
+ local best,bestAt
+ for tool,name in pairs(SIDE_FORMS)do
+  local at=tonumber(character:GetAttribute((tool:gsub(" ","")).."Cooldown"))
+  if at and (not bestAt or at>bestAt) then best,bestAt=name,at end
+ end
+ return best or "Unknown side form"
+end
+local function sideChanged(character)
+ local on=(tonumber(character:GetAttribute("SideAdd")) or 0)>0
+ if on and not sideTime.Active then
+  sideTime.Active,sideTime.Since,sideTime.Key=activeSideForm(character),os.clock(),sideCharacter()
+ elseif not on and sideTime.Active then
+  sideFlush();sideTime.Active,sideTime.Since=nil,nil
+ end
+end
+local function sideWatch(character)
+ if sideTime.Active then sideFlush();sideTime.Active,sideTime.Since=nil,nil end
+ if not character then return end
+ -- The cooldown attribute can land just after SideAdd, so re-check the form name a moment later.
+ controller.Connect(character:GetAttributeChangedSignal("SideAdd"),function()
+  sideChanged(character)
+  task.delay(.5,function()if sideTime.Active and sideTime.Since and os.clock()-sideTime.Since<1 then sideTime.Active=activeSideForm(character)end end)
+ end)
+ sideChanged(character)
+end
+sideWatch(localPlayer.Character)
+controller.Connect(localPlayer.CharacterAdded,sideWatch)
+task.spawn(function()
+ while not controller.IsUnloaded() do task.wait(30);sideFlush()end
+end)
+controller.RegisterCleanup(sideFlush)
+local function sideUsage(name)
+ local entry=sideTime.Data[sideCharacter()]
+ local seconds=(type(entry)=="table" and tonumber(entry[name]) or 0)+((sideTime.Active==name and sideTime.Since) and os.clock()-sideTime.Since or 0)
+ local active=sideTime.Active==name and " (on now)" or ""
+ if seconds<60 then return (seconds>0 and "under 1 min in form" or "no time tracked yet")..active.." · mastery hidden by the game"end
+ local minutes=math.floor(seconds/60)
+ return (minutes>=60 and string.format("%dh %dm",minutes//60,minutes%60) or minutes.." min").." in form"..active.." · mastery hidden by the game"
+end
 -- Shared with Auto Meditation (stops at the 400 Ki cap).
 controller.SparklingProfile=function()return profile,profileAt end
 controller.SparklingRefreshProfile=refreshProfile
@@ -2865,7 +2927,7 @@ local FIELDS={
    if holder then
     for _,tool in ipairs(holder:GetChildren())do
      local side=tool:IsA("Tool") and SIDE_FORMS[tool.Name]
-     if side and not owned[side] then owned[side]=true;table.insert(parts,side.." (side form, mastery not found yet)")end
+     if side and not owned[side] then owned[side]=true;table.insert(parts,side.." · "..sideUsage(side))end
     end
    end
   end

@@ -6277,6 +6277,274 @@ controller.RegisterCleanup(function()stop("Unloaded.")end)
 
 end)()
 ;(function()
+-- Sparkling player-list spectate (SP-103): click a name in the game's player list to spectate that player through Spectate v6
+-- (UniversalSpectate.lua); click them again, or your own name, to stop. Left or right click, as in BeyondNenSpectate.lua.
+-- Evidence (spectate recorder 1795237147, place 110405289082842):
+--   rows are TextLabels named "Row" in PlayerGui.PlayerList.Panel.List (with a PixelText ImageLabel child); faction headers are "Header".
+--   Row text is the character name, which equals that player's @CharacterName attribute (all 6 players matched).
+--   PlayerList.Tip.Text shows "@<account>" for the hovered row and is used when two players share a character name.
+--   Rows are not Active and clicks on them arrive with processed=false; transparent KiMenu stage frames sit above the list.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" or type(controller.ToggleSpectatePlayer)~="function" then return end
+local players=game:GetService("Players")
+local input=game:GetService("UserInputService")
+local guiService=game:GetService("GuiService")
+local player,pending,closed=players.LocalPlayer,{},false
+local function note(message)if controller.SpectateTrace then controller.SpectateTrace(message)end end
+local function visible(object,pg)
+ local node=object
+ while node and node~=pg do
+  if node:IsA("GuiObject") and not node.Visible then return false end
+  if node:IsA("LayerCollector") and not node.Enabled then return false end
+  node=node.Parent
+ end
+ return node==pg
+end
+local function tipAccount(list)
+ local tip=list:FindFirstChild("Tip")
+ local text=tip and tip:IsA("GuiObject") and tip.Visible and tip:FindFirstChild("Text")
+ local account=text and text:IsA("TextLabel") and text.Text:match("^@(%S+)")
+ return account and players:FindFirstChild(account)
+end
+local function playerFor(row,list)
+ local name=row.Text
+ local matches={}
+ for _,other in ipairs(players:GetPlayers())do
+  if other:GetAttribute("CharacterName")==name then table.insert(matches,other)end
+ end
+ if #matches==1 then return matches[1]end
+ local hovered=tipAccount(list)
+ if hovered and (#matches==0 or table.find(matches,hovered))then return hovered end
+ return nil
+end
+-- The Row under the pointer, if the click isn't covered by the hub window or a button.
+local function hit(position)
+ local pg=player:FindFirstChildOfClass("PlayerGui")
+ local list=pg and pg:FindFirstChild("PlayerList")
+ local panel=list and list:FindFirstChild("Panel")
+ local rows=panel and panel:FindFirstChild("List")
+ if not rows then return end
+ for _,object in ipairs(pg:GetGuiObjectsAtPosition(position.X,position.Y))do
+  if not visible(object,pg) then continue end
+  if object:IsDescendantOf(rows) then
+   local row=object.Name=="Row" and object or object.Parent.Name=="Row" and object.Parent
+   if row and row:IsA("TextLabel") and row.Parent==rows then
+    local target=playerFor(row,list)
+    if target then return target,row end
+   end
+   return
+  elseif object==controller.UI.Window or object:IsDescendantOf(controller.UI.Window) or object:IsA("GuiButton") or object:IsA("TextBox") then
+   return -- The hub or a game button is above the list. Never click through it.
+  end
+ end
+end
+local function mouseButton(io)return io.UserInputType==Enum.UserInputType.MouseButton1 or io.UserInputType==Enum.UserInputType.MouseButton2 end
+local function pointerPosition()
+ -- GetMouseLocation is raw screen space, unlike InputObject.Position (BeyondNenSpectate.lua v4).
+ local mouse,inset=input:GetMouseLocation(),guiService:GetGuiInset()
+ return Vector3.new(mouse.X-inset.X,mouse.Y-inset.Y,0)
+end
+controller.Connect(input.InputBegan,function(io,processed)
+ if closed or not mouseButton(io) or input:GetFocusedTextBox() then return end
+ pending[io.UserInputType]=nil
+ local target,row=hit(io.Position)
+ if target then
+  pending[io.UserInputType]={Target=target,Row=row,Position=io.Position,At=os.clock()}
+  note("PLAYERLIST DOWN "..target.Name.." "..tostring(io.UserInputType).." row=\""..row.Text.."\" processed="..tostring(processed))
+ end
+end)
+controller.Connect(input.InputChanged,function(io)
+ if closed or not next(pending) then return end
+ if io.UserInputType==Enum.UserInputType.MouseWheel then table.clear(pending);return end
+ if io.UserInputType~=Enum.UserInputType.MouseMovement then return end
+ local position=pointerPosition()
+ for _,down in pairs(pending)do if (position-down.Position).Magnitude>8 then down.Dragged=true end end
+end)
+controller.Connect(input.InputEnded,function(io)
+ if closed or not mouseButton(io) then return end
+ local position=pointerPosition()
+ local target,row=hit(position)
+ local down=pending[io.UserInputType];pending[io.UserInputType]=nil
+ if not down or down.Dragged or os.clock()-down.At>.75 or (position-down.Position).Magnitude>8 or input:GetFocusedTextBox() then return end
+ if target==down.Target and row==down.Row and target.Parent==players then
+  note("PLAYERLIST CLICK "..target.Name)
+  controller.ToggleSpectatePlayer(target,"Sparkling player list")
+ end
+end)
+controller.Connect(input.WindowFocusReleased,function()table.clear(pending)end)
+controller.RegisterCleanup(function()closed=true;table.clear(pending)end)
+note("PLAYERLIST READY v1 (Sparkling: row text = @CharacterName; left or right click)")
+
+end)()
+;(function()
+-- Sparkling Outfit ESP (SP-103, user request: "theres outfit stands out there"). Labels the outfit stands; read-only, sends no game requests.
+-- Evidence (job recorder WORLD lines): every stand is Workspace.Clothing.<OutfitName>.ClickPart with a ClickDetector.
+--   place 110405289082842: 16 stands; 14 in the East City clothing shop around (-2270, 295, -4158), Tienshin at (-2881, 316, -3262),
+--   WolfFang at (2074, 301, -5054).
+--   place 135537125271116: KidGoku, GotenGi, TrunkCC, CrimsonMask, GotenCas, GokuCasual, Yske around (-978, 202, -7125); Warrior and
+--   BrolyA at (2655, 552, -4876).
+-- Stands within 40 studs of each other are grouped into one "N outfits" label while you're farther than GROUP_AT, so a shop doesn't stack
+-- 14 labels on top of each other. ReplicatedStorage.Outfits.<name>.Requirements (e.g. JobSubclassLevel) is shown when a stand's name matches.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local ui=controller.UI
+local page=ui and ui.Pages.ESP
+if not page then return end
+local players=game:GetService("Players")
+local rs=game:GetService("ReplicatedStorage")
+local run=game:GetService("RunService")
+local http=game:GetService("HttpService")
+local player=players.LocalPlayer
+
+local GROUP_RADIUS,GROUP_AT,COLOR=40,150,Color3.fromRGB(236,140,255)
+local settingsPath="AnomalyHub/universal/sparkling_outfit_esp.json"
+local settings={Enabled=true,Distance=true,Group=true,MaxDistance=10000}
+if type(readfile)=="function" then
+ local ok,saved=pcall(function()return http:JSONDecode(readfile(settingsPath))end)
+ if ok and type(saved)=="table" then for key,value in pairs(saved)do if type(value)==type(settings[key])then settings[key]=value end end end
+end
+local function saveSettings()
+ if type(writefile)~="function" then return end
+ if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ pcall(writefile,settingsPath,http:JSONEncode(settings))
+end
+
+-- "GohanSchool" reads as "Gohan School".
+local function pretty(name)return (name:gsub("(%l)(%u)","%1 %2"))end
+local function requirements(name)
+ local outfits=rs:FindFirstChild("Outfits")
+ local folder=outfits and outfits:FindFirstChild(name)
+ local needs=folder and folder:FindFirstChild("Requirements")
+ if not needs then return nil end
+ local parts={}
+ for _,value in ipairs(needs:GetChildren())do
+  if value:IsA("ValueBase") then table.insert(parts,pretty(value.Name).." "..tostring(value.Value))end
+ end
+ return #parts>0 and "Needs "..table.concat(parts,", ") or nil
+end
+
+local stands,groups,dirty={}, {},true
+local function label(adornee,offset)
+ local gui=ui.Create("BillboardGui",{Name="AnomalySparklingOutfitESP",Size=UDim2.fromOffset(220,46),StudsOffsetWorldSpace=offset,
+  AlwaysOnTop=true,LightInfluence=0,Adornee=adornee,Enabled=false},ui.Gui)
+ local text=ui.Create("TextLabel",{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,Font=Enum.Font.GothamSemibold,TextColor3=COLOR,
+  TextStrokeColor3=Color3.new(),TextStrokeTransparency=.12,TextSize=10,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Bottom},gui)
+ return gui,text
+end
+local function removeStand(model)
+ local stand=stands[model]
+ if not stand then return end
+ stand.Gui:Destroy();stands[model]=nil;dirty=true
+end
+local function addStand(model)
+ if stands[model] then return end
+ local part=model:FindFirstChild("ClickPart")
+ if not (part and part:IsA("BasePart")) then return end
+ local stand={Model=model,Part=part,Name=pretty(model.Name),Needs=requirements(model.Name)}
+ stand.Gui,stand.Text=label(part,Vector3.new(0,4,0))
+ stands[model]=stand;dirty=true
+end
+-- Greedy grouping by position; stands don't move, so this only reruns when stands are added or removed.
+local function regroup()
+ dirty=false
+ for _,group in ipairs(groups)do group.Gui:Destroy()end
+ table.clear(groups)
+ local left={}
+ for _,stand in pairs(stands)do if stand.Part.Parent then table.insert(left,stand)end end
+ while #left>0 do
+  local first=table.remove(left,1)
+  local members={first}
+  for index=#left,1,-1 do
+   if (left[index].Part.Position-first.Part.Position).Magnitude<=GROUP_RADIUS then table.insert(members,table.remove(left,index))end
+  end
+  local center=Vector3.zero
+  for _,stand in ipairs(members)do center+=stand.Part.Position end
+  center/=#members
+  local group={Members=members,Center=center}
+  if #members>1 then group.Gui,group.Text=label(first.Part,center-first.Part.Position+Vector3.new(0,6,0))end
+  table.insert(groups,group)
+ end
+end
+
+local folder
+local connections={}
+local function watchFolder(object)
+ if folder or not object or object.Name~="Clothing" or object.Parent~=workspace then return end
+ folder=object
+ for _,model in ipairs(folder:GetChildren())do addStand(model)end
+ table.insert(connections,folder.ChildAdded:Connect(function(model)task.defer(addStand,model)end))
+ table.insert(connections,folder.ChildRemoved:Connect(removeStand))
+end
+watchFolder(workspace:FindFirstChild("Clothing"))
+controller.Connect(workspace.ChildAdded,watchFolder)
+
+local function hideAll()
+ for _,stand in pairs(stands)do stand.Gui.Enabled=false end
+ for _,group in ipairs(groups)do if group.Gui then group.Gui.Enabled=false end end
+end
+local status
+local elapsed=0
+controller.Connect(run.Heartbeat,function(delta)
+ elapsed+=delta
+ if elapsed<.2 then return end
+ elapsed=0
+ if dirty then
+  regroup()
+  local count=0
+  for _ in pairs(stands)do count+=1 end
+  if status then status.Text=folder and string.format("%d outfit stands on this map (Workspace.Clothing).",count) or "No outfit stands on this map (no Workspace.Clothing)."end
+ end
+ local root=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+ if not settings.Enabled or not root then hideAll();return end
+ for _,group in ipairs(groups)do
+  local distance=(group.Center-root.Position).Magnitude
+  local grouped=settings.Group and group.Gui and distance>GROUP_AT
+  if group.Gui then
+   group.Gui.Enabled=grouped and distance<=settings.MaxDistance
+   if group.Gui.Enabled then
+    group.Text.Text=string.format("Outfit stands (%d)",#group.Members)..(settings.Distance and string.format("\n%d STUDS",math.floor(distance+.5)) or "")
+   end
+  end
+  for _,stand in ipairs(group.Members)do
+   local own=(stand.Part.Position-root.Position).Magnitude
+   stand.Gui.Enabled=not grouped and own<=settings.MaxDistance and stand.Part.Parent~=nil
+   if stand.Gui.Enabled then
+    stand.Text.Text=stand.Name.." [OUTFIT]"..(stand.Needs and "\n"..stand.Needs or "")..(settings.Distance and string.format("\n%d STUDS",math.floor(own+.5)) or "")
+   end
+  end
+ end
+end)
+
+-- ESP page controls, after NPC ESP.
+local section=ui.Section(page,"Outfit ESP",0,true)
+section.Frame.LayoutOrder=21
+local function row(y,key,text)
+ local box
+ box=ui.Checkbox(section.Body,text,text..(settings[key] and ": ON" or ": OFF"),function()
+  settings[key]=not settings[key];saveSettings()
+  box.Text=text..(settings[key] and ": ON" or ": OFF")
+ end)
+ box.Position=UDim2.fromOffset(14,y)
+end
+row(0,"Enabled","Outfit ESP")
+row(30,"Distance","Distance")
+row(60,"Group","Group a shop's stands when far away")
+local y=ui.Slider(section.Body,96,100,20000,100,function()return settings.MaxDistance end,function(value)settings.MaxDistance=value;saveSettings()end,
+ function(value)return "Max distance: "..value.." studs"end)
+status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,y+4),Size=UDim2.new(1,-28,0,28),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,Text="No outfit stands on this map (no Workspace.Clothing)."},section.Body)
+section.SetHeight(y+36)
+dirty=true
+controller.RegisterCleanup(function()
+ for _,connection in ipairs(connections)do connection:Disconnect()end
+ for model in pairs(stands)do removeStand(model)end
+ for _,group in ipairs(groups)do if group.Gui then group.Gui:Destroy()end end
+end)
+
+end)()
+;(function()
 -- Combat page v18.5 / diagnostics v7: ping compensation (SP-073). v18.4 added recorded player_set_d (SP-068); v18.3 rogue-heavy trial retained.
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
 -- v16.2 (SP-037): NPC heavies (perfect counter) pressed at a rotating 260/320/380 ms after the release starts, to find the window.

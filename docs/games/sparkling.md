@@ -2619,3 +2619,56 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Next step:** farm until 90% in the same spot.
 - Read the BED scan and NEARBY lines, or WAITBED if you lay down yourself.
 - Confirm the bed is learned, and how getting up works.
+
+## SP-103 — Player-list spectate and Outfit ESP (2026-11-20, Claude)
+
+**User:** "make an outfit [esp], theres outfit stands out there, also the spectate recorder is there".
+
+### Spectate recorder result (Verified from capture: recorder 1795237147, place 110405289082842, 8.8 s, streaming off)
+
+- **Player list structure:**
+  - Rows are TextLabels named `Row` in `PlayerGui.PlayerList.Panel.List`, each with a `PixelText` ImageLabel child. Faction headers are `Header` TextLabels.
+  - Rows are not Active, and clicks on them arrive with `processed=false`.
+  - Transparent, inactive `KiMenu.*Stage` frames sit above the list in hit tests.
+- **Row → player mapping:**
+  - **Row text = the player's `@CharacterName` player attribute.** All 6 players matched, and so did the 6 rows clicked.
+  - `PlayerList.Tip.Text` shows "@<account>" for the hovered row and matched every click.
+  - Characters carry the same `@CharacterName`, plus `@EventWins`, `@Race`, `@Trait` and `@Title`. `Humanoid.DisplayName` is empty.
+- **Spectate v6 was not run** during the recording. Only "READY v6" was logged, and the camera stayed Custom on your own head throughout. So whether Spectate's camera works in Sparkling is still unknown.
+
+### Implemented / untested live — `src/SparklingSpectate.lua`
+
+- Left or right click a row to spectate that player through Spectate v6 (`controller.ToggleSpectatePlayer`). Click them again, or your own row, to stop.
+- Pointer handling is reused from `BeyondNenSpectate.lua` v4: press and release must be on the same row, within 0.75 s, with under 8 px of movement, and the release uses `GetMouseLocation` minus the inset.
+- **Player lookup:** a unique `@CharacterName` match is used first. If two players share a character name, the "@account" tip decides.
+- **Blocking:** a click is ignored if the hub window, a GuiButton or a TextBox is above the row. Inactive overlay frames don't block.
+- **Logs:** DOWN and CLICK lines go to `spectate_test.txt` as `PLAYERLIST ...`.
+
+### Outfit stands (Verified from capture: job recorder WORLD lines)
+
+- Every stand is `Workspace.Clothing.<OutfitName>.ClickPart`, with a ClickDetector on it.
+
+| Place | Stands | Where |
+|---|---|---|
+| 110405289082842 | 14 | East City clothing shop (BruceGi, Casual1, SAB, SAB2, Tank, AFG, GohanSchool, VegetaD, A17, TienBlue, MrSatan, Oni, TatSuit, JapCas) |
+| 110405289082842 | 1 each | Tienshin at the Tien dojo area; WolfFang at the Wolf Fang dojo area (positions recorded in source) |
+| 135537125271116 | 7 | KidGoku, GotenGi, TrunkCC, CrimsonMask, GotenCas, GokuCasual, Yske |
+| 135537125271116 | 2 | Warrior and BrolyA, at a second site |
+
+- This matches the Trello Outfits cards ("East city clothing shop").
+- `ReplicatedStorage.Outfits.<name>` holds Requirements and Buffs for some outfits, e.g. AdaptivePlate needs JobSubclassLevel 2. None of the captured stand names appear there.
+- What clicking a stand does (buy, price, try-on) has not been recorded.
+
+### Implemented / untested live — `src/SparklingOutfitESP.lua`
+
+- An "Outfit ESP" section on the ESP page, below NPC ESP. Toggles: Outfit ESP (default on), Distance, and "Group a shop's stands when far away". Max distance is a slider from 100 to 20,000 studs (default 10,000).
+- Each stand gets a pink label: name with CamelCase split ("Gohan School"), "[OUTFIT]", distance, and "Needs ..." when `ReplicatedStorage.Outfits.<name>.Requirements` exists.
+- **Grouping:** stands within 40 studs of each other are grouped. Beyond 150 studs a group shows as one "Outfit stands (N)" label at its centre.
+- It watches `Workspace.Clothing` for added and removed stands. Settings are saved in local `sparkling_outfit_esp.json`. Read-only; sends no requests.
+
+**Checks:** both new modules and both build variants compile. No mock run (no Luau runtime here) and no live run.
+
+**Next step:**
+- Open the player list and click a name. Report whether the camera follows them, and send `spectate_test.txt`, which has the START / FOLLOW / WAIT lines.
+- Check Outfit ESP labels in the East City shop.
+- Optionally run the job recorder while clicking a stand, to learn what it does and what it costs.

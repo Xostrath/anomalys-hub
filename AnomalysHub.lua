@@ -2544,7 +2544,7 @@ if state.NpcEspEnabled then startWatching() end
 
 end)()
 ;(function()
--- Sparkling Visuals v5.3: CEXP reading saved per account and character (SP-094). v5.2: row cleanup, injuries >=70%, Zeni parser fix and honest Race Potential label (SP-048). Read-only; sends no game requests.
+-- Sparkling Visuals v5.4: Form Mastery reads the profile's FormMastery1-5 with the game's own form names (SP-104). v5.3: CEXP reading saved per account and character (SP-094). v5.2: row cleanup, injuries >=70%, Zeni parser fix and honest Race Potential label (SP-048). Read-only; sends no game requests.
 -- Each field reads only a source confirmed in a capture. Unconfirmed fields say so instead of guessing (2026-11-17).
 -- Recorders -> Sparkling Profile Scan finds the sources for the rest.
 local env=(getgenv and getgenv()) or shared
@@ -2657,6 +2657,22 @@ local function refreshProfile()
  end)
 end
 local function own(key)return profile and profile[key] end
+-- Form names per race and trait, copied from the game's Forms Mastery panel source (formNames, grant capture 1795197886 part 2).
+local FORM_NAMES={
+ Saiyan={default={"Super Saiyan","Super Saiyan 2","Super Saiyan 3"},Traditional={"Super Saiyan","Super Saiyan 2","Super Saiyan 3","Super Saiyan 4"},
+  Legendary={"Super Saiyan","Legendary Super Saiyan","Legendary Full Power"},Ancient={"Super Saiyan","Super Saiyan 2","Unleashed Wrath"}},
+ Human={default={"Humane Will","True Will"},TriHuman={"Humane Will","Power Release"},TheOne={"True Form","Undyne Form"},
+  Cursed={"Cursed Rage","Majin Flow","Impure Progress"},SaiyanHybrid={"Super Saiyan","Super Saiyan 2","Super Saiyan Rage"}},
+ Namekian={default={"Super Namekian","Warrior's Will"},Demon={"Super Namekian","Demonic State"},Dragon={"Super Namekian","Dragonic State"},
+  Orange={"Super Namekian","Porunga's Avatar"}},
+ Acrosian={default={"Full Power","Golden Form"},Cooler={"Fifth Form","Golden Form"},Metal={"Full Power"}},
+ Alien={default={"Empowered","Astral State"},Hera={"Empowered","Full Power","Transcended"}},
+ Demon={default={"Respire","Demonic Will","Demonic Perfection"},Glind={"Respire","Super Glind"},Ogre={"Respire","Beserk State"},
+  Supreme={"Respire","Dark King","Dark King Full Power"}},
+ Majin={default={"Super Majin","Ultimate Majin"}},
+ Android21={default={"Majin Form"}},
+ Janemba={default={"Darkness"}},
+}
 -- Shared with Auto Meditation (stops at the 400 Ki cap).
 controller.SparklingProfile=function()return profile,profileAt end
 controller.SparklingRefreshProfile=refreshProfile
@@ -2818,19 +2834,33 @@ local FIELDS={
   end
   return number(amount).." · past every listed requirement (120)"
  end},
- -- Profile SkillMastery is a JSON list (empty "[]" for the user so far).
+ -- The game's Forms Mastery panel (client source, grant capture 1795197886 part 2: formNames/pushForms) shows profile FormMastery1-5,
+ -- clamped 0-100, named by race and trait from the table below (unknown race/trait: "Form 1".."Form 5"). The SkillMastery JSON list
+ -- (always "[]" so far) isn't form mastery; any entries are shown after the forms.
  {Label="Form Mastery",Resolve=function(target)
   if target~=localPlayer then return OWN_ONLY end
   if not profile then return "Loading profile..." end
-  local list=decode(own("SkillMastery"))
+  local race=tostring(own("Race") or attr(target,"Race") or "")
+  local trait=tostring(own("Trait") or attr(target,"Trait") or "")
+  local races=FORM_NAMES[race]
+  local names=races and (races[trait] or races.default) or {"Form 1","Form 2","Form 3","Form 4","Form 5"}
   local parts={}
-  if type(list)=="table" then
-   for key,item in pairs(list)do
-    if #parts>=6 then table.insert(parts,"...");break end
-    table.insert(parts,type(key)=="number" and tostring(item) or (tostring(key).." "..tostring(item)))
-   end
+  for index,name in ipairs(names)do
+   if index>5 then break end
+   local amount=tonumber(own("FormMastery"..index))
+   amount=finite(amount) and math.clamp(amount,0,100) or 0
+   table.insert(parts,name.." "..number(amount).."%")
   end
-  return #parts>0 and table.concat(parts,", ") or "No skill/form mastery yet"
+  local list=decode(own("SkillMastery"))
+  if type(list)=="table" then
+   local skills={}
+   for key,item in pairs(list)do
+    if #skills>=4 then table.insert(skills,"...");break end
+    table.insert(skills,type(key)=="number" and tostring(item) or (tostring(key).." "..tostring(item)))
+   end
+   if #skills>0 then table.insert(parts,"Skills: "..table.concat(skills,", "))end
+  end
+  return table.concat(parts,", ")
  end},
  -- Trello (Limit Breaking): progress stops at 100k / 250k / 450k / 700k / 1M BP until a bar (right side of the screen) is filled by
  -- fighting. Character@Limit is 0 or 1 across players in the Profile Scan, read here as breaks done; Character.LimitBreak is that bar's

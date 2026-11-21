@@ -2672,3 +2672,25 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - Open the player list and click a name. Report whether the camera follows them, and send `spectate_test.txt`, which has the START / FOLLOW / WAIT lines.
 - Check Outfit ESP labels in the East City shop.
 - Optionally run the job recorder while clicking a stand, to learn what it does and what it costs.
+
+## SP-104 — Visuals Form Mastery read the wrong field (2026-11-20, Claude)
+
+**User:** "form mastery does not work in visuals".
+
+**Cause (Verified from source captures):**
+- Visuals' Form Mastery row (SP-048 onward) read only the profile's `SkillMastery` JSON list. That list has been "[]" in every capture, so the row always said "No skill/form mastery yet".
+- The game's own **Forms Mastery** panel (`PlayerGui.FormsMastery`, heading "FORMS MASTERY"; client source in grant capture 1795197886, part 2, `formNames` / `pushForms`) reads **`FormMastery1`–`FormMastery5`** from the same client profile table Visuals already uses.
+  - Each value is clamped 0–100.
+  - Each slot is named by race and trait, e.g. Saiyan Traditional: Super Saiyan, Super Saiyan 2, Super Saiyan 3, Super Saiyan 4. Unknown combinations show "Form 1"–"Form 5".
+- The profile key list in other captures includes FormMastery1–5. No capture recorded their values.
+- A server talent check reads `FormMastery1 >= 80` together with CombatEXP ≥ 100,000 (Mode Drive). This shows the scale is 0–100 per form.
+
+**Changed / untested live — Visuals v5.4:**
+- Form Mastery now lists each of your race and trait's forms with its percentage, e.g. "Super Saiyan 37%, Super Saiyan 2 0%, …". The name table is copied from the game's panel source.
+- Race and trait come from the profile, falling back to the character's `@Race` / `@Trait`.
+- Any `SkillMastery` entries are appended as "Skills: …".
+- Other players still show "Hidden (only shown for you)"; their mastery isn't replicated.
+
+**Checks:** source and both variants compile. No live check yet.
+
+**Next step:** compare the row with the in-game Forms Mastery panel.

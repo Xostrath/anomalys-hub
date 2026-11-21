@@ -2581,3 +2581,41 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Conclusion / limits:** the current account/place catalog supplies no concrete PL-grant candidate, so the command-menu branch ends here unless new evidence appears. This is a negative result for the returned menu, not proof that hidden, permission-dependent or other-place commands cannot exist. Do not invent IDs, interpret Give as a spawn API, or ask for another identical menu/combat recording. The earlier display-only limit-bar result stands. No direct self-grant route has been established across the reviewed evidence.
 
 **Handoff:** keep the active objective explicit but distinguish an investigation lead from an established capability. Revisit only with a specific new award callsite or relevant normal-action capture; existing data does not justify a PL-grant button. No runtime/hub modifications were made, so no compilation is applicable to this review. Raw catalog remains local; this sanitized result is shared. Preserve concurrent SP-096 session dashboard changes.
+
+## SP-102 — Auto Shadow v2.1: bed search fixed, and it learns beds you lie in (2026-11-20, Claude)
+
+**User:** "it didnt detect a bed, so i laid in one".
+
+**Evidence (Verified from capture: `sparkling_auto_shadow_latest.txt`, place 94737939156598):**
+- This was the first live rest. The farm ran ~2.4 h until RightArmInj reached 90.5.
+- REST start, J, then "GONE Shadow vanished" 0.2 s later.
+- The bed scan ran **0.005 s after that** and found `candidates=0`, so the farm stopped. You then lay in a bed manually.
+- The only bed list on record is from a different place, 135537125271116 (`Map["Healing Pod"].Bed.ClickDetector`). This place's beds have never been captured.
+- Your Shadow spawned at y ≈ −4492, so leaving the Inner World may move you. In that case the scan ran before you'd moved back and before the map around you had streamed in. This is a likely cause, not a confirmed one: no position was logged.
+
+**Changed / untested live — v2.1:**
+
+*Searching*
+- After the Shadow vanishes, it waits for your position to hold still for 1.5 s (up to 6 s) before searching.
+- It scans all of Workspace (characters in Live are skipped), not just `Workspace.Map`.
+  - A bed is any ClickDetector or ProximityPrompt whose holder, or one of its first five ancestors, has "bed" in its name, or is a "Healing Pod".
+  - A prompt whose action text contains "bed" also counts.
+- It scans up to 3 times, 1.5 s apart. Between scans, if streaming is on, it requests streaming around beds learned for this place.
+- Each scan logs your position, the streaming setting and the learned-bed count.
+- When nothing matches, it logs the nearest 15 clickables of any name (NEARBY), so the real bed can be identified from the log.
+
+*No bed, or the bed didn't heal: wait for you*
+- It no longer stops. It waits up to 10 min for you to lie in a bed yourself.
+- It logs your left clicks (the part under the mouse and its ClickDetector) and any prompts you trigger (WAITBED).
+- When injuries start falling, it saves that bed for this place in local `sparkling_beds.json`. It uses, in order:
+  1. the detector or prompt you used in the last 60 s;
+  2. otherwise your seat (logged only, not saved);
+  3. otherwise the nearest clickable within 12 studs.
+- At ≤ 1% it gets up (Space, if sitting, anchored or PlatformStand) and resumes farming. It stops if healing stalls for 90 s.
+- Later rests also accept learned beds, matched by position within 4 studs.
+
+**Checks:** source and both variants compile. No mock run (no Luau runtime available) and no live run.
+
+**Next step:** farm until 90% in the same spot.
+- Read the BED scan and NEARBY lines, or WAITBED if you lay down yourself.
+- Confirm the bed is learned, and how getting up works.

@@ -3639,6 +3639,10 @@ end)()
 -- every injury is at 1% or less, gets up and farms again. Beds seen so far: Workspace.Map["Healing Pod"].Bed.ClickDetector (place
 -- 135537125271116, job recorder). The bed is clicked with the mouse at its screen point; if that fails twice, executor fireclickdetector
 -- (the same click event) is tried. What a bed does (sit, anchor, heal rate) has never been recorded, so every step is logged.
+-- v2.1 (SP-102): the first live rest (place 94737939156598) searched 0.005 s after the Shadow vanished and found no bed. It now waits for
+-- your position to settle, scans all of Workspace up to 3 times (any name containing "bed"), and logs the nearest clickables when none match.
+-- With no bed (or one that doesn't heal) it waits for you to lie in one yourself, remembers that bed per place in sparkling_beds.json,
+-- and resumes at 1%.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -3648,6 +3652,8 @@ local input=game:GetService("UserInputService")
 local guiService=game:GetService("GuiService")
 local run=game:GetService("RunService")
 local pathfinding=game:GetService("PathfindingService")
+local proximity=game:GetService("ProximityPromptService")
+local http=game:GetService("HttpService")
 local vim;pcall(function()vim=game:GetService("VirtualInputManager")end)
 local ui=controller.UI
 local page=ui.Pages.Auto
@@ -3657,7 +3663,10 @@ local SEARCH,REACH,INJURY_LIMIT,HEALED_AT=400,5,90,1
 -- Rest phase limits: bed search radius (studs), heal-progress check (s), clicks per bed, beds tried, whole rest (s).
 local BED_SEARCH,HEAL_CHECK,BED_USES,BEDS_TRIED,REST_CAP=1000,15,3,2,600
 local INJURIES={HeadInj="Head",TorsoInj="Torso",LeftArmInj="Left arm",RightArmInj="Right arm",LeftLegInj="Left leg",RightLegInj="Right leg"}
+-- Waiting for you to lie in a bed yourself: give up after this long with no healing, or once healing stalls this long (s).
+local MANUAL_WAIT,HEAL_STALL=600,90
 local path="AnomalyHub/universal/sparkling_auto_shadow_latest.txt"
+local BEDS_PATH="AnomalyHub/universal/sparkling_beds.json"
 local state={Enabled=false,Closed=false,Lines={},Held={},Seen={},Focused=true,Run=0}
 
 local function log(text)
@@ -3667,16 +3676,17 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- pcall(writefile,path,"SPARKLING AUTO SHADOW FARM v2 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
+ pcall(writefile,path,"SPARKLING AUTO SHADOW FARM v2.1 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
   .." SHADOW = the Shadow's fields (looking for an owner tag), POWER = your PowerLevel, PAUSE = chat/menu open, FOCUS = Roblox window focus.\n"
-  .."REST = injury rest phase: BED found/path/use, BEDSTATE = sit/anchor/position after using the bed, HEAL = worst injury while resting.\n"..table.concat(state.Lines,"\n"))
+  .."REST = injury rest phase: BED scan/path/use, NEARBY = closest clickables when no bed matched, BEDSTATE = sit/anchor/position after using the bed,"
+  .." HEAL = worst injury while resting, WAITBED = waiting for you to lie in a bed (your clicks/prompts and what was learned).\n"..table.concat(state.Lines,"\n"))
 end
 
 local section=ui.Section(page,"Auto Farm",106,true)
 section.Frame.LayoutOrder=-60
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,32),Size=UDim2.new(1,-28,0,68),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
  TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Enters the Inner World with J, walks to your Shadow and punches (M1). At 90% injury it rests in the nearest bed until 1%, then farms again. Turn Auto Parry on for defense. Needs Meditation Type."},section.Body)
+ Text="Off. Enters the Inner World with J, walks to your Shadow and punches (M1). At 90% injury it rests in the nearest bed until 1%, then farms again (no bed found: lie in one yourself and it learns it). Turn Auto Parry on for defense. Needs Meditation Type."},section.Body)
 local button
 
 local function release(item)
@@ -3780,31 +3790,77 @@ local function waitFor(run,seconds)
  repeat task.wait(.1) until not alive(run) or (os.clock()>=untilAt and not state.Paused)
  return alive(run)
 end
--- Bed candidates on the live map, nearest first: a ClickDetector (or prompt) under a part/model named Bed or a "Healing Pod".
+-- Beds you lay in yourself, per place (SP-102): {["<PlaceId>"]={{Path=,X=,Y=,Z=,Kind=}}}.
+local function loadLearned()
+ local ok,data=pcall(function()return http:JSONDecode(readfile(BEDS_PATH))end)
+ return ok and type(data)=="table" and data or {}
+end
+local function learnedHere()
+ local list=loadLearned()[tostring(game.PlaceId)]
+ return type(list)=="table" and list or {}
+end
+local function learnBed(holder,position,kind)
+ if type(writefile)~="function" then return false end
+ local data,key=loadLearned(),tostring(game.PlaceId)
+ local list=type(data[key])=="table" and data[key] or {}
+ for _,entry in ipairs(list)do
+  if tonumber(entry.X) and (Vector3.new(entry.X,entry.Y,entry.Z)-position).Magnitude<3 then return false end
+ end
+ table.insert(list,{Path=holder:GetFullName(),X=position.X,Y=position.Y,Z=position.Z,Kind=kind})
+ data[key]=list
+ return (pcall(writefile,BEDS_PATH,http:JSONEncode(data)))
+end
+local function holderPosition(holder)
+ if holder:IsA("BasePart") then return holder.Position end
+ if holder:IsA("Model") then return holder:GetPivot().Position end
+ return nil
+end
+-- "bed" anywhere in the holder's or its first few ancestors' names, or a "Healing Pod" (job capture: Map["Healing Pod"].Bed).
+local function bedNamed(holder)
+ local object=holder
+ for _=1,5 do
+  if not object or object==workspace then return false end
+  local name=object.Name:lower()
+  if name:find("bed",1,true) or name=="healing pod" then return true end
+  object=object.Parent
+ end
+ return false
+end
+-- Every ClickDetector/ProximityPrompt in Workspace (characters in Live skipped) within radius, nearest first.
 -- Nested ClickDetector.ClickDetector copies and duplicate positions (seen in the job capture) are skipped.
-local function findBeds(root)
- local beds,seenAt={},{}
- local scope=workspace:FindFirstChild("Map") or workspace
- for _,object in ipairs(scope:GetDescendants())do
+local function scanClickables(root,radius)
+ local found,seenAt={},{}
+ local live=workspace:FindFirstChild("Live")
+ for _,object in ipairs(workspace:GetDescendants())do
   local isClick,isPrompt=object:IsA("ClickDetector"),object:IsA("ProximityPrompt")
   local holder=(isClick or isPrompt) and object.Parent
-  if holder and not holder:IsA("ClickDetector") and not holder:IsA("ProximityPrompt") then
-   local named=holder.Name=="Bed" or holder:FindFirstAncestor("Bed") or holder:FindFirstAncestor("Healing Pod")
-    or (isPrompt and tostring(object.ActionText):lower():find("bed",1,true))
-   local position=named and (holder:IsA("BasePart") and holder.Position or holder:IsA("Model") and holder:GetPivot().Position)
+  if holder and not holder:IsA("ClickDetector") and not holder:IsA("ProximityPrompt") and not (live and holder:IsDescendantOf(live))then
+   local position=holderPosition(holder)
    if position then
     local key=string.format("%.0f,%.0f,%.0f",position.X,position.Y,position.Z)
     local distance=(position-root.Position).Magnitude
-    if not seenAt[key] and distance<=BED_SEARCH then
+    if not seenAt[key] and distance<=radius then
      seenAt[key]=true
-     table.insert(beds,{Object=object,Holder=holder,Position=position,Distance=distance,Kind=isClick and "click" or "prompt",
-      Reach=object.MaxActivationDistance})
+     table.insert(found,{Object=object,Holder=holder,Position=position,Distance=distance,Kind=isClick and "click" or "prompt",
+      Reach=object.MaxActivationDistance,Named=bedNamed(holder) or (isPrompt and tostring(object.ActionText):lower():find("bed",1,true)~=nil)})
     end
    end
   end
  end
- table.sort(beds,function(a,b)return a.Distance<b.Distance end)
- return beds
+ table.sort(found,function(a,b)return a.Distance<b.Distance end)
+ return found
+end
+-- Bed candidates, nearest first: bed-named clickables plus any at a bed you used here before.
+local function findBeds(root)
+ local learned,beds=learnedHere(),{}
+ for _,item in ipairs(scanClickables(root,BED_SEARCH))do
+  local known=false
+  for _,entry in ipairs(learned)do
+   if tonumber(entry.X) and (Vector3.new(entry.X,entry.Y,entry.Z)-item.Position).Magnitude<4 then known=true;break end
+  end
+  if item.Named or known then item.Learned=known;table.insert(beds,item)end
+ end
+ return beds,#learned
 end
 -- Walks with pathfinding waypoints (straight line if no path). Stuck = under 1 stud moved in 3 s; up to 3 path attempts.
 local function walkTo(run,humanoid,root,goal,within)
@@ -3877,9 +3933,87 @@ local function bedState(humanoid,root)
   humanoid.SeatPart and humanoid.SeatPart:GetFullName():sub(-60) or "none",tostring(root.Anchored),tostring(humanoid.PlatformStand),
   (tostring(humanoid:GetState()):gsub("Enum.HumanoidStateType.","")),root.Position.X,root.Position.Y,root.Position.Z)
 end
+local function getUp(run,humanoid,root)
+ if humanoid.Sit or root.Anchored or humanoid.PlatformStand then tap(Enum.KeyCode.Space);log("PRESS Space (get up)");waitFor(run,1);log("BEDSTATE after getting up "..bedState(humanoid,root))end
+end
+-- Leaving the Inner World may move you; wait until your position holds still for 1.5 s (up to 6 s) before searching.
+local function settle(run,root)
+ local last,stillSince,deadline=root.Position,os.clock(),os.clock()+6
+ while os.clock()<deadline do
+  if not waitFor(run,.25)then return false end
+  if (root.Position-last).Magnitude>2 then last,stillSince=root.Position,os.clock()
+  elseif os.clock()-stillSince>=1.5 then break end
+ end
+ return true
+end
+-- The ClickDetector on the clicked part or its first few ancestors.
+local function detectorFor(target)
+ local object=target
+ for _=1,4 do
+  if not object or object==workspace then return nil end
+  local detector=object:FindFirstChildOfClass("ClickDetector")
+  if detector then return detector end
+  object=object.Parent
+ end
+ return nil
+end
+-- No bed found, or none healed (SP-102): wait for you to lie in one yourself. Your clicks and prompts are logged; once injuries
+-- start falling, the bed you used (last clicked detector or prompt, else your seat, else the nearest clickable) is saved for this place.
+local function manualRest(run,character,humanoid,root,why)
+ local started,mouse=os.clock(),player:GetMouse()
+ local lastUse,connections=nil,{}
+ log("WAITBED start ("..why..") "..bedState(humanoid,root));save()
+ table.insert(connections,input.InputBegan:Connect(function(io)
+  if io.UserInputType~=Enum.UserInputType.MouseButton1 then return end
+  local target=mouse.Target
+  local detector=target and detectorFor(target)
+  if detector then lastUse={At=os.clock(),Holder=detector.Parent,Kind="click"}end
+  log("WAITBED click target="..(target and target:GetFullName():sub(-90) or "none").." detector="..(detector and detector:GetFullName():sub(-90) or "none"))
+ end))
+ table.insert(connections,proximity.PromptTriggered:Connect(function(prompt)
+  if prompt.Parent then lastUse={At=os.clock(),Holder=prompt.Parent,Kind="prompt"}end
+  log("WAITBED prompt "..prompt:GetFullName():sub(-90).." action="..tostring(prompt.ActionText))
+ end))
+ local function finish()for _,connection in ipairs(connections)do connection:Disconnect()end end
+ local best,healing,progressAt,nextLog=worstInjury(character) or 0,false,os.clock(),0
+ while true do
+  if not waitFor(run,1)then finish();return end
+  local worst,name=worstInjury(character)
+  worst=worst or 0
+  if os.clock()>=nextLog then nextLog=os.clock()+5;log(string.format("WAITBED worst=%.1f limb=%s %s",worst,tostring(name),bedState(humanoid,root)))end
+  if worst<best-.5 then
+   best,progressAt=worst,os.clock()
+   if not healing then
+    healing=true
+    local holder,kind
+    if lastUse and os.clock()-lastUse.At<=60 and lastUse.Holder.Parent then holder,kind=lastUse.Holder,lastUse.Kind end
+    if not holder and humanoid.SeatPart then holder,kind=humanoid.SeatPart,"seat" end
+    if not holder then
+     local near=scanClickables(root,12)[1]
+     if near then holder,kind=near.Holder,near.Kind end
+    end
+    local position=holder and holderPosition(holder)
+    local saved=position and kind~="seat" and learnBed(holder,position,kind)
+    log(string.format("WAITBED healing started worst=%.1f bed=%s kind=%s pos=%s saved=%s",worst,holder and holder:GetFullName():sub(-90) or "unknown",
+     tostring(kind),position and string.format("(%.1f,%.1f,%.1f)",position.X,position.Y,position.Z) or "?",tostring(saved)))
+    save()
+   end
+  end
+  if worst<=HEALED_AT then
+   finish()
+   log(string.format("REST done (you chose the bed) secs=%.0f worst=%.1f %s",os.clock()-started,worst,bedState(humanoid,root)))
+   getUp(run,humanoid,root)
+   state.Rests+=1;return true
+  end
+  if not healing and os.clock()-started>MANUAL_WAIT then finish();stop(string.format("No bed used in %d min (injuries at %d%%).",MANUAL_WAIT/60,math.floor(worst)));return end
+  if healing and os.clock()-progressAt>HEAL_STALL then finish();stop(string.format("Healing stopped at %d%% for %ds.",math.floor(worst),HEAL_STALL));return end
+  status.Text=healing and string.format("Healing: worst injury %s %d%% (resume at %d%%). The farm will use this bed next time.",INJURIES[name] or "?",math.floor(worst),HEALED_AT)
+   or string.format("%s Lie in a bed yourself: the farm remembers it and resumes at %d%% (worst injury %s %d%%).",why,HEALED_AT,INJURIES[name] or "?",math.floor(worst))
+ end
+end
 local function rest(run,character,humanoid,root,limb,amount)
  local started=os.clock()
- log(string.format("REST start limb=%s max=%.1f",limb,amount));save()
+ log(string.format("REST start limb=%s max=%.1f pos=(%.1f,%.1f,%.1f)",limb,amount,root.Position.X,root.Position.Y,root.Position.Z));save()
  -- Leave the Inner World first: J toggles it.
  for try=1,2 do
   if not findShadow(root)then break end
@@ -3890,9 +4024,31 @@ local function rest(run,character,humanoid,root,limb,amount)
  end
  if findShadow(root)then stop("Injured, but couldn't leave the Inner World.");return end
  if state.InWorld then state.InWorld=false;log("GONE Shadow vanished (left to rest)")end
- local beds=findBeds(root)
- log("BED candidates="..#beds..(beds[1] and string.format(" nearest=%s at %.1f studs kind=%s reach=%s",beds[1].Holder:GetFullName():sub(-80),beds[1].Distance,beds[1].Kind,tostring(beds[1].Reach)) or ""))
- if #beds==0 then stop(string.format("%s at %d%% injury and no bed within %d studs.",INJURIES[limb],math.floor(amount),BED_SEARCH));return end
+ status.Text="Injured: looking for a bed..."
+ if not settle(run,root)then return end
+ local beds
+ for scan=1,3 do
+  local learned
+  beds,learned=findBeds(root)
+  log(string.format("BED scan=%d candidates=%d pos=(%.1f,%.1f,%.1f) streaming=%s learnedHere=%d",scan,#beds,root.Position.X,root.Position.Y,root.Position.Z,
+   tostring(workspace.StreamingEnabled),learned)..(beds[1] and string.format(" nearest=%s at %.1f studs kind=%s reach=%s learned=%s",
+   beds[1].Holder:GetFullName():sub(-80),beds[1].Distance,beds[1].Kind,tostring(beds[1].Reach),tostring(beds[1].Learned)) or ""))
+  if #beds>0 then break end
+  -- A bed learned here earlier may not be streamed in yet.
+  if workspace.StreamingEnabled then
+   for _,entry in ipairs(learnedHere())do
+    if tonumber(entry.X)then pcall(function()player:RequestStreamAroundAsync(Vector3.new(entry.X,entry.Y,entry.Z),3)end)end
+   end
+  end
+  if scan<3 and not waitFor(run,1.5)then return end
+ end
+ if #beds==0 then
+  for index,item in ipairs(scanClickables(root,1500))do
+   if index>15 then break end
+   log(string.format("NEARBY %s at %.1f studs kind=%s",item.Holder:GetFullName():sub(-100),item.Distance,item.Kind))
+  end
+  return manualRest(run,character,humanoid,root,string.format("%s at %d%% and no bed found within %d studs.",INJURIES[limb],math.floor(amount),BED_SEARCH))
+ end
  for index=1,math.min(BEDS_TRIED,#beds)do
   local bed=beds[index]
   local within=math.clamp((tonumber(bed.Reach)or 10)-3,4,8)
@@ -3914,7 +4070,7 @@ local function rest(run,character,humanoid,root,limb,amount)
      worst=worst or 0
      if worst<=HEALED_AT then
       log(string.format("REST done secs=%.0f worst=%.1f %s",os.clock()-started,worst,bedState(humanoid,root)))
-      if humanoid.Sit or root.Anchored or humanoid.PlatformStand then tap(Enum.KeyCode.Space);log("PRESS Space (get up)");waitFor(run,1);log("BEDSTATE after getting up "..bedState(humanoid,root))end
+      getUp(run,humanoid,root)
       state.Rests+=1;return true
      end
      if os.clock()-started>REST_CAP then stop(string.format("Rested %d min and injuries are still at %d%%.",REST_CAP/60,math.floor(worst)));return end
@@ -3927,7 +4083,7 @@ local function rest(run,character,humanoid,root,limb,amount)
    end
   end
  end
- stop("Couldn't rest: the bed didn't heal injuries (see the Auto Shadow log).")
+ return manualRest(run,character,humanoid,root,"The bed didn't heal injuries.")
 end
 local function toggle()
  if state.Closed then return end

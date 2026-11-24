@@ -3942,6 +3942,11 @@ end)()
 -- and resumes at 1%.
 -- v2.2 (SP-109, user: "it never got out the bed"): after healing it checks you can walk and tries Space / the bed / jump until you can;
 -- healing that stalls at 10% or less counts as done; every run keeps its own log file.
+-- v2.3 (SP-110, user: it should "sleep heal fatigue and injuries, then go back up and start fighting the shadow again continuously, it keeps
+-- going off"): fatigue at 80% also starts a rest (Trello: penalties from 80%); a rest waits for fatigue too, and tries sleeping (N, Trello:
+-- lowers fatigue to 0%) where you stand before walking to a bed. Recoverable problems no longer switch the farm off: it waits through a
+-- respawn, retries J, resumes after healing that stalls below the rest limits, and waits for you if it can't get up. Every rest is also
+-- recorded by the Sleep Recorder (Recorders page), and pressing the checkbox off is logged with what the farm last pressed.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -3961,27 +3966,36 @@ if not page then return end
 local SEARCH,REACH,INJURY_LIMIT,HEALED_AT=400,5,90,1
 -- Rest phase limits: bed search radius (studs), heal-progress check (s), clicks per bed, beds tried, whole rest (s).
 local BED_SEARCH,HEAL_CHECK,BED_USES,BEDS_TRIED,REST_CAP=1000,15,3,2,1800
--- Healing that stalls this low (%) counts as healed (SP-109).
-local PLATEAU_OK=10
+-- Fatigue (%): rest at FATIGUE_LIMIT, rested at FATIGUE_OK. Sleeping (N) must lower fatigue or injuries within SLEEP_CHECK s.
+local FATIGUE_LIMIT,FATIGUE_OK,SLEEP_CHECK=80,5,20
+-- Healing that stalls for HEAL_STALL s counts as done while injuries are under STALL_RESUME and fatigue under FATIGUE_LIMIT
+-- (the farm rests again when a limit is reached, SP-110).
+local HEAL_STALL,STALL_RESUME=90,80
 local INJURIES={HeadInj="Head",TorsoInj="Torso",LeftArmInj="Left arm",RightArmInj="Right arm",LeftLegInj="Left leg",RightLegInj="Right leg"}
--- Waiting for you to lie in a bed yourself: give up after this long with no healing, or once healing stalls this long (s).
-local MANUAL_WAIT,HEAL_STALL=600,90
 local path="AnomalyHub/universal/sparkling_auto_shadow_latest.txt"
 local BEDS_PATH="AnomalyHub/universal/sparkling_beds.json"
-local state={Enabled=false,Closed=false,Lines={},Held={},Seen={},Focused=true,Run=0}
+local REC_BY="Auto Shadow rest"
+local state={Enabled=false,Closed=false,Lines={},Held={},Seen={},Focused=true,Run=0,RecordId=0}
 
+local function recorder()
+ local value=controller.SparklingSleepRecorder
+ return type(value)=="table" and value or nil
+end
 local function log(text)
  if #state.Lines>=1500 then table.remove(state.Lines,1)end
  table.insert(state.Lines,string.format("%.3f %s",os.clock(),text))
+ -- During a rest the farm's steps also go into the Sleep Recorder's file, next to what the game did.
+ if state.Resting then local r=recorder();if r then pcall(r.Mark,text)end end
 end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- local body="SPARKLING AUTO SHADOW FARM v2.2 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
+ local body="SPARKLING AUTO SHADOW FARM v2.3 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
   .." SHADOW = the Shadow's fields (looking for an owner tag), POWER = your PowerLevel, PAUSE = chat/menu open, FOCUS = Roblox window focus.\n"
-  .."REST = injury rest phase: BED scan/path/use, NEARBY = closest clickables when no bed matched, BEDSTATE = sit/anchor/position after using the bed,"
-  .." HEAL = worst injury while resting, WAITBED = waiting for you to lie in a bed (your clicks/prompts and what was learned),"
-  .." BEDATTR = character attributes the bed changed, GETUP = each way tried to get out of the bed and whether you could move.\n"..table.concat(state.Lines,"\n")
+  .."REST = rest phase (injury or fatigue): SLEEP = pressing N, BED scan/path/use, NEARBY = closest clickables when no bed matched, BEDSTATE = sit/anchor/position,"
+  .." HEAL = worst injury and fatigue while resting, WAITBED = waiting for you to lie in a bed (your clicks/prompts and what was learned),"
+  .." BEDATTR = character attributes the bed changed, GETUP = each way tried to get up and whether you could move. RESPAWN = waiting through a death."
+  .." TOGGLE = the checkbox was pressed. Each rest is also in sparkling_sleep_<unix>.txt (Sleep Recorder).\n"..table.concat(state.Lines,"\n")
  pcall(writefile,path,body)
  -- Each run also keeps its own file: a new start used to overwrite the only log (SP-109 lost a stuck-in-bed run this way).
  if state.RunPath then pcall(writefile,state.RunPath,body)end
@@ -3991,7 +4005,7 @@ local section=ui.Section(page,"Auto Farm",106,true)
 section.Frame.LayoutOrder=-60
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,32),Size=UDim2.new(1,-28,0,68),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
  TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Enters the Inner World with J, walks to your Shadow and punches (M1). At 90% injury it rests in the nearest bed until 1%, then farms again (no bed found: lie in one yourself and it learns it). Turn Auto Parry on for defense. Needs Meditation Type."},section.Body)
+ Text="Off. Enters the Inner World with J, walks to your Shadow and punches (M1). At 90% injury or 80% fatigue it sleeps (N) or rests in the nearest bed, then farms again (no bed found: lie in one yourself and it learns it). Turn Auto Parry on for defense. Needs Meditation Type."},section.Body)
 local button
 
 local function release(item)
@@ -4004,7 +4018,7 @@ local function releaseAll()
 end
 local function tap(key)
  local ok=pcall(function()vim:SendKeyEvent(true,key,false,game)end)
- if ok then table.insert(state.Held,{Key=key,At=os.clock()+.06})end
+ if ok then table.insert(state.Held,{Key=key,At=os.clock()+.06});state.LastInput={At=os.clock(),What="key "..key.Name}end
  return ok
 end
 -- Click below or beside the hub window so the punch reaches the game instead of the hub.
@@ -4029,19 +4043,25 @@ local function click()
  local x,y=clickPoint()
  if not x then return nil end
  local ok=pcall(function()vim:SendMouseButtonEvent(x,y,0,true,game,0)end)
- if ok then table.insert(state.Held,{Mouse=true,X=x,Y=y,At=os.clock()+.05})end
+ if ok then table.insert(state.Held,{Mouse=true,X=x,Y=y,At=os.clock()+.05});state.LastInput={At=os.clock(),What=string.format("click (%d,%d)",x,y)}end
  return ok
+end
+local function endRecording(reason)
+ local r=recorder()
+ if r then pcall(r.Stop,reason,REC_BY)end
 end
 local function stop(reason)
  if not state.Enabled then return end
- state.Enabled=false;state.Run+=1;state.Resting=false;releaseAll()
+ state.Enabled=false;state.Run+=1;releaseAll()
  -- Cancel a bed walk in progress.
  local humanoid=player.Character and player.Character:FindFirstChildOfClass("Humanoid")
  local root=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
  if humanoid and root and state.Walking then state.Walking=false;pcall(function()humanoid:MoveTo(root.Position)end)end
  button.Text="Auto Shadow Farm: OFF"
- status.Text=string.format("%s Entries: %d, kicked out: %d, punches: %d, bed rests: %d.",reason,state.Entries,state.Kicks,state.Clicks,state.Rests or 0)
- log("STOP "..reason);save()
+ status.Text=string.format("%s Entries: %d, kicked out: %d, punches: %d, rests: %d, respawns: %d.",reason,state.Entries,state.Kicks,state.Clicks,state.Rests or 0,state.Deaths or 0)
+ log(string.format("STOP %s (ran %.0f min, rests=%d, respawns=%d)",reason,(os.clock()-(state.StartedAt or os.clock()))/60,state.Rests or 0,state.Deaths or 0))
+ state.Resting=false;save()
+ endRecording("Auto Shadow stopped: "..reason)
 end
 -- Every Live model named Shadow, nearest first. Another player's Shadow may share the name; the first sighting logs its fields to find an owner tag.
 local function findShadow(root)
@@ -4087,6 +4107,11 @@ local function worstInjury(character)
   if amount and (not worst or amount>worst)then worst,name=amount,key end
  end
  return worst,name
+end
+-- Character.Fatigue NumberValue, 0-100 (SP-033).
+local function fatigueOf(character)
+ local value=character and character:FindFirstChild("Fatigue")
+ return value and value:IsA("ValueBase") and tonumber(value.Value) or nil
 end
 local function alive(run)return state.Enabled and not state.Closed and state.Run==run end
 -- Waits while chat/menu is open (the Heartbeat sets Paused). Returns false once the farm is stopped.
@@ -4226,6 +4251,7 @@ local function useBed(bed,root,attempt)
     vim:SendMouseMoveEvent(x,y,game);task.wait(.05)
     vim:SendMouseButtonEvent(x,y,0,true,game,0);task.wait(.06);vim:SendMouseButtonEvent(x,y,0,false,game,0)
    end)
+   state.LastInput={At=os.clock(),What=string.format("bed click (%d,%d)",x,y)}
    return ok and string.format("mouse(%d,%d)",x,y) or "mouse_failed"
   end
  end
@@ -4240,8 +4266,8 @@ local function bedState(humanoid,root)
 end
 -- Getting out of the bed (SP-109). User: "you get locked into place" in a bed, and v2.1 "never got out the bed". v2.1 pressed Space only
 -- when Sit/Anchored/PlatformStand was set, so any other lock left you there. Now it tests whether you can actually walk (6 studs ahead,
--- 1.5 s), and if not tries in turn: Space, clicking the bed again (beds may toggle), Space, jump; it stops with a clear status if
--- you're still stuck. The attributes the bed changed are logged (BEDATTR) so the real lock can be identified.
+-- 1.5 s), and if not tries each step in turn (Space, clicking the bed again, N to end a sleep, jump). The attributes the bed changed are
+-- logged (BEDATTR) so the real lock can be identified.
 local function snapshot(character)
  local copy={}
  for key,value in pairs(character:GetAttributes())do copy[key]=value end
@@ -4258,7 +4284,7 @@ local function canMove(run,humanoid,root)
  humanoid:MoveTo(root.Position)
  return moved>1.5,moved
 end
-local function getUp(run,character,humanoid,root,bed,before)
+local function getUp(run,character,humanoid,root,bed,before,steps)
  log(string.format("BEDSTATE before getting up %s walkSpeed=%.1f jumpPower=%.1f",bedState(humanoid,root),humanoid.WalkSpeed,humanoid.JumpPower))
  if before then
   for key,value in pairs(character:GetAttributes())do
@@ -4267,9 +4293,9 @@ local function getUp(run,character,humanoid,root,bed,before)
    end
   end
  end
- local steps={"none","space","bed","space","jump"}
- for attempt,step in ipairs(steps)do
+ for attempt,step in ipairs(steps or {"none","space","bed","space","jump"})do
   if step=="space" then tap(Enum.KeyCode.Space)
+  elseif step=="n" then tap(Enum.KeyCode.N)
   elseif step=="bed" then if bed then useBed(bed,root,1)else step="bed(unknown)" end
   elseif step=="jump" then humanoid.Jump=true end
   if step~="none" and not waitFor(run,1)then return false end
@@ -4278,8 +4304,58 @@ local function getUp(run,character,humanoid,root,bed,before)
   log(string.format("GETUP try=%d via=%s moved=%.1f free=%s %s walkSpeed=%.1f",attempt,step,moved,tostring(free),bedState(humanoid,root),humanoid.WalkSpeed))
   if free then return true end
  end
- stop("Healed, but couldn't get out of the bed (tried Space, the bed and jumping). See the Auto Shadow log.")
  return false
+end
+-- If no step frees you, the farm stays on and waits for you to get up (SP-110: v2.2 switched itself off here), retrying the steps
+-- every 30 s.
+local function waitUntilFree(run,character,humanoid,root,bed,before,steps)
+ if getUp(run,character,humanoid,root,bed,before,steps)then return true end
+ if not alive(run)then return false end
+ log("GETUP failed; waiting for you to get up (the farm continues once you can move)");save()
+ local retryAt=os.clock()+30
+ while true do
+  status.Text="Rested, but stuck in place. Get up yourself (Space or walk) and the farm continues."
+  if not waitFor(run,5)then return false end
+  local free,moved=canMove(run,humanoid,root)
+  if not alive(run)then return false end
+  if free then log(string.format("GETUP free after waiting moved=%.1f %s",moved,bedState(humanoid,root)));return true end
+  if os.clock()>=retryAt then
+   retryAt=os.clock()+30
+   if getUp(run,character,humanoid,root,bed,nil,steps)then return true end
+   if not alive(run)then return false end
+  end
+ end
+end
+-- Waits while a bed or sleep heals (SP-110). Progress = the worst injury or fatigue falling 0.5+.
+-- "done": injuries at HEALED_AT and fatigue at FATIGUE_OK or less, or progress stalled HEAL_STALL s (or REST_CAP passed) with injuries
+-- under STALL_RESUME and fatigue under FATIGUE_LIMIT. "none": nothing fell within checkFor s. "high": stalled above those limits.
+local function waitHealed(run,character,humanoid,root,label,checkFor,healing)
+ local started=os.clock()
+ local bestInjury,bestFatigue=worstInjury(character) or 0,fatigueOf(character) or 0
+ local progressAt,nextLog=os.clock(),0
+ while true do
+  local worst,name=worstInjury(character)
+  local tired=fatigueOf(character) or 0
+  worst=worst or 0
+  if worst<bestInjury-.5 then bestInjury,progressAt,healing=worst,os.clock(),true end
+  if tired<bestFatigue-.5 then bestFatigue,progressAt,healing=tired,os.clock(),true end
+  if worst<=HEALED_AT and tired<=FATIGUE_OK then
+   log(string.format("REST done (%s) secs=%.0f worst=%.1f fatigue=%.1f %s",label,os.clock()-started,worst,tired,bedState(humanoid,root)))
+   return "done",worst,tired
+  end
+  if not healing and os.clock()-started>=checkFor then
+   log(string.format("HEAL none (%s) after %ds worst=%.1f fatigue=%.1f",label,checkFor,worst,tired))
+   return "none",worst,tired
+  end
+  if healing and (os.clock()-progressAt>HEAL_STALL or os.clock()-started>REST_CAP) then
+   local low=worst<STALL_RESUME and tired<FATIGUE_LIMIT
+   log(string.format("REST %s (%s) stalled secs=%.0f worst=%.1f fatigue=%.1f %s",low and "done" or "high",label,os.clock()-started,worst,tired,bedState(humanoid,root)))
+   return low and "done" or "high",worst,tired
+  end
+  if os.clock()>=nextLog then nextLog=os.clock()+5;log(string.format("HEAL (%s) worst=%.1f limb=%s fatigue=%.1f %s",label,worst,tostring(name),tired,bedState(humanoid,root)))end
+  status.Text=string.format("%s: worst injury %s %d%%, fatigue %d%% (resume at %d%% / %d%%). Rests: %d",label,INJURIES[name] or "?",math.floor(worst),math.floor(tired),HEALED_AT,FATIGUE_OK,state.Rests)
+  if not waitFor(run,1)then return nil end
+ end
 end
 -- Leaving the Inner World may move you; wait until your position holds still for 1.5 s (up to 6 s) before searching.
 local function settle(run,root)
@@ -4290,6 +4366,20 @@ local function settle(run,root)
   elseif os.clock()-stillSince>=1.5 then break end
  end
  return true
+end
+-- Sleep where you stand (N; Trello: lowers fatigue to 0%). true = rested, false = didn't help (try a bed), nil = farm stopped.
+local function sleepRest(run,character,humanoid,root)
+ local before=snapshot(character)
+ status.Text="Resting: sleeping (N)..."
+ log("SLEEP press N "..bedState(humanoid,root))
+ if not tap(Enum.KeyCode.N)then return false end
+ if not waitFor(run,1)then return nil end
+ log(string.format("SLEEPSTATE %s walkSpeed=%.1f",bedState(humanoid,root),humanoid.WalkSpeed))
+ local result=waitHealed(run,character,humanoid,root,"Sleeping",SLEEP_CHECK,false)
+ if result==nil then return nil end
+ -- Wake up whether or not it helped; N may toggle sleep.
+ if not waitUntilFree(run,character,humanoid,root,nil,before,{"none","n","space","jump"})then return nil end
+ return result=="done"
 end
 -- The ClickDetector on the clicked part or its first few ancestors.
 local function detectorFor(target)
@@ -4302,10 +4392,11 @@ local function detectorFor(target)
  end
  return nil
 end
--- No bed found, or none healed (SP-102): wait for you to lie in one yourself. Your clicks and prompts are logged; once injuries
--- start falling, the bed you used (last clicked detector or prompt, else your seat, else the nearest clickable) is saved for this place.
+-- No bed found, or none healed (SP-102): wait for you to lie in one yourself. Your clicks and prompts are logged; once injuries or
+-- fatigue start falling, the bed you used (last clicked detector or prompt, else your seat, else the nearest clickable) is saved for this
+-- place. It waits as long as it takes (SP-110: v2.2 gave up after 10 min).
 local function manualRest(run,character,humanoid,root,why)
- local started,mouse=os.clock(),player:GetMouse()
+ local mouse=player:GetMouse()
  local lastUse,connections,before=nil,{},snapshot(character)
  log("WAITBED start ("..why..") "..bedState(humanoid,root));save()
  table.insert(connections,input.InputBegan:Connect(function(io)
@@ -4320,65 +4411,74 @@ local function manualRest(run,character,humanoid,root,why)
   log("WAITBED prompt "..prompt:GetFullName():sub(-90).." action="..tostring(prompt.ActionText))
  end))
  local function finish()for _,connection in ipairs(connections)do connection:Disconnect()end end
- local best,healing,progressAt,nextLog=worstInjury(character) or 0,false,os.clock(),0
+ local learned=false
  while true do
-  if not waitFor(run,1)then finish();return end
-  local worst,name=worstInjury(character)
-  worst=worst or 0
-  if os.clock()>=nextLog then nextLog=os.clock()+5;log(string.format("WAITBED worst=%.1f limb=%s %s",worst,tostring(name),bedState(humanoid,root)))end
-  if worst<best-.5 then
-   best,progressAt=worst,os.clock()
-   if not healing then
-    healing=true
-    local holder,kind
-    if lastUse and os.clock()-lastUse.At<=60 and lastUse.Holder.Parent then holder,kind=lastUse.Holder,lastUse.Kind end
-    if not holder and humanoid.SeatPart then holder,kind=humanoid.SeatPart,"seat" end
-    if not holder then
-     local near=scanClickables(root,12)[1]
-     if near then holder,kind=near.Holder,near.Kind end
-    end
-    local position=holder and holderPosition(holder)
-    local saved=position and kind~="seat" and learnBed(holder,position,kind)
-    log(string.format("WAITBED healing started worst=%.1f bed=%s kind=%s pos=%s saved=%s",worst,holder and holder:GetFullName():sub(-90) or "unknown",
-     tostring(kind),position and string.format("(%.1f,%.1f,%.1f)",position.X,position.Y,position.Z) or "?",tostring(saved)))
-    save()
-   end
+  -- Wait for healing to start.
+  local bestInjury,bestFatigue,nextLog=worstInjury(character) or 0,fatigueOf(character) or 0,0
+  while true do
+   if not waitFor(run,1)then finish();return end
+   local worst,name=worstInjury(character)
+   local tired=fatigueOf(character) or 0
+   worst=worst or 0
+   if os.clock()>=nextLog then nextLog=os.clock()+5;log(string.format("WAITBED worst=%.1f limb=%s fatigue=%.1f %s",worst,tostring(name),tired,bedState(humanoid,root)))end
+   if worst<bestInjury-.5 or tired<bestFatigue-.5 then break end
+   bestInjury,bestFatigue=math.max(bestInjury,worst),math.max(bestFatigue,tired)
+   status.Text=string.format("%s Lie in a bed yourself: the farm remembers it and carries on when you're healed (worst injury %s %d%%, fatigue %d%%).",
+    why,INJURIES[name] or "?",math.floor(worst),math.floor(tired))
   end
-  -- Healing that stalls at a low level counts as done (SP-109), so a bed that stops short of 1% can't hold the farm forever.
-  local plateau=healing and os.clock()-progressAt>HEAL_STALL and worst<=PLATEAU_OK
-  if worst<=HEALED_AT or plateau then
+  if not learned then
+   learned=true
+   local holder,kind
+   if lastUse and os.clock()-lastUse.At<=60 and lastUse.Holder.Parent then holder,kind=lastUse.Holder,lastUse.Kind end
+   if not holder and humanoid.SeatPart then holder,kind=humanoid.SeatPart,"seat" end
+   if not holder then
+    local near=scanClickables(root,12)[1]
+    if near then holder,kind=near.Holder,near.Kind end
+   end
+   local position=holder and holderPosition(holder)
+   local saved=position and kind~="seat" and learnBed(holder,position,kind)
+   log(string.format("WAITBED healing started bed=%s kind=%s pos=%s saved=%s",holder and holder:GetFullName():sub(-90) or "unknown",
+    tostring(kind),position and string.format("(%.1f,%.1f,%.1f)",position.X,position.Y,position.Z) or "?",tostring(saved)))
+   save()
+  end
+  local result=waitHealed(run,character,humanoid,root,"Healing (your bed)",HEAL_CHECK,true)
+  if result==nil then finish();return end
+  if result=="done" then
    finish()
-   log(string.format("REST done (you chose the bed)%s secs=%.0f worst=%.1f %s",plateau and " plateau" or "",os.clock()-started,worst,bedState(humanoid,root)))
    local bed
    if lastUse and lastUse.Holder.Parent then
     local object=lastUse.Kind=="prompt" and lastUse.Holder:FindFirstChildOfClass("ProximityPrompt") or lastUse.Holder:FindFirstChildOfClass("ClickDetector")
     local position=holderPosition(lastUse.Holder)
     if object and position then bed={Object=object,Holder=lastUse.Holder,Position=position,Kind=lastUse.Kind}end
    end
-   if not getUp(run,character,humanoid,root,bed,before)then return end
+   if not waitUntilFree(run,character,humanoid,root,bed,before)then return end
    state.Rests+=1;return true
   end
-  if not healing and os.clock()-started>MANUAL_WAIT then finish();stop(string.format("No bed used in %d min (injuries at %d%%).",MANUAL_WAIT/60,math.floor(worst)));return end
-  if healing and os.clock()-progressAt>HEAL_STALL then finish();stop(string.format("Healing stopped at %d%% for %ds.",math.floor(worst),HEAL_STALL));return end
-  status.Text=healing and string.format("Healing: worst injury %s %d%% (resume at %d%%). The farm will use this bed next time.",INJURIES[name] or "?",math.floor(worst),HEALED_AT)
-   or string.format("%s Lie in a bed yourself: the farm remembers it and resumes at %d%% (worst injury %s %d%%).",why,HEALED_AT,INJURIES[name] or "?",math.floor(worst))
+  -- Stalled with injuries or fatigue still high: keep waiting (another bed, or the same one again).
+  why="Healing stopped while still high."
  end
 end
-local function rest(run,character,humanoid,root,limb,amount)
- local started=os.clock()
- log(string.format("REST start limb=%s max=%.1f pos=(%.1f,%.1f,%.1f)",limb,amount,root.Position.X,root.Position.Y,root.Position.Z));save()
+local function rest(run,character,humanoid,root,limb,amount,tired)
+ local injured=amount>=INJURY_LIMIT
+ log(string.format("REST start reason=%s limb=%s max=%.1f fatigue=%.1f pos=(%.1f,%.1f,%.1f)",injured and "injury" or "fatigue",limb,amount,tired,root.Position.X,root.Position.Y,root.Position.Z));save()
  -- Leave the Inner World first: J toggles it.
- for try=1,2 do
+ for try=1,3 do
   if not findShadow(root)then break end
-  status.Text="Injured: leaving the Inner World..."
+  status.Text="Resting: leaving the Inner World..."
   if tap(Enum.KeyCode.J)then log("PRESS J (leave the Inner World) try "..try)end
   local deadline=os.clock()+5
   while findShadow(root) and os.clock()<deadline do if not waitFor(run,.2)then return end end
  end
- if findShadow(root)then stop("Injured, but couldn't leave the Inner World.");return end
+ if findShadow(root)then stop("Needed a rest, but couldn't leave the Inner World (pressed J 3 times).");return end
  if state.InWorld then state.InWorld=false;log("GONE Shadow vanished (left to rest)")end
- status.Text="Injured: looking for a bed..."
  if not settle(run,root)then return end
+ -- Tired but not injured: sleep where you stand first.
+ if not injured then
+  local slept=sleepRest(run,character,humanoid,root)
+  if slept==nil then return end
+  if slept then state.Rests+=1;return true end
+ end
+ status.Text="Resting: looking for a bed..."
  local beds
  for scan=1,3 do
   local learned
@@ -4400,12 +4500,18 @@ local function rest(run,character,humanoid,root,limb,amount)
    if index>15 then break end
    log(string.format("NEARBY %s at %.1f studs kind=%s",item.Holder:GetFullName():sub(-100),item.Distance,item.Kind))
   end
-  return manualRest(run,character,humanoid,root,string.format("%s at %d%% and no bed found within %d studs.",INJURIES[limb],math.floor(amount),BED_SEARCH))
+  -- No bed: try sleeping here before asking you (skipped if it was just tried).
+  if injured then
+   local slept=sleepRest(run,character,humanoid,root)
+   if slept==nil then return end
+   if slept then state.Rests+=1;return true end
+  end
+  return manualRest(run,character,humanoid,root,string.format("No bed found within %d studs.",BED_SEARCH))
  end
  for index=1,math.min(BEDS_TRIED,#beds)do
   local bed=beds[index]
   local within=math.clamp((tonumber(bed.Reach)or 10)-3,4,8)
-  status.Text=string.format("Injured (%s %d%%): walking to a bed %.0f studs away...",INJURIES[limb],math.floor(amount),bed.Distance)
+  status.Text=string.format("Resting: walking to a bed %.0f studs away...",bed.Distance)
   if not walkTo(run,humanoid,root,bed.Position,within)then
    if not alive(run)then return end
    log("BED unreachable "..bed.Holder:GetFullName():sub(-80))
@@ -4414,51 +4520,85 @@ local function rest(run,character,humanoid,root,limb,amount)
    for use=1,BED_USES do
     local before=worstInjury(character) or 0
     local how=useBed(bed,root,use)
-    log(string.format("BED use=%d via=%s worst=%.1f %s",use,how,before,bedState(humanoid,root)))
+    log(string.format("BED use=%d via=%s worst=%.1f fatigue=%.1f %s",use,how,before,fatigueOf(character) or -1,bedState(humanoid,root)))
     if not waitFor(run,1)then return end
     log("BEDSTATE "..bedState(humanoid,root))
-    -- Healing must show within HEAL_CHECK seconds; after that, it waits until 1%, or until healing stalls for HEAL_STALL seconds
-    -- (done if the worst injury is at PLATEAU_OK or less, otherwise stop). REST_CAP is a last-resort limit.
-    local checkAt,best,nextLog,progressAt=os.clock()+HEAL_CHECK,before,0,os.clock()
-    while true do
-     local worst,name=worstInjury(character)
-     worst=worst or 0
-     local stalled=checkAt==math.huge and os.clock()-progressAt>HEAL_STALL
-     if worst<=HEALED_AT or (stalled and worst<=PLATEAU_OK) then
-      log(string.format("REST done%s secs=%.0f worst=%.1f %s",stalled and " plateau" or "",os.clock()-started,worst,bedState(humanoid,root)))
-      if not getUp(run,character,humanoid,root,bed,attributes)then return end
-      state.Rests+=1;return true
+    local result,worst,left=waitHealed(run,character,humanoid,root,"Resting in bed",HEAL_CHECK,false)
+    if result==nil then return end
+    if result=="done" then
+     if not waitUntilFree(run,character,humanoid,root,bed,attributes)then return end
+     state.Rests+=1;return true
+    end
+    if result=="high" then
+     -- The bed healed but stopped short. Get up; if only fatigue is left, sleep it off, otherwise try the next bed.
+     if not waitUntilFree(run,character,humanoid,root,bed,attributes)then return end
+     if worst<STALL_RESUME and left>=FATIGUE_LIMIT then
+      local slept=sleepRest(run,character,humanoid,root)
+      if slept==nil then return end
+      if slept then state.Rests+=1;return true end
      end
-     if stalled then stop(string.format("Healing stopped at %d%% for %ds.",math.floor(worst),HEAL_STALL));return end
-     if os.clock()-started>REST_CAP then stop(string.format("Rested %d min and injuries are still at %d%%.",REST_CAP/60,math.floor(worst)));return end
-     if os.clock()>=nextLog then nextLog=os.clock()+5;log(string.format("HEAL worst=%.1f limb=%s %s",worst,tostring(name),bedState(humanoid,root)))end
-     status.Text=string.format("Resting in bed: worst injury %s %d%% (resume at %d%%). Bed rests: %d",INJURIES[name] or "?",math.floor(worst),HEALED_AT,state.Rests)
-     if worst<best-.5 then best=worst;checkAt=math.huge;progressAt=os.clock()end
-     if os.clock()>=checkAt then log(string.format("HEAL none after %ds (worst %.1f)",HEAL_CHECK,worst));break end
-     if not waitFor(run,1)then return end
+     break
     end
    end
   end
  end
- return manualRest(run,character,humanoid,root,"The bed didn't heal injuries.")
+ return manualRest(run,character,humanoid,root,"The bed didn't heal you.")
 end
 local function toggle()
  if state.Closed then return end
- if state.Enabled then stop("Off.");return end
+ if state.Enabled then
+  -- SP-110: "it keeps going off". Every v2.1 STOP that the user didn't explain was "Off.", the checkbox's own stop; log what the farm last
+  -- pressed so a click landing on the hub can be told apart from you turning it off.
+  local mouse=input:GetMouseLocation()
+  local last=state.LastInput
+  log(string.format("TOGGLE off: checkbox pressed. farm's last input=%s %.2f s before, mouse=(%d,%d) focused=%s hubVisible=%s",
+   last and last.What or "none",last and os.clock()-last.At or -1,mouse.X,mouse.Y,tostring(state.Focused),tostring(ui.Gui.Enabled and ui.Window.Visible)))
+  stop("Off.");return
+ end
  if not vim then status.Text="Key input is unavailable in this executor.";return end
  local character=player.Character
  local humanoid=character and character:FindFirstChildOfClass("Humanoid")
  if not humanoid or humanoid.Health<=0 then status.Text="Wait until your character is alive.";return end
  state.RunPath="AnomalyHub/universal/sparkling_auto_shadow_"..os.time()..".txt"
- state.Enabled=true;state.Lines={};state.Character=character;state.Entries=0;state.Kicks=0;state.Clicks=0;state.Tries=0
- state.UnfocusedClicks=0;state.UnfocusedJ=0;state.Aims=0;state.Rests=0;state.Resting=false;state.Walking=false
+ state.Enabled=true;state.Lines={};state.Character=character;state.Entries=0;state.Kicks=0;state.Clicks=0;state.Tries=0;state.JRounds=0
+ state.UnfocusedClicks=0;state.UnfocusedJ=0;state.Aims=0;state.Rests=0;state.Deaths=0;state.RestErrors=0;state.Resting=false;state.Walking=false
  state.InWorld=false;state.MissingSince=nil;state.NextJ=0;state.NextMove=0;state.NextClick=0;state.NextPower=0;state.NextSave=0;state.Paused=false
+ state.Respawning=false;state.AliveSince=nil;state.StartedAt=os.clock();state.LastInput=nil;state.NextRest=0
  table.clear(state.Seen)
  button.Text="Auto Shadow Farm: ON";status.Text="On."
- log("START power="..tostring(power(character)).." focused="..tostring(state.Focused))
+ log("START power="..tostring(power(character)).." focused="..tostring(state.Focused).." fatigue="..tostring(fatigueOf(character)))
 end
 button=ui.Checkbox(section.Body,"Auto Shadow Farm","Auto Shadow Farm: OFF",toggle)
 button.Position=UDim2.fromOffset(14,0)
+
+local function beginRest(character,humanoid,root,limb,worst,tired)
+ state.Resting=true;releaseAll()
+ local thisRun=state.Run
+ state.RecordId+=1
+ local r=recorder()
+ local recording=r and r.Start(REC_BY)
+ log("REST recorder "..(recording and "started (sparkling_sleep_latest.txt)" or (r and "already running" or "not loaded")))
+ task.spawn(function()
+  local ok,result=pcall(rest,thisRun,character,humanoid,root,limb,worst,tired)
+  if not ok then
+   state.RestErrors+=1
+   log("REST error "..tostring(result):sub(1,200));save()
+   if state.RestErrors>=3 then stop("Rest failed 3 times (see the Auto Shadow log).");return end
+   -- Try again in 10 s.
+   if alive(thisRun)then state.NextRest=os.clock()+10;state.Resting=false end
+   return
+  end
+  if result==true and alive(thisRun)then
+   state.Resting=false;state.MissingSince=nil;state.Tries=0;state.JRounds=0;state.NextJ=0
+   log("RESUME farming after rest "..state.Rests);save()
+   local id=state.RecordId
+   task.delay(20,function()if state.RecordId==id and not state.Resting then endRecording("Auto Shadow resumed farming 20 s ago.")end end)
+  elseif alive(thisRun)then
+   -- Not expected (every rest path returns true or stops the farm); farm on rather than hang in the rest phase.
+   log("REST ended without a result ("..tostring(result).."); farming again for 30 s");state.NextRest=os.clock()+30;state.Resting=false;save()
+  end
+ end)
+end
 
 controller.Connect(run.Heartbeat,function()
  local now=os.clock()
@@ -4470,7 +4610,23 @@ controller.Connect(run.Heartbeat,function()
  local character=player.Character
  local humanoid=character and character:FindFirstChildOfClass("Humanoid")
  local root=character and character:FindFirstChild("HumanoidRootPart")
- if character~=state.Character or not humanoid or humanoid.Health<=0 or not root then stop("Character changed or died.");return end
+ -- Died or respawned (SP-110: v2.2 switched off here): cancel any rest, wait until the character has been alive for 3 s, then carry on.
+ if state.Respawning or character~=state.Character or not humanoid or humanoid.Health<=0 or not root then
+  if not state.Respawning then
+   state.Respawning=true;state.Run+=1;state.Resting=false;state.Walking=false;state.InWorld=false;state.AliveSince=nil;releaseAll()
+   log("RESPAWN waiting (character changed or died)");save()
+  end
+  if character and humanoid and humanoid.Health>0 and root then
+   state.AliveSince=state.AliveSince or now
+   if now-state.AliveSince>=3 then
+    state.Respawning=false;state.Character=character;state.Deaths+=1;state.MissingSince=nil;state.Tries=0;state.JRounds=0;state.NextJ=0
+    log("RESPAWN resumed power="..tostring(power(character)));save()
+    endRecording("Auto Shadow respawned.")
+   end
+  else state.AliveSince=nil end
+  status.Text="Waiting for your character to respawn..."
+  return
+ end
  if input:GetFocusedTextBox() or guiService.MenuIsOpen then
   if not state.Paused then state.Paused=true;releaseAll();log("PAUSE chat or menu")end
   status.Text="Paused while chat or the Roblox menu is open."
@@ -4482,20 +4638,12 @@ controller.Connect(run.Heartbeat,function()
   if now>=state.NextSave then state.NextSave=now+10;save()end
   return
  end
- -- Injury (SP-043 stopped at 90% on an arm; SP-091 rests instead): punching injures the arms (57/79 while farming, SP-033),
- -- and any of the six limbs at 90%+ starts a bed rest until every limb is at 1% or less.
+ -- Injury (SP-043 stopped at 90% on an arm; SP-091 rests instead): punching injures the arms (57/79 while farming, SP-033). Any limb at
+ -- 90%+, or fatigue at 80%+ (SP-110), starts a rest.
  local worst,limb=worstInjury(character)
- if worst and worst>=INJURY_LIMIT then
-  state.Resting=true;releaseAll()
-  local thisRun=state.Run
-  task.spawn(function()
-   local ok,result=pcall(rest,thisRun,character,humanoid,root,limb,worst)
-   if not ok then log("REST error "..tostring(result):sub(1,200));stop("Bed rest failed (see the Auto Shadow log).");return end
-   if result==true and alive(thisRun)then
-    state.Resting=false;state.MissingSince=nil;state.Tries=0;state.NextJ=0
-    log("RESUME farming after bed rest "..state.Rests);save()
-   end
-  end)
+ local tired=fatigueOf(character) or 0
+ if ((worst and worst>=INJURY_LIMIT) or tired>=FATIGUE_LIMIT) and now>=(state.NextRest or 0) then
+  beginRest(character,humanoid,root,limb,worst or 0,tired)
   return
  end
  if now>=state.NextPower then
@@ -4503,7 +4651,7 @@ controller.Connect(run.Heartbeat,function()
   local left,right=character:FindFirstChild("LeftArmInj"),character:FindFirstChild("RightArmInj")
   log("POWER "..tostring(power(character)).." focused="..tostring(state.Focused).." punches="..state.Clicks.." unfocusedPunches="..state.UnfocusedClicks
    .." arms="..tostring(left and tonumber(left.Value) and math.floor(left.Value) or "?").."/"..tostring(right and tonumber(right.Value) and math.floor(right.Value) or "?")
-   .." worstInjury="..tostring(worst and math.floor(worst) or "?").." "..tostring(limb))
+   .." worstInjury="..tostring(worst and math.floor(worst) or "?").." "..tostring(limb)..string.format(" fatigue=%.2f",tired))
  end
  if now>=state.NextSave then state.NextSave=now+10;save()end
  local shadow,distance,count=findShadow(root)
@@ -4512,15 +4660,23 @@ controller.Connect(run.Heartbeat,function()
   state.MissingSince=state.MissingSince or now
   -- J toggles the Inner World, so it is only pressed after the Shadow has been missing for a while.
   if now-state.MissingSince>=2.5 and now>=state.NextJ then
-   if state.Tries>=3 then stop("Pressed J 3 times and no Shadow appeared. The Inner World needs Meditation Type.");return end
+   if state.Tries>=3 then
+    -- SP-110: retry instead of switching off (you may still be lying down, or the key went to another window). Space first, then J again.
+    state.JRounds+=1
+    if state.JRounds>=4 then stop("Pressed J 12 times and no Shadow appeared. The Inner World needs Meditation Type.");return end
+    log(string.format("PRESS J gave no Shadow 3 times (round %d of 3); pressing Space and retrying in 15 s. %s",state.JRounds,bedState(humanoid,root)))
+    tap(Enum.KeyCode.Space)
+    state.Tries=0;state.NextJ=now+15;save()
+    return
+   end
    state.NextJ=now+6;state.Tries+=1
    if not state.Focused then state.UnfocusedJ+=1 end
    if tap(Enum.KeyCode.J)then log("PRESS J (enter the Inner World) try "..state.Tries.." focused="..tostring(state.Focused))else stop("Key input failed.");return end
   end
-  status.Text=string.format("Entering the Inner World... Entries: %d · kicked out: %d",state.Entries,state.Kicks)
+  status.Text=string.format("Entering the Inner World... Entries: %d · kicked out: %d · rests: %d",state.Entries,state.Kicks,state.Rests)
   return
  end
- state.MissingSince=nil;state.Tries=0
+ state.MissingSince=nil;state.Tries=0;state.JRounds=0
  if not state.InWorld then
   state.InWorld=true;state.Entries+=1
   log(string.format("ENTER Shadow at %.1f studs, %d Shadow model(s) in range",distance,count))
@@ -4547,8 +4703,8 @@ controller.Connect(run.Heartbeat,function()
    log("AIM camera="..tostring(workspace.CurrentCamera.CFrame.LookVector).." mouse="..tostring(mouse.UnitRay.Direction).." toShadow="..tostring((target-root.Position).Unit))
   end
  end
- status.Text=string.format("Fighting your Shadow (%.0f studs). Entries: %d · kicked out: %d · punches: %d · power %s",
-  distance,state.Entries,state.Kicks,state.Clicks,tostring(power(character) and math.floor(power(character)) or "?"))
+ status.Text=string.format("Fighting your Shadow (%.0f studs). Entries: %d · kicked out: %d · punches: %d · rests: %d · power %s",
+  distance,state.Entries,state.Kicks,state.Clicks,state.Rests,tostring(power(character) and math.floor(power(character)) or "?"))
 end)
 -- Tabbed out (SP-035): the farm keeps going; focus changes are logged to check whether key/mouse input still reaches the game.
 controller.Connect(input.WindowFocusReleased,function()state.Focused=false;if state.Enabled then log("FOCUS lost");save()end end)
@@ -6900,6 +7056,296 @@ controller.RegisterCleanup(function()
  for model in pairs(stands)do removeStand(model)end
  for _,group in ipairs(groups)do if group.Gui then group.Gui:Destroy()end end
 end)
+
+end)()
+;(function()
+-- Sparkling Sleep Recorder v1 (SP-110). Read-only capture of sleeping (N) or resting in a bed, for Auto Shadow's rest phase. Sends nothing.
+-- User: Auto Shadow "is supposed to sleep heal fatigue and injuries, then go back up and start fighting the shadow again continuously,
+-- it keeps going off". What a bed or N actually does (lock, animation, heal rate, how to get up) has never been recorded (SP-091..SP-109).
+-- Trello: N (Sleep) lowers fatigue to 0%, hospital beds clear fatigue and injuries. Fatigue and <Part>Inj are Character NumberValues (SP-033).
+-- Records: fatigue/injuries/health and the humanoid's lock state (only on change, or every 10 s), character attributes and children,
+-- animations, your keys and clicks (with the clicked object), prompts, server->you remotes, your own requests (shared hooks; manual
+-- recordings only, since Auto Shadow's rests run beside Auto Parry), sleep/bed-looking screen text and screens, and screen effects. Auto Shadow starts it for every rest.
+local env=(getgenv and getgenv()) or shared
+local controller=env.__AnomalyUniversalController
+if type(controller)~="table" or controller.Profile~="Sparkling" then return end
+local players=game:GetService("Players")
+local rs=game:GetService("ReplicatedStorage")
+local input=game:GetService("UserInputService")
+local prompts=game:GetService("ProximityPromptService")
+local lighting=game:GetService("Lighting")
+local player=players.LocalPlayer
+local ui=controller.UI
+if not ui.Pages.Recorders then return end
+
+local LATEST="AnomalyHub/universal/sparkling_sleep_latest.txt"
+local MAX_LINES,MAX_SECONDS=20000,1800
+local NOISY={StopDash=true,Effects=true,Cooldown=true,CooldownNT=true}
+-- Attributes that change every frame or every press; logged at most every 2 s each.
+local CHATTY={CameraLooker=true,LastPress=true,LastTick=true,MousePosition=true,MouseHit=true}
+local INJURIES={"HeadInj","TorsoInj","LeftArmInj","RightArmInj","LeftLegInj","RightLegInj"}
+local WORDS={"sleep","bed","rest","heal","fatigue","wake","tired","injur","pod","hospital","nap","energy"}
+local rec={Active=false}
+local card=ui.Card(ui.Pages.Recorders,"SPARKLING SLEEP RECORDER","Start, then sleep (N) or lie in a bed, wait until you're healed and get up, then Stop. Auto Shadow also runs it during every rest. Sends nothing.",196)
+card.LayoutOrder=36
+local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,116),Size=UDim2.new(1,-28,0,66),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
+ TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
+ Text="Ready. Up to 30 minutes. Your own requests are recorded only on manual recordings with Auto Parry off. Output: sparkling_sleep_latest.txt"},card)
+local button
+
+local function sample(item,depth)
+ depth=depth or 0
+ local kind=typeof(item)
+ if kind=="string" then return string.format("%q",item:sub(1,200))end
+ if kind=="Instance" then return item:GetFullName():sub(1,160)end
+ if kind=="Vector3" then return string.format("(%.1f,%.1f,%.1f)",item.X,item.Y,item.Z)end
+ if kind=="CFrame" then return string.format("CF(%.1f,%.1f,%.1f)",item.X,item.Y,item.Z)end
+ if kind=="number" then return string.format("%.4g",item)end
+ if kind=="table" then
+  if depth>=2 then return "{...}"end
+  local parts,n={},0
+  pcall(function()
+   for key,value in next,item do
+    n+=1;if n>16 then table.insert(parts,"...");break end
+    table.insert(parts,tostring(key):sub(1,40).."="..sample(value,depth+1))
+   end
+  end)
+  return "{"..table.concat(parts,", ").."}"
+ end
+ return tostring(item):sub(1,120)
+end
+local function log(text)
+ if not rec.Active then return end
+ if #rec.Lines>=MAX_LINES then rec.Limited=true;return end
+ table.insert(rec.Lines,string.format("%.3f %s",os.clock()-rec.Started,text))
+end
+local function save()
+ if not rec.Lines or type(writefile)~="function" then return false end
+ if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+ local text="SPARKLING SLEEP RECORDER v1 // READ ONLY\nplace="..game.PlaceId.." started by="..tostring(rec.By)
+  .."\nBODY = fatigue, injuries, health and lock state (on change or every 10 s). ATTR/CHILD = your character's attributes and children."
+  .." ANIM = animation started. KEY/CLICK = your input (and the farm's), with the object under the mouse. PROMPT = proximity prompt."
+  .." IN = server->you remote. OUT/RETURN = your game's own request (shared hook). GUI = sleep/bed-looking text or a screen change."
+  .." FX = screen effect added or removed. MARK = Auto Shadow's own step.\n"..table.concat(rec.Lines,"\n")..(rec.Limited and "\nLINE LIMIT REACHED" or "")
+ local ok=pcall(writefile,LATEST,text)
+ if rec.Archive then pcall(writefile,rec.Archive,text)end
+ return ok
+end
+local function wordy(text)
+ text=tostring(text):lower()
+ for _,word in ipairs(WORDS)do if text:find(word,1,true)then return true end end
+ return false
+end
+local function connect(signal,callback)
+ table.insert(rec.Connections,signal:Connect(function(...)
+  if not rec.Active then return end
+  local ok,err=pcall(callback,...)
+  if not ok then log("CALLBACK_ERROR "..tostring(err):sub(1,200))end
+ end))
+end
+local function stop(reason)
+ if not rec.Active then return end
+ log("STOP "..reason)
+ local lines=#rec.Lines
+ local saved=save()
+ rec.Active=false
+ for _,connection in ipairs(rec.Connections)do pcall(function()connection:Disconnect()end)end
+ if rec.StopHooks then pcall(rec.StopHooks)end
+ status.Text=(saved and "Saved " or "Save failed for ")..lines.." lines to sparkling_sleep_latest.txt. "..reason
+ button.Text="Start Sleep Recorder"
+end
+local function number(character,name)
+ local value=character and character:FindFirstChild(name)
+ return value and value:IsA("ValueBase") and tonumber(value.Value) or nil
+end
+local function body(character)
+ local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+ local root=character and character:FindFirstChild("HumanoidRootPart")
+ local parts={string.format("fatigue=%s",tostring(number(character,"Fatigue") and string.format("%.2f",number(character,"Fatigue")) or "?"))}
+ for _,name in ipairs(INJURIES)do
+  local amount=number(character,name)
+  table.insert(parts,name:gsub("Inj","").."="..(amount and string.format("%.1f",amount) or "?"))
+ end
+ if humanoid then
+  table.insert(parts,string.format("hp=%.0f/%.0f state=%s sit=%s seat=%s platformStand=%s walkSpeed=%.1f jumpPower=%.1f autoRotate=%s",humanoid.Health,humanoid.MaxHealth,
+   (tostring(humanoid:GetState()):gsub("Enum.HumanoidStateType.","")),tostring(humanoid.Sit),humanoid.SeatPart and humanoid.SeatPart:GetFullName():sub(-60) or "none",
+   tostring(humanoid.PlatformStand),humanoid.WalkSpeed,humanoid.JumpPower,tostring(humanoid.AutoRotate)))
+ end
+ if root then table.insert(parts,string.format("anchored=%s pos=%s",tostring(root.Anchored),sample(root.Position)))end
+ return table.concat(parts," ")
+end
+-- Changes worth a BODY line: fatigue or an injury moving 0.5+, or any lock/state flag.
+local function bodyKey(character)
+ local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+ local root=character and character:FindFirstChild("HumanoidRootPart")
+ local key={math.floor((number(character,"Fatigue") or -1)*2)}
+ for _,name in ipairs(INJURIES)do table.insert(key,math.floor((number(character,name) or -1)*2))end
+ if humanoid then
+  table.insert(key,tostring(humanoid:GetState()));table.insert(key,tostring(humanoid.Sit));table.insert(key,tostring(humanoid.PlatformStand))
+  table.insert(key,math.floor(humanoid.WalkSpeed));table.insert(key,math.floor(humanoid.JumpPower))
+ end
+ if root then table.insert(key,tostring(root.Anchored))end
+ return table.concat(key,",")
+end
+local function watchCharacter(character)
+ if not character or rec.Watched[character] then return end
+ rec.Watched[character]=true
+ log("CHARACTER "..character:GetFullName().." "..body(character))
+ local attributes={}
+ for key,value in pairs(character:GetAttributes())do table.insert(attributes,"@"..key.."="..sample(value):sub(1,50))end
+ log("ATTR INITIAL "..table.concat(attributes," "):sub(1,3000))
+ connect(character.AttributeChanged,function(key)
+  -- At most one line a second per attribute (2 s for the known chatty ones), so fast-ticking values can't fill the file (SP-107).
+  local now=os.clock()
+  if now<(rec.Chatty[key] or 0) then return end
+  rec.Chatty[key]=now+((CHATTY[key] or key:find("Cooldown",1,true)) and 2 or 1)
+  log("ATTR @"..key.." = "..sample(character:GetAttribute(key)))
+ end)
+ connect(character.ChildAdded,function(child)log("CHILD ADDED "..child.ClassName.." "..child.Name..(child:IsA("ValueBase") and (" = "..sample(child.Value)) or ""))end)
+ connect(character.ChildRemoved,function(child)log("CHILD REMOVED "..child.ClassName.." "..child.Name)end)
+ local humanoid=character:FindFirstChildOfClass("Humanoid")
+ if humanoid then
+  connect(humanoid.StateChanged,function(old,new)log("STATE "..old.Name.." -> "..new.Name)end)
+  connect(humanoid.Seated,function(active,seat)log("SEATED "..tostring(active).." "..(seat and seat:GetFullName():sub(-80) or "none"))end)
+  connect(humanoid.Died,function()log("DIED "..body(character))end)
+  local animator=humanoid:FindFirstChildOfClass("Animator")
+  local source=animator or humanoid
+  connect(source.AnimationPlayed,function(track)
+   local animation=track.Animation
+   log(string.format("ANIM %s id=%s priority=%s looped=%s",track.Name,animation and animation.AnimationId or "?",tostring(track.Priority):gsub("Enum.AnimationPriority.",""),tostring(track.Looped)))
+  end)
+ end
+end
+local function watchGui(object)
+ if object:IsDescendantOf(ui.Gui) or not object:IsA("GuiObject")then return end
+ local isText=object:IsA("TextLabel") or object:IsA("TextButton")
+ if not isText then return end
+ if wordy(object.Text) or wordy(object.Name) then
+  if rec.GuiSeen<600 then rec.GuiSeen+=1;log("GUI NEW "..object:GetFullName():sub(1,160).." visible="..tostring(object.Visible).." text="..sample(object.Text))end
+ end
+ connect(object:GetPropertyChangedSignal("Text"),function()
+  if not (wordy(object.Text) or wordy(object.Name)) or rec.TextChanges>=3000 then return end
+  -- The HUD's FatiguePercent ticks constantly; one line per label every 5 s.
+  local now=os.clock()
+  if now<(rec.TextNext[object] or 0) then return end
+  rec.TextNext[object]=now+5;rec.TextChanges+=1
+  log("GUI TEXT "..object:GetFullName():sub(1,160).." = "..sample(object.Text))
+ end)
+end
+local function start(by)
+ if rec.Active then return false end
+ local stamp=os.time()
+ rec={Active=true,Started=os.clock(),Lines={},Connections={},Watched={},Chatty={},Noisy={},TextNext={},GuiSeen=0,TextChanges=0,By=by or "you",
+  Archive="AnomalyHub/universal/sparkling_sleep_"..stamp..".txt"}
+ button.Text="Stop Sleep Recorder"
+ log("START unix="..stamp.." by="..rec.By)
+ watchCharacter(player.Character)
+ connect(player.CharacterAdded,function(character)log("RESPAWN new character");watchCharacter(character)end)
+ -- Server->you remotes.
+ local count=0
+ for _,object in ipairs(rs:GetDescendants())do
+  if object:IsA("RemoteEvent")then
+   count+=1
+   local path=object:GetFullName()
+   connect(object.OnClientEvent,function(...)
+    if NOISY[object.Name]then
+     local now=os.clock()
+     if now<(rec.Noisy[object] or 0) then return end
+     rec.Noisy[object]=now+.5
+    end
+    log("IN "..path.." "..sample(table.pack(...)))
+   end)
+  end
+ end
+ log("COVERAGE incoming RemoteEvents="..count)
+ -- Auto Shadow's rests run beside Auto Parry, which needs the shared request hooks; those recordings leave them alone.
+ if rec.By~="you" then log("COVERAGE outgoing: skipped for "..rec.By.." (Auto Parry may need the request hooks)")
+ elseif type(controller.BeginSparklingRemoteObservation)=="function"then
+  local targets={}
+  for _,object in ipairs(rs:GetDescendants())do
+   if object:IsA("RemoteEvent") or object:IsA("RemoteFunction")then targets[object]=object:GetFullName()end
+  end
+  local ok,stopHooks,detail=pcall(controller.BeginSparklingRemoteObservation,targets,function(remote,direction,args,started,id,result,path)
+   if not rec.Active then return end
+   local name=tostring(path)
+   -- M1 and dash requests repeat while fighting; keep at most two a second per request name.
+   local first=type(args)=="table" and tostring(args[1]) or ""
+   local key=name..first
+   local now=os.clock()
+   if now<(rec.Noisy[key] or 0) then return end
+   rec.Noisy[key]=now+.5
+   log(direction.." "..name.." call="..id.." args="..sample(args)..(result and (" result="..sample(result)) or ""))
+  end)
+  rec.StopHooks=ok and stopHooks or nil
+  log("COVERAGE outgoing: "..tostring(ok and detail or stopHooks))
+ else log("COVERAGE outgoing: shared hooks unavailable")end
+ connect(prompts.PromptTriggered,function(prompt)log("PROMPT TRIGGERED "..prompt:GetFullName():sub(1,160).." action="..sample(prompt.ActionText))end)
+ connect(prompts.PromptShown,function(prompt)if wordy(prompt.ActionText) or wordy(prompt.ObjectText) or wordy(prompt.Parent and prompt.Parent.Name)then log("PROMPT SHOWN "..prompt:GetFullName():sub(1,160).." action="..sample(prompt.ActionText))end end)
+ local mouse=player:GetMouse()
+ connect(input.InputBegan,function(object,processed)
+  if input:GetFocusedTextBox()then return end
+  local kind=object.UserInputType
+  if kind==Enum.UserInputType.MouseButton1 or kind==Enum.UserInputType.MouseButton2 then
+   -- Auto Shadow punches every 0.3 s; only clicks on a ClickDetector holder, or one a second otherwise.
+   local target=mouse.Target
+   local detector=target and (target:FindFirstChildOfClass("ClickDetector") or (target.Parent and target.Parent:FindFirstChildOfClass("ClickDetector")))
+   local now=os.clock()
+   if not detector and now<(rec.NextClick or 0) then return end
+   rec.NextClick=now+1
+   log(string.format("CLICK %s processed=%s screen=(%d,%d) target=%s detector=%s",kind.Name,tostring(processed),object.Position.X,object.Position.Y,
+    target and target:GetFullName():sub(1,140) or "none",detector and detector:GetFullName():sub(1,140) or "none"))
+  elseif kind==Enum.UserInputType.Keyboard then
+   log("KEY "..object.KeyCode.Name.." processed="..tostring(processed))
+  end
+ end)
+ connect(input.InputEnded,function(object)
+  if object.UserInputType==Enum.UserInputType.Keyboard and (object.KeyCode==Enum.KeyCode.N or object.KeyCode==Enum.KeyCode.Space)then log("KEY_UP "..object.KeyCode.Name)end
+ end)
+ local gui=player:FindFirstChildOfClass("PlayerGui")
+ if gui then
+  for _,object in ipairs(gui:GetDescendants())do watchGui(object)end
+  connect(gui.DescendantAdded,watchGui)
+  for _,screen in ipairs(gui:GetChildren())do
+   if screen:IsA("ScreenGui")then connect(screen:GetPropertyChangedSignal("Enabled"),function()log("GUI SCREEN "..screen.Name.." enabled="..tostring(screen.Enabled))end)end
+  end
+  connect(gui.ChildAdded,function(screen)log("GUI SCREEN_ADDED "..screen.Name.." class="..screen.ClassName)end)
+  connect(gui.ChildRemoved,function(screen)log("GUI SCREEN_REMOVED "..screen.Name.." class="..screen.ClassName)end)
+ end
+ -- Sleep may darken or blur the screen.
+ for _,holder in ipairs({lighting,workspace.CurrentCamera})do
+  if holder then
+   connect(holder.ChildAdded,function(child)if child:IsA("PostEffect") or child:IsA("Atmosphere") then log("FX ADDED "..child.ClassName.." "..child:GetFullName())end end)
+   connect(holder.ChildRemoved,function(child)if child:IsA("PostEffect") or child:IsA("Atmosphere") then log("FX REMOVED "..child.ClassName.." "..child.Name)end end)
+  end
+ end
+ status.Text=rec.By=="you" and "Recording. Sleep (N) or lie in a bed until you're healed, get up, then press Stop (auto-stops after 30 minutes)."
+  or "Recording Auto Shadow's rest ("..rec.By.."). It stops a little after the farm resumes."
+ task.spawn(function()
+  local started=rec.Started
+  local nextSave,nextBody,lastKey=0,0,nil
+  while rec.Active and rec.Started==started do
+   task.wait(1)
+   if not (rec.Active and rec.Started==started) then break end
+   local character=player.Character
+   local key=character and bodyKey(character)
+   if key and (key~=lastKey or os.clock()>=nextBody)then lastKey,nextBody=key,os.clock()+10;log("BODY "..body(character))end
+   if os.clock()>=nextSave then nextSave=os.clock()+5;save()end
+   if os.clock()-started>MAX_SECONDS then stop("Auto-stopped after 30 minutes.")end
+  end
+ end)
+ return true
+end
+button=ui.Button(card,"Start Sleep Recorder",14,72,180,function()if rec.Active then stop("Stopped.")else start("you")end end,ui.Colors.AccentSoft)
+button.Size=UDim2.new(1,-28,0,34)
+-- For Auto Shadow: Start(by) returns false if a recording is already running; Mark adds a line; Stop(reason) ends only recordings it started.
+controller.SparklingSleepRecorder={
+ Start=function(by)return start(by)end,
+ Mark=function(text)log("MARK "..tostring(text))end,
+ Stop=function(reason,by)if rec.Active and (by==nil or rec.By==by)then stop(reason)end end,
+ Active=function()return rec.Active==true end,
+}
+controller.Connect(player.OnTeleport,function()stop("Teleporting.")end)
+controller.RegisterCleanup(function()stop("Unloaded.")end)
 
 end)()
 ;(function()

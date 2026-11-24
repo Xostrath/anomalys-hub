@@ -2823,3 +2823,63 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Checks:** source and both variants compile. No mock or live run.
 
 **Next step:** let a rest run to the end, then read GETUP and BEDATTR in that run's log to see what the bed's lock is and what releases it.
+
+## SP-110 — Auto Shadow v2.3 rests for fatigue too and keeps running; Sleep Recorder (2026-11-24, Claude)
+
+**User:** "make a sleep recorder or something for auto shadow, its supposed to sleep heal fatigue and injuries, then go back up and start fighting the shadow again continuously, it keeps going off".
+
+**Evidence:**
+- **The only log is from the old build.** `sparkling_auto_shadow_latest.txt` was last written 2026-11-21 00:14. Its header is v2.1, although v2.2 was installed at 23:15, so the hub wasn't re-run after that update. No per-run `sparkling_auto_shadow_<unix>.txt` exists, so no v2.2 run has happened in this workspace.
+- **That run:** ~30 min of farming. Worst injury rose 0 → 15% (right arm), so no rest started. It ended with `STOP Off.`, which only the checkbox produces, about 30 s after the window regained focus. Whether you pressed it, or a click landed on it, isn't recorded.
+- **Other v2.2 code paths that switch it off (source inspection):**
+  - a death or respawn;
+  - J pressed 3 times with no Shadow (for example, still lying down after a rest);
+  - healing that stalls above 10%;
+  - no bed used within 10 min;
+  - the 30-min rest cap;
+  - not being able to get up.
+- **Fatigue was never part of the rest.** `Character.Fatigue` (0–100, server-owned, SP-033) rose only 1.13 → 1.21 over one 31-min Shadow farm (SP-033), so a fatigue rest may be rare. Trello: penalties from 80%, PL gain stops at 90–95%, N (Sleep) lowers it to 0%, hospital beds clear fatigue and injuries.
+
+**Changed / untested live — Auto Shadow v2.3:**
+
+*When it rests*
+- Any injury at 90% or more (as before), **or fatigue at 80% or more**.
+
+*How it rests*
+- **Fatigue only:** after leaving the Inner World, it presses N where you stand. If neither fatigue nor injuries fall within 20 s, it gets up (N / Space / jump) and goes to a bed.
+- **Injured:** it goes to a bed as before. With no bed found, it tries N first, then waits for you to lie in one.
+- **A rest is done when:**
+  - injuries are at 1% or less and fatigue at 5% or less; or
+  - healing has stalled for 90 s (or the rest has passed 30 min) while injuries are under 80% and fatigue under 80%. The farm rests again when a limit is reached.
+- **If a bed stalls higher:** it gets up and sleeps off the fatigue (when fatigue is the only thing left), or tries the next bed. After that it waits for you.
+
+*No longer switches off for*
+- **A death or respawn:** it cancels the rest, waits until the new character has been alive for 3 s, and carries on (respawns are counted).
+- **J with no Shadow:** after 3 presses it taps Space and retries 15 s later. It stops only after 4 rounds (12 presses).
+- **Can't get up:** it waits for you to get up, retrying the steps every 30 s.
+- **Waiting for you to lie in a bed:** it waits with no time limit.
+- **A rest error:** it retries after 10 s and stops on the 3rd error.
+
+*Logs*
+- **TOGGLE:** pressing the checkbox off logs the farm's last key or click and how long before it came, the mouse position, window focus and hub visibility.
+- POWER lines include fatigue, and STOP shows the run time, rests and respawns.
+
+**New / untested live — Sleep Recorder** (`src/SparklingSleepRecorder.lua`, Recorders):
+- **Manual Start/Stop**, up to 30 min. Auto Shadow also starts it for every rest and stops it 20 s after farming resumes. The farm's own steps are added as MARK lines.
+- **Records:**
+  - BODY: fatigue, six injuries, HP, humanoid state, Sit/Seat/PlatformStand/Anchored, WalkSpeed/JumpPower and position; on change, or every 10 s.
+  - Character attributes and children, humanoid state changes, seating and animations.
+  - Keys and clicks (with the clicked object and ClickDetector) and prompts.
+  - Server→you remotes. Your own requests go through the shared hooks, on manual recordings only: Auto Shadow's rests leave the hooks to Auto Parry.
+  - Each attribute logs at most once a second (2 s for chatty ones), so ticking values can't fill the file (SP-107).
+  - Sleep/bed-looking screen text, screens, and Lighting/camera post-effects.
+- **Output:** `sparkling_sleep_latest.txt`, plus `sparkling_sleep_<unix>.txt` per recording.
+- Read-only; sends nothing.
+
+**Checks:** both new sources and both build variants compile. No mock or live run.
+
+**Next step:**
+1. Re-run the hub so v2.3 loads (the log header must say v2.3).
+2. Let one full rest happen, or record a manual sleep and bed rest.
+3. Read `sparkling_sleep_<unix>.txt` for what N and the bed do (lock, animation, heal rate, how to get up).
+4. Read the run's TOGGLE/STOP lines for any switch-off.

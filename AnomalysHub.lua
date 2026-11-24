@@ -3947,6 +3947,9 @@ end)()
 -- lowers fatigue to 0%) where you stand before walking to a bed. Recoverable problems no longer switch the farm off: it waits through a
 -- respawn, retries J, resumes after healing that stalls below the rest limits, and waits for you if it can't get up. Every rest is also
 -- recorded by the Sleep Recorder (Recorders page), and pressing the checkbox off is logged with what the farm last pressed.
+-- v2.4 (SP-111, Sleep Recorder, place 94737939156598): the bed is Workspace.Map.MedicalBed.Main.ClickDetector. Clicking it adds
+-- Sleeping/Hospital/Action/Invincible children and anchors you (WalkSpeed 0); injuries fall ~3 per second to a floor of ~0.7-1.0
+-- (Head stayed at 1.0). Clicking the bed again removes them and frees you, so getting up now clicks the bed first. Done at 2% or less.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -3963,7 +3966,7 @@ local ui=controller.UI
 local page=ui.Pages.Auto
 if not page then return end
 
-local SEARCH,REACH,INJURY_LIMIT,HEALED_AT=400,5,90,1
+local SEARCH,REACH,INJURY_LIMIT,HEALED_AT=400,5,90,2
 -- Rest phase limits: bed search radius (studs), heal-progress check (s), clicks per bed, beds tried, whole rest (s).
 local BED_SEARCH,HEAL_CHECK,BED_USES,BEDS_TRIED,REST_CAP=1000,15,3,2,1800
 -- Fatigue (%): rest at FATIGUE_LIMIT, rested at FATIGUE_OK. Sleeping (N) must lower fatigue or injuries within SLEEP_CHECK s.
@@ -3990,7 +3993,7 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- local body="SPARKLING AUTO SHADOW FARM v2.3 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
+ local body="SPARKLING AUTO SHADOW FARM v2.4 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
   .." SHADOW = the Shadow's fields (looking for an owner tag), POWER = your PowerLevel, PAUSE = chat/menu open, FOCUS = Roblox window focus.\n"
   .."REST = rest phase (injury or fatigue): SLEEP = pressing N, BED scan/path/use, NEARBY = closest clickables when no bed matched, BEDSTATE = sit/anchor/position,"
   .." HEAL = worst injury and fatigue while resting, WAITBED = waiting for you to lie in a bed (your clicks/prompts and what was learned),"
@@ -4235,7 +4238,8 @@ end
 -- later: executor fireclickdetector. Prompts use the same hold API as Auto Job.
 local function useBed(bed,root,attempt)
  local flat=Vector3.new(bed.Position.X,root.Position.Y,bed.Position.Z)
- if (flat-root.Position).Magnitude>.5 then root.CFrame=CFrame.lookAt(root.Position,flat)end
+ -- Not while lying in it (anchored): turning would move you out of the bed pose.
+ if not root.Anchored and (flat-root.Position).Magnitude>.5 then root.CFrame=CFrame.lookAt(root.Position,flat)end
  if bed.Kind=="prompt" then
   local ok=pcall(function()bed.Object:InputHoldBegin()end)
   task.wait(math.max(.1,(tonumber(bed.Object.HoldDuration)or 0)+.1))
@@ -4260,7 +4264,9 @@ local function useBed(bed,root,attempt)
  return onScreen and "covered_by_hub" or "off_screen"
 end
 local function bedState(humanoid,root)
- return string.format("sit=%s seat=%s anchored=%s platformStand=%s state=%s pos=(%.1f,%.1f,%.1f)",tostring(humanoid.Sit),
+ -- Sleeping: the child a bed (and probably N) adds while you lie down (SP-111).
+ return string.format("sleeping=%s sit=%s seat=%s anchored=%s platformStand=%s state=%s pos=(%.1f,%.1f,%.1f)",
+  tostring(humanoid.Parent~=nil and humanoid.Parent:FindFirstChild("Sleeping")~=nil),tostring(humanoid.Sit),
   humanoid.SeatPart and humanoid.SeatPart:GetFullName():sub(-60) or "none",tostring(root.Anchored),tostring(humanoid.PlatformStand),
   (tostring(humanoid:GetState()):gsub("Enum.HumanoidStateType.","")),root.Position.X,root.Position.Y,root.Position.Z)
 end
@@ -4293,10 +4299,12 @@ local function getUp(run,character,humanoid,root,bed,before,steps)
    end
   end
  end
- for attempt,step in ipairs(steps or {"none","space","bed","space","jump"})do
+ -- SP-111: clicking the bed again is what gets you up, so it goes first (mouse, then fireclickdetector).
+ for attempt,step in ipairs(steps or {"none","bed","bedfire","space","jump"})do
   if step=="space" then tap(Enum.KeyCode.Space)
   elseif step=="n" then tap(Enum.KeyCode.N)
-  elseif step=="bed" then if bed then useBed(bed,root,1)else step="bed(unknown)" end
+  elseif step=="bed" or step=="bedfire" then
+   if bed then step=step.."("..useBed(bed,root,step=="bed" and 1 or 3)..")" else step="bed(unknown)" end
   elseif step=="jump" then humanoid.Jump=true end
   if step~="none" and not waitFor(run,1)then return false end
   local free,moved=canMove(run,humanoid,root)

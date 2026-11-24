@@ -2883,3 +2883,40 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 2. Let one full rest happen, or record a manual sleep and bed rest.
 3. Read `sparkling_sleep_<unix>.txt` for what N and the bed do (lock, animation, heal rate, how to get up).
 4. Read the run's TOGGLE/STOP lines for any switch-off.
+
+## SP-111 — Sleep Recorder: what the Inner World exit and a medical bed do; Auto Shadow v2.4 gets up by clicking the bed (2026-11-24, Claude)
+
+**User:** sent a manual Sleep Recorder capture ("i didnt stimulate a whole natural run, just enough for what you need") and asked that recorder findings go to GitHub instead of local files.
+
+**Evidence (Verified from capture: Sleep Recorder v1, place 94737939156598, unix 1795506278, ~424 s, started by the user, Auto Shadow not running):**
+
+*Inner World*
+- **Enter** (J at 15.4 s):
+  - adds the `Action` and `MeditationTraining` children and sets `@Shadow=true` and `@Aggro="Shadow"`;
+  - moves you to about (-8750, -4493, -8750);
+  - WalkSpeed is 0 for ~1 s, and the root is briefly anchored while the intro plays.
+- **Fight, ~6 min:**
+  - Arm injuries rose from ~1 to 33. The other limbs stayed under 1.
+  - Fatigue rose only 0.98 → 1.10, so the 80% fatigue rest (SP-110) won't fire in normal farming.
+  - HP stayed 216/216.
+- **Leave** (J at 377.1 s): sets `@Shadow=false`, removes `MeditationTraining` and returns you to exactly where you entered, (-331.5, 492.3, 65.2).
+
+*Bed*
+- **Where:** `Workspace.Map.MedicalBed.Main` with a ClickDetector, about 15 studs from the return point. Its name contains "bed", so the v2.1+ scan matches it.
+- **Getting in** (user's click at 381.1 s): adds `Sleeping`, `Hospital`, `Action` and `Invincible` children and a `SleepUI` ScreenGui; plays animation 18712501965 (looped). The root becomes anchored, WalkSpeed is 0 and the position snaps onto the bed.
+- **Healing:** about 3 per second. Arms went 33 → 0.7–0.8 in ~11 s and then held there. Head stayed at 1.0 and the legs at 0.7–0.9, so the bed's floor is ~0.7–1.0, not 0.
+- **Fatigue:** dropped 1.10 → 0.96 when you lay down, then held. Whether a bed clears high fatigue is untested.
+- **Getting out** (user's second click at 415.3 s): removes all four children and `SleepUI`; un-anchors you and restores WalkSpeed 16.
+- **Space:** no Space press was recorded in bed, so whether Space gets you up is unknown. Clicking the bed again works.
+- **Not seen:** no remote fired for lying down or getting up. Outgoing requests were recorded, so the bed's ClickDetector click itself is the trigger.
+
+*Not recorded:* N (Sleep) was never pressed, and the capture includes no Auto Shadow run.
+
+**Changed / untested live — Auto Shadow v2.4:**
+- **Getting up** tries, in order: test walking, click the bed (mouse), click the bed (`fireclickdetector`), Space, jump. Before, Space came first.
+- **No turning while anchored:** a bed click no longer turns your character while you're anchored in the bed.
+- **Done threshold:** injuries now count as healed at 2% or less, because the bed's floor is ~0.7–1.0 and Head stayed at exactly 1.0.
+- **Logs:** BEDSTATE/GETUP lines now show `sleeping=` (whether the `Sleeping` child is present).
+- Both variants compile. No mock or live run.
+
+**Next step:** let Auto Shadow reach 90% on an arm in this place (~15+ min at the rate above). Check that it walks to `MedicalBed.Main`, heals, gets up through the bed click and re-enters with J.

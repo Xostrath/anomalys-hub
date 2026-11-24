@@ -2960,3 +2960,34 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - **Checks:** both variants compile. No live run.
 
 **Next step:** confirm Combat comes out at the start and after a bed rest, and that the EQUIP lines stop once it's out.
+
+## SP-114 — Auto Shadow v2.7: stops getting stuck on the bed (2026-11-24, Claude)
+
+**User:** "its not moving from the bed" (v2.6). No log came with the report, so it isn't known which phase stuck: still healing, the get-up step failing, or the walk-away. These changes come from reading the code and checking it against the SP-111 capture.
+
+**Evidence (SP-111 capture, re-read):**
+- **Getting up is fast and complete.** The get-up click was at 415.27 s. Within 0.17 s, `Sleeping`, `Hospital`, `Action`, `Invincible` and `SleepUI` were all removed. By 415.92 s the root was un-anchored and WalkSpeed was back to 16.
+- **Where you end up:** standing where you lay, at (-322.8, 495.3, 52.7). That is on top of the bed, about 3 studs above the floor.
+- **Combat doesn't block the bed.** `Tool Combat` was out from 17.9 s and stayed out. Clicking the bed at 381.1 s still laid the user down, so the bed works with Combat equipped. When the user clicked the bed at 416.25 s after getting up, it threw a light attack and didn't lay them back down.
+
+**Likely causes, from reading the code (not confirmed live):**
+1. **A get-up that worked could count as failed.** v2.5 decided you were up only by walking 6 studs straight ahead. If you faced the headboard or a wall after standing, that test failed. The next steps clicked the bed, which could lay you back down, and the 30-second retry repeated the cycle.
+2. **Fatigue could hold you in bed for 90 s after healing.** A rest ended only when injuries were ≤2% **and** fatigue was ≤5%. The bed barely lowers fatigue (1.10 → 0.96), so with fatigue above 5% an injury rest could only end through the 90-second stall timeout.
+
+**Changed / untested live — Auto Shadow v2.7:**
+- **Getting up:**
+  - Counts as up when `Sleeping` is gone, the root isn't anchored and WalkSpeed is above 0 (it waits up to 3 s for WalkSpeed).
+  - The walk test is a fallback only. It tries ahead, behind, left and right.
+  - The Get Up button, bed clicks, Space and N only run while you're still locked. Otherwise they're logged as `skipped: not in bed`.
+- **Healing:**
+  - On an injury rest, fatigue is ignored.
+  - A rest is done once injuries are ≤2%, or have held at ≤10% for 10 s. Fatigue rests still use the old rule.
+- **Get Up button:**
+  - Must be visible all the way up through its parent frames.
+  - A bare "up" now has to match as a whole word.
+  - Press order: click, handlers, click −inset, click +inset, click, handlers. When the hub covers the button, it uses the handlers instead.
+  - SleepUI's buttons are logged once per rest as `SLEEPUI` (name, text, shown, position, size).
+- **Status line:** shows "Getting up (n)..." on each try.
+- **Checks:** src and both variants compile. The private build is installed (hash match). No mock or live run.
+
+**Next step:** on the next bed rest, read SLEEPUI (the real button), GETUP (which try freed you) and AWAY (the final distance) in `sparkling_auto_shadow_<unix>.txt`. If it still sticks, the status line shows which phase it's in.

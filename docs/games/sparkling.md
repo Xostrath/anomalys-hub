@@ -2920,3 +2920,28 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - Both variants compile. No mock or live run.
 
 **Next step:** let Auto Shadow reach 90% on an arm in this place (~15+ min at the rate above). Check that it walks to `MedicalBed.Main`, heals, gets up through the bed click and re-enters with J.
+
+## SP-112 — Auto Shadow v2.5: presses Get Up (twice if needed), then walks 15 studs from the bed (2026-11-24, Claude)
+
+**User:** "for auto shadow make sure it moves at least 15 studs away from the bed, and sometimes you have to press get up twice". The user declined automatic GitHub upload of recordings (private repo + token) as too much setup, so recordings will keep being pasted.
+
+**Evidence:**
+- **Getting up is a GUI click.** In the SP-111 capture, the click that got the user up (415.3 s) was `processed=true`, so a GUI took it. `SleepUI` appears when you lie down and is removed when you get up, so it most likely holds the get-up button. (The 3D target under the cursor happened to be the bed.)
+- **What's still unknown:** the button's name and text, because v1 of the Sleep Recorder only logged sleep/bed words.
+- **User-confirmed:** getting up sometimes takes two presses.
+
+**Changed / untested live:**
+- **Getting up — Auto Shadow v2.5:**
+  - First it checks whether you can already walk.
+  - Then it presses SleepUI's get-up button up to four times. It finds the button by text ("get up", "wake", "leave", "up"); otherwise it takes the first visible button.
+  - After each press it waits up to 2 s for `Sleeping` to go and the root to un-anchor before deciding to press again. A press is skipped once you're up, so a second press can't put you back in bed.
+  - Presses rotate like Auto Job's: centre click (twice), centre −/+ the top-bar inset, then the button's own handlers. Whichever frees you is kept.
+  - Fallbacks: clicking the bed (mouse, then `fireclickdetector`), Space, jump.
+  - An N-sleep rest uses get-up presses too.
+- **Walking away:**
+  - After getting up it walks until it's at least 15 studs from the bed, measured flat. It tries straight away from the bed first, then 90°, −90°, 45°, −45° and 180°, each 20 studs out.
+  - It logs AWAY lines and never stops the farm if it can't get there.
+- **Sleep Recorder:** "get up" is added to the words it watches, so the next capture names the button.
+- **Checks:** both variants compile. No mock or live run.
+
+**Next step:** on the next bed rest, read GETUP (which method freed you, and after how many presses) and AWAY (the final distance).

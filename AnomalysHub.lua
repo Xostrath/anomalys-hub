@@ -3950,6 +3950,8 @@ end)()
 -- v2.4 (SP-111, Sleep Recorder, place 94737939156598): the bed is Workspace.Map.MedicalBed.Main.ClickDetector. Clicking it adds
 -- Sleeping/Hospital/Action/Invincible children and anchors you (WalkSpeed 0); injuries fall ~3 per second to a floor of ~0.7-1.0
 -- (Head stayed at 1.0). Clicking the bed again removes them and frees you, so getting up now clicks the bed first. Done at 2% or less.
+-- v2.5 (SP-112, user): gets up with SleepUI's get-up button, pressed up to four times ("sometimes you have to press get up twice"),
+-- then walks at least 15 studs from the bed before pressing J.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -3993,7 +3995,7 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- local body="SPARKLING AUTO SHADOW FARM v2.4 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
+ local body="SPARKLING AUTO SHADOW FARM v2.5 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
   .." SHADOW = the Shadow's fields (looking for an owner tag), POWER = your PowerLevel, PAUSE = chat/menu open, FOCUS = Roblox window focus.\n"
   .."REST = rest phase (injury or fatigue): SLEEP = pressing N, BED scan/path/use, NEARBY = closest clickables when no bed matched, BEDSTATE = sit/anchor/position,"
   .." HEAL = worst injury and fatigue while resting, WAITBED = waiting for you to lie in a bed (your clicks/prompts and what was learned),"
@@ -4290,6 +4292,66 @@ local function canMove(run,humanoid,root)
  humanoid:MoveTo(root.Position)
  return moved>1.5,moved
 end
+-- SleepUI's get-up button (SP-112). The SP-111 capture shows the user's getting-up click was processed by the GUI (SleepUI appears
+-- with the bed and goes when you get up), so the button is found by its text ("get up", "wake", "leave", "up") or, failing that, the
+-- only visible button. Presses rotate like Auto Job's: centre click, centre -/+ the top-bar inset, then the button's own handlers;
+-- whichever frees you is kept.
+local GETUP_METHODS={"click","click","click-inset","click+inset","handlers","handlers"}
+local function buttonText(button)
+ local text=(button:IsA("TextButton") and button.Text or "")
+ for _,child in ipairs(button:GetDescendants())do if child:IsA("TextLabel") then text=text.." "..child.Text end end
+ return text:lower()
+end
+local function findGetUp()
+ local gui=player:FindFirstChildOfClass("PlayerGui")
+ local sleep=gui and gui:FindFirstChild("SleepUI")
+ if not sleep then return nil end
+ local best,fallback,count
+ count=0
+ for _,object in ipairs(sleep:GetDescendants())do
+  if object:IsA("GuiButton") and object.Visible and object.AbsoluteSize.X>4 then
+   count+=1;fallback=fallback or object
+   local text=buttonText(object)..object.Name:lower()
+   if text:find("get up",1,true) or text:find("getup",1,true) or text:find("wake",1,true) or text:find("leave",1,true) or text:find("up",1,true) then best=best or object end
+  end
+ end
+ return best or (count==1 and fallback) or fallback
+end
+local function pressGetUp()
+ local button=findGetUp()
+ if not button then return "no SleepUI button" end
+ state.GetUpPresses=(state.GetUpPresses or 0)+1
+ local method=state.GetUpMethod or GETUP_METHODS[(state.GetUpPresses-1)%#GETUP_METHODS+1]
+ state.LastGetUpMethod=method
+ local label=button:GetFullName():sub(-60).." text="..buttonText(button):sub(1,30)
+ if method=="handlers" then
+  if type(getconnections)~="function" then return label.." handlers:none" end
+  for _,name in ipairs({"Activated","MouseButton1Click","MouseButton1Down"})do
+   local got,list=pcall(getconnections,button[name])
+   if got and type(list)=="table" and #list>0 then
+    local fired=0
+    for _,connection in ipairs(list)do
+     if pcall(function()connection:Fire()end) or pcall(function()connection.Function()end) then fired+=1 end
+    end
+    state.LastInput={At=os.clock(),What="get-up handlers"}
+    return string.format("%s handlers:%s x%d",label,name,fired)
+   end
+  end
+  return label.." handlers:none"
+ end
+ local inset=guiService:GetGuiInset().Y
+ local owner=button:FindFirstAncestorWhichIsA("ScreenGui")
+ local x=button.AbsolutePosition.X+button.AbsoluteSize.X/2
+ local y=button.AbsolutePosition.Y+button.AbsoluteSize.Y/2+((owner and owner.IgnoreGuiInset) and 0 or inset)
+ if method=="click-inset" then y-=inset elseif method=="click+inset" then y+=inset end
+ if hubCovers(x,y) then return label.." covered_by_hub" end
+ pcall(function()
+  vim:SendMouseMoveEvent(x,y,game);task.wait(.05)
+  vim:SendMouseButtonEvent(x,y,0,true,game,0);task.wait(.06);vim:SendMouseButtonEvent(x,y,0,false,game,0)
+ end)
+ state.LastInput={At=os.clock(),What=string.format("get-up click (%d,%d)",x,y)}
+ return string.format("%s %s(%d,%d)",label,method,x,y)
+end
 local function getUp(run,character,humanoid,root,bed,before,steps)
  log(string.format("BEDSTATE before getting up %s walkSpeed=%.1f jumpPower=%.1f",bedState(humanoid,root),humanoid.WalkSpeed,humanoid.JumpPower))
  if before then
@@ -4299,18 +4361,30 @@ local function getUp(run,character,humanoid,root,bed,before,steps)
    end
   end
  end
- -- SP-111: clicking the bed again is what gets you up, so it goes first (mouse, then fireclickdetector).
- for attempt,step in ipairs(steps or {"none","bed","bedfire","space","jump"})do
+ -- SP-112: the user gets up with SleepUI's get-up button, and "sometimes you have to press get up twice", so it is pressed up to
+ -- four times (a press is skipped once you're no longer Sleeping). Clicking the bed, Space and jump are fallbacks.
+ for attempt,step in ipairs(steps or {"none","getup","getup","getup","getup","bed","bedfire","space","jump"})do
   if step=="space" then tap(Enum.KeyCode.Space)
   elseif step=="n" then tap(Enum.KeyCode.N)
+  elseif step=="getup" then
+   if not character:FindFirstChild("Sleeping") and not root.Anchored then step="getup(already up)"
+   else
+    step="getup("..pressGetUp()..")"
+    -- Wait up to 2 s for the bed to let go before deciding to press again (a second press could lie you back down).
+    local deadline=os.clock()+2
+    while os.clock()<deadline and (character:FindFirstChild("Sleeping") or root.Anchored) do if not waitFor(run,.1)then return false end end
+   end
   elseif step=="bed" or step=="bedfire" then
    if bed then step=step.."("..useBed(bed,root,step=="bed" and 1 or 3)..")" else step="bed(unknown)" end
   elseif step=="jump" then humanoid.Jump=true end
-  if step~="none" and not waitFor(run,1)then return false end
+  if step~="none" and not step:find("getup",1,true) and not waitFor(run,1)then return false end
   local free,moved=canMove(run,humanoid,root)
   if not alive(run)then return false end
   log(string.format("GETUP try=%d via=%s moved=%.1f free=%s %s walkSpeed=%.1f",attempt,step,moved,tostring(free),bedState(humanoid,root),humanoid.WalkSpeed))
-  if free then return true end
+  if free then
+   if step:find("getup(",1,true) and not step:find("already",1,true) and state.LastGetUpMethod then state.GetUpMethod=state.LastGetUpMethod end
+   return true
+  end
  end
  return false
 end
@@ -4333,6 +4407,29 @@ local function waitUntilFree(run,character,humanoid,root,bed,before,steps)
    if not alive(run)then return false end
   end
  end
+end
+-- SP-112, user: "make sure it moves at least 15 studs away from the bed" before farming again. Tries straight away from the bed,
+-- then to the sides and behind (20 studs out); never stops the farm, it only logs AWAY lines.
+local AWAY_MIN=15
+local function moveAway(run,humanoid,root,from)
+ if not from then return true end
+ local function flat(v)return Vector3.new(v.X,0,v.Z)end
+ local gap=(flat(root.Position)-flat(from)).Magnitude
+ if gap>=AWAY_MIN then log(string.format("AWAY already %.1f studs from the bed",gap));return true end
+ local out=flat(root.Position-from)
+ out=out.Magnitude>.5 and out.Unit or flat(root.CFrame.LookVector).Unit
+ for _,angle in ipairs({0,90,-90,45,-45,180})do
+  local dir=(CFrame.Angles(0,math.rad(angle),0)*CFrame.new(out)).Position
+  local goal=Vector3.new(from.X,root.Position.Y,from.Z)+dir*(AWAY_MIN+5)
+  status.Text=string.format("Up: walking %d studs away from the bed...",AWAY_MIN)
+  walkTo(run,humanoid,root,goal,4)
+  if not alive(run)then return false end
+  gap=(flat(root.Position)-flat(from)).Magnitude
+  log(string.format("AWAY angle=%d gap=%.1f %s",angle,gap,bedState(humanoid,root)))
+  if gap>=AWAY_MIN then return true end
+ end
+ log(string.format("AWAY couldn't get %d studs from the bed (%.1f); farming anyway",AWAY_MIN,gap))
+ return true
 end
 -- Waits while a bed or sleep heals (SP-110). Progress = the worst injury or fatigue falling 0.5+.
 -- "done": injuries at HEALED_AT and fatigue at FATIGUE_OK or less, or progress stalled HEAL_STALL s (or REST_CAP passed) with injuries
@@ -4386,7 +4483,7 @@ local function sleepRest(run,character,humanoid,root)
  local result=waitHealed(run,character,humanoid,root,"Sleeping",SLEEP_CHECK,false)
  if result==nil then return nil end
  -- Wake up whether or not it helped; N may toggle sleep.
- if not waitUntilFree(run,character,humanoid,root,nil,before,{"none","n","space","jump"})then return nil end
+ if not waitUntilFree(run,character,humanoid,root,nil,before,{"none","getup","getup","n","getup","space","jump"})then return nil end
  return result=="done"
 end
 -- The ClickDetector on the clicked part or its first few ancestors.
@@ -4459,7 +4556,9 @@ local function manualRest(run,character,humanoid,root,why)
     local position=holderPosition(lastUse.Holder)
     if object and position then bed={Object=object,Holder=lastUse.Holder,Position=position,Kind=lastUse.Kind}end
    end
+   local inBedAt=root.Position
    if not waitUntilFree(run,character,humanoid,root,bed,before)then return end
+   if not moveAway(run,humanoid,root,bed and bed.Position or inBedAt)then return end
    state.Rests+=1;return true
   end
   -- Stalled with injuries or fatigue still high: keep waiting (another bed, or the same one again).
@@ -4535,11 +4634,13 @@ local function rest(run,character,humanoid,root,limb,amount,tired)
     if result==nil then return end
     if result=="done" then
      if not waitUntilFree(run,character,humanoid,root,bed,attributes)then return end
+     if not moveAway(run,humanoid,root,bed.Position)then return end
      state.Rests+=1;return true
     end
     if result=="high" then
      -- The bed healed but stopped short. Get up; if only fatigue is left, sleep it off, otherwise try the next bed.
      if not waitUntilFree(run,character,humanoid,root,bed,attributes)then return end
+     if not moveAway(run,humanoid,root,bed.Position)then return end
      if worst<STALL_RESUME and left>=FATIGUE_LIMIT then
       local slept=sleepRest(run,character,humanoid,root)
       if slept==nil then return end
@@ -7092,7 +7193,7 @@ local NOISY={StopDash=true,Effects=true,Cooldown=true,CooldownNT=true}
 -- Attributes that change every frame or every press; logged at most every 2 s each.
 local CHATTY={CameraLooker=true,LastPress=true,LastTick=true,MousePosition=true,MouseHit=true}
 local INJURIES={"HeadInj","TorsoInj","LeftArmInj","RightArmInj","LeftLegInj","RightLegInj"}
-local WORDS={"sleep","bed","rest","heal","fatigue","wake","tired","injur","pod","hospital","nap","energy"}
+local WORDS={"sleep","bed","rest","heal","fatigue","wake","tired","injur","pod","hospital","nap","energy","get up","getup"}
 local rec={Active=false}
 local card=ui.Card(ui.Pages.Recorders,"SPARKLING SLEEP RECORDER","Start, then sleep (N) or lie in a bed, wait until you're healed and get up, then Stop. Auto Shadow also runs it during every rest. Sends nothing.",196)
 card.LayoutOrder=36

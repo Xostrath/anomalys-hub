@@ -2945,3 +2945,18 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - **Checks:** both variants compile. No mock or live run.
 
 **Next step:** on the next bed rest, read GETUP (which method freed you, and after how many presses) and AWAY (the final distance).
+
+## SP-113 — Auto Shadow v2.6 equips the Combat tool (2026-11-24, Claude)
+
+**User:** "auto shadow should automatically equip the combat skill as well".
+
+**Evidence (SP-111 capture, place 94737939156598):** the user pressed key `One` at 17.92 s, and `Tool Combat` was added to the character in the same frame, followed by the PlunderIdle/PlunderMoveIdle animations. The profile's `SlotData` slot 1 is "Combat".
+
+**Changed / untested live — Auto Shadow v2.6:**
+- **When it acts:** only while no `Combat` Tool is on your character, at most every 1.5 s. Pressing 1 again may put the tool away, so it never presses while Combat is out.
+- **How:** it taps 1. Every third try it instead calls `Humanoid:EquipTool` on `Backpack.Combat`.
+- **Waiting:** the farm waits only for the first 6 tries. After that it carries on and retries every 10 s, so a missing tool can't stall it.
+- **Logs:** EQUIP lines for each try (capped at 12), and "Combat is out after N tries" once it's equipped.
+- **Checks:** both variants compile. No live run.
+
+**Next step:** confirm Combat comes out at the start and after a bed rest, and that the EQUIP lines stop once it's out.

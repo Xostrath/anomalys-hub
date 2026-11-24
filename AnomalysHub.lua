@@ -3952,6 +3952,7 @@ end)()
 -- (Head stayed at 1.0). Clicking the bed again removes them and frees you, so getting up now clicks the bed first. Done at 2% or less.
 -- v2.5 (SP-112, user): gets up with SleepUI's get-up button, pressed up to four times ("sometimes you have to press get up twice"),
 -- then walks at least 15 studs from the bed before pressing J.
+-- v2.6 (SP-113, user): equips the Combat tool (key 1, EquipTool fallback) whenever it isn't out.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -3995,7 +3996,7 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- local body="SPARKLING AUTO SHADOW FARM v2.5 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
+ local body="SPARKLING AUTO SHADOW FARM v2.6 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
   .." SHADOW = the Shadow's fields (looking for an owner tag), POWER = your PowerLevel, PAUSE = chat/menu open, FOCUS = Roblox window focus.\n"
   .."REST = rest phase (injury or fatigue): SLEEP = pressing N, BED scan/path/use, NEARBY = closest clickables when no bed matched, BEDSTATE = sit/anchor/position,"
   .." HEAL = worst injury and fatigue while resting, WAITBED = waiting for you to lie in a bed (your clicks/prompts and what was learned),"
@@ -4672,7 +4673,7 @@ local function toggle()
  state.Enabled=true;state.Lines={};state.Character=character;state.Entries=0;state.Kicks=0;state.Clicks=0;state.Tries=0;state.JRounds=0
  state.UnfocusedClicks=0;state.UnfocusedJ=0;state.Aims=0;state.Rests=0;state.Deaths=0;state.RestErrors=0;state.Resting=false;state.Walking=false
  state.InWorld=false;state.MissingSince=nil;state.NextJ=0;state.NextMove=0;state.NextClick=0;state.NextPower=0;state.NextSave=0;state.Paused=false
- state.Respawning=false;state.AliveSince=nil;state.StartedAt=os.clock();state.LastInput=nil;state.NextRest=0
+ state.Respawning=false;state.AliveSince=nil;state.StartedAt=os.clock();state.LastInput=nil;state.NextRest=0;state.EquipTries=0;state.NextEquip=0
  table.clear(state.Seen)
  button.Text="Auto Shadow Farm: ON";status.Text="On."
  log("START power="..tostring(power(character)).." focused="..tostring(state.Focused).." fatigue="..tostring(fatigueOf(character)))
@@ -4754,6 +4755,27 @@ controller.Connect(run.Heartbeat,function()
  if ((worst and worst>=INJURY_LIMIT) or tired>=FATIGUE_LIMIT) and now>=(state.NextRest or 0) then
   beginRest(character,humanoid,root,limb,worst or 0,tired)
   return
+ end
+ -- SP-113, user: "auto shadow should automatically equip the combat skill". The user's own equip in the SP-111 capture was key One
+ -- -> Tool "Combat" added to the character. It is only pressed while Combat isn't out (One may toggle it), every 1.5 s; every third
+ -- try uses Humanoid:EquipTool on the Backpack tool instead. After 6 misses it slows to every 10 s.
+ local combat=character:FindFirstChild("Combat")
+ if combat and combat:IsA("Tool") then
+  if (state.EquipTries or 0)>0 then log("EQUIP Combat is out after "..state.EquipTries.." tries");state.EquipTries=0 end
+ elseif now>=(state.NextEquip or 0) then
+  state.EquipTries=(state.EquipTries or 0)+1
+  state.NextEquip=now+(state.EquipTries>6 and 10 or 1.5)
+  local backpack=player:FindFirstChildOfClass("Backpack")
+  local tool=backpack and backpack:FindFirstChild("Combat")
+  if state.EquipTries%3==0 and tool and tool:IsA("Tool") then
+   local ok=pcall(function()humanoid:EquipTool(tool)end)
+   if state.EquipTries<=12 then log("EQUIP Combat via EquipTool try "..state.EquipTries.." ok="..tostring(ok))end
+  else
+   tap(Enum.KeyCode.One)
+   if state.EquipTries<=12 then log("EQUIP Combat via key 1 try "..state.EquipTries.." inBackpack="..tostring(tool~=nil))end
+  end
+  -- Hold the farm only for the first few tries, so a missing tool can't stall it.
+  if state.EquipTries<=6 then status.Text="Equipping Combat...";return end
  end
  if now>=state.NextPower then
   state.NextPower=now+10

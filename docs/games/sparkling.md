@@ -3053,13 +3053,13 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 
   | Age + ping | Presses | Perfect Counter | GUARD BREAK | Blunt | None |
   |---|---|---|---|---|---|
-  | 360-369 ms | 27 | 2 | 20 | 0 | 5 |
+  | 360-369 ms | 27 | 2 | 21 | 0 | 4 |
   | 370-376 ms | 19 | 7 | 10 | 0 | 2 |
   | 377-399 ms | 0 | not tested | | | |
-  | 400-415 ms | 44 | 1 | 12 | 23 | 8 |
+  | 400-415 ms | 44 | 1 | 11 | 23 | 9 |
 
 - **The impact itself moves.** The outcome arrives 383-437 ms after the swing is seen, mostly at 400, 417 or 433 ms (frame steps). That spread is as wide as the gap between the two failure bands, so no fixed delay can sit in the window every time.
-- **No other cause found.** Hold time (121-155 ms), own M1s around the press and the Config line were the same for Perfect Counters and Guard Breaks. At 370-376 ms the ~200 ms ping presses did better (6 of 11) than the ~95 ms ones (1 of 8); unexplained, small samples.
+- **No other cause found.** Hold time (121-155 ms), own M1s around the press and the Config line were the same for Perfect Counters and Guard Breaks. At 370-376 ms the ~200 ms ping presses did better (about 6 of 11) than the ~95 ms ones (about 1 of 8); unexplained, small samples.
 - The NPC heavy 102483335944327 had no press with a known ping in these recordings (117 cues fell inside the 5 s cooldown), so it is unchanged.
 
 **Changed / untested live — v18.7:**

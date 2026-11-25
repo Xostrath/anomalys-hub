@@ -2991,3 +2991,54 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - **Checks:** src and both variants compile. The private build is installed (hash match). No mock or live run.
 
 **Next step:** on the next bed rest, read SLEEPUI (the real button), GETUP (which try freed you) and AWAY (the final distance) in `sparkling_auto_shadow_<unix>.txt`. If it still sticks, the status line shows which phase it's in.
+
+## SP-115 — Auto Parry v18.6: NPC ping skip from measured wind-up; rogue heavy 0.28/0.29 s (2026-11-25, Claude)
+
+**User:** "check the auto sleep and auto parry test", then "lets fix these parries".
+
+**Evidence (Verified from captures):** nine v7 recordings, histories 1795418760 to 1795586060 (Inner World Shadow). Each holds event detail for its first 12,000 lines only; later totals are counts.
+- **Auto sleep (SP-110 to SP-114 follow-up):** 24 of 24 rest recordings on 2026-11-24 completed. Each started on an arm injury of 90-95, healed to about 1 in 29-32 s and got up on the second GETUP try (the SleepUI "get up" button; try 1 is always `via=none`). One walk-away logged "path ended stuck" six times and recovered. One run died from full health about 10 s after getting up; cause unknown.
+- **High ping cuts attempts, not accuracy.** The two runs at ~200 ms ping countered 45% and 56% of presses against 73% at ~96 ms, and skipped 1,972 and 788 cues as `ping_too_high` against 18.
+- **Wind-up (animation seen to attacker HitOut), all nine recordings:**
+
+  | Animation | n | p10 | median | p90 |
+  |---|---|---|---|---|
+  | 114493250337466 (hit 1) | 627 | 218 | 233 | 250 ms |
+  | 84394230178792 (hit 2) | 349 | 220 | 234 | 250 ms |
+  | 131649056441662 (hit 5) | 194 | 181 | 184 | 201 ms |
+  | 95937874840716 (hit 3) | 248 | 101 | 117 | 134 ms |
+  | 139487903747364 (hit 4) | 220 | 82 | 84 | 101 ms |
+
+- **Outcome follows wind-up − press age − ping** (542 presses on hits 1/2/5 with a known ping and a measured wind-up):
+
+  | Margin | Presses | Counters |
+  |---|---|---|
+  | below 0 ms | 7 | 0 |
+  | 0-20 ms | 9 | 5 |
+  | 20-60 ms | 72 | 59 (82%) |
+  | 60-120 ms | 444 | 399 (90%) |
+
+  This matches SP-073 (lead minus ping). All but one of these counters were "Counter Parry!", not "Perfect Counter!".
+- **The v18.5 skip was earlier than that limit.** It dropped hits 1/2 from 200 ms ping (seed 40 ms, 60 ms short). 158 of the 183 such skips with event detail were at 200-215 ms.
+- **Rogue heavy 126361551838373** (82 presses). It lands about 400-435 ms after it is seen (self Blunt, Perfect Counter and GUARD BREAK all arrive then). Grouped by press age + ping:
+
+  | Age + ping | Presses | Perfect Counter | Mostly otherwise |
+  |---|---|---|---|
+  | 360-369 ms | 22 | 2 | GUARD BREAK |
+  | 370-376 ms | 19 | 7 | GUARD BREAK |
+  | 377-399 ms | 0 | not tested | |
+  | 400 ms and up | 41 | 1 | Blunt |
+
+  The 0.30 s seed always falls in the last row at the 100 ms base. Every press, failed or not, is followed by the 5 s Counter cooldown unless it counters.
+- **Combo spacing is too loose to predict presses.** Hit 1 to hit 2 start: p10 498, median 582, p90 734 ms (n=359).
+- **Correction:** the most frequent unmapped NPC animations are not attacks. 180435571 and 180435792 are stock idle animations and 12034165582 plays alongside them; 71250826059457, 110258354904946 and 125292016996376 also play on the local character when hit. Do not map them.
+
+**Changed / untested live — Auto Parry v18.6:**
+- For NPC cues on hits 1, 2 and 5, the ping skip is now `windup − delay − 8 ms − ping < 10 ms` (wind-ups 233 / 233 / 184 ms). Hits 1/2 are pressed up to about 215 ms ping instead of 200; hit 5 up to about 166 instead of 160. Skips carry `rule=windup_margin`; queued cues carry `pingMarginMs=`.
+- Player cues and every other animation keep the v18.5 rule (60 ms short).
+- Rogue heavy rotates 0.28 / 0.29 s instead of 0.26 / 0.30 s, for players too since the trial is shared.
+- **Checks:** edited in the public `AnomalysHub.lua` only, by reading the code. **Not compiled** (no Luau compiler on this machine), no mock, no live run. The source tree and private build do not have this change yet.
+
+**Limits:** at 200+ ms ping, hits 3, 4 and 5 cannot be countered by reacting, and hits 1/2 stop being possible near 225 ms. Presses in the newly allowed 10-25 ms band are expected to counter about half the time; a miss costs the 5 s cooldown.
+
+**Next step:** port to the source tree, compile both variants, then fight the Shadow at ~200 ms ping. Compare counters per `pingMarginMs` band and the rogue heavy's Perfect Counter rate at 0.28 vs 0.29 s. If the 10-20 ms band counters under 45%, raise `PING_MIN_MARGIN` to 0.02.

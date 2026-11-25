@@ -3042,3 +3042,32 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Limits:** at 200+ ms ping, hits 3, 4 and 5 cannot be countered by reacting, and hits 1/2 stop being possible near 225 ms. Presses in the newly allowed 10-25 ms band are expected to counter about half the time; a miss costs the 5 s cooldown.
 
 **Next step:** port to the source tree, compile both variants, then fight the Shadow at ~200 ms ping. Compare counters per `pingMarginMs` band and the rogue heavy's Perfect Counter rate at 0.28 vs 0.29 s. If the 10-20 ms band counters under 45%, raise `PING_MIN_MARGIN` to 0.02.
+
+## SP-116 — Auto Parry v18.7: rogue heavy delay adjusts itself from each outcome (2026-11-25, Claude)
+
+**User:** "now we need the fix the timings on these perfect blocks cause im always getting guard broken".
+
+**Evidence (Verified from captures):** 90 rogue-heavy (126361551838373) presses with a known ping, 13 v7 recordings (histories 1795418760 to 1795591637), all on the 0.26 / 0.30 s rotation. v18.6 has not run yet.
+- **First self outcome after each press:** GUARD BREAK 42, Blunt 23, Perfect Counter 10, none 15.
+- **Too early is a GUARD BREAK, too late is a Blunt.** By press age + ping:
+
+  | Age + ping | Presses | Perfect Counter | GUARD BREAK | Blunt | None |
+  |---|---|---|---|---|---|
+  | 360-369 ms | 27 | 2 | 20 | 0 | 5 |
+  | 370-376 ms | 19 | 7 | 10 | 0 | 2 |
+  | 377-399 ms | 0 | not tested | | | |
+  | 400-415 ms | 44 | 1 | 12 | 23 | 8 |
+
+- **The impact itself moves.** The outcome arrives 383-437 ms after the swing is seen, mostly at 400, 417 or 433 ms (frame steps). That spread is as wide as the gap between the two failure bands, so no fixed delay can sit in the window every time.
+- **No other cause found.** Hold time (121-155 ms), own M1s around the press and the Config line were the same for Perfect Counters and Guard Breaks. At 370-376 ms the ~200 ms ping presses did better (6 of 11) than the ~95 ms ones (1 of 8); unexplained, small samples.
+- The NPC heavy 102483335944327 had no press with a known ping in these recordings (117 cues fell inside the 5 s cooldown), so it is unchanged.
+
+**Changed / untested live — v18.7:**
+- The rogue heavy's 0.28 / 0.29 s rotation is replaced by one delay per target type, starting at 0.285 s.
+- The first self GUARD BREAK, Blunt or Perfect Counter 50-450 ms after a rogue-heavy press moves the next press: GUARD BREAK +6 ms, Blunt −6 ms, Perfect Counter no change. Limits 0.25-0.32 s. It resets when the hub reloads.
+- New log line `HEAVY_ADAPT target= outcome= sincePressMs= delayMs=a->b`; cues carry `trial=npc_rogue_heavy_adaptive`.
+- **Checks:** edited in the public `AnomalysHub.lua` only, by reading the code. **Not compiled**, no mock, no live run. Not in the source tree or private build.
+
+**Limits:** a Blunt from another attacker's light hit inside the 450 ms window is read as "late" and moves the delay 6 ms the wrong way once. Expect the Perfect Counter rate to stay well under the light-hit counter rate; the 370-376 ms band, the best so far, gave 37%.
+
+**Next step:** fight the Shadow and read the `HEAVY_ADAPT` lines. The delay should settle in a band a few steps wide; compare the Perfect Counter rate there with 12% on the old rotation (10 of 90 presses). If it pins at 0.25 or 0.32 s, the model is wrong: recheck which outcome means early.

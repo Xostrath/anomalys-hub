@@ -3084,3 +3084,20 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - Unknown: whether the game counts presses released after one frame, whether it caps the rate, and whether it reacts to it.
 
 **Next step:** run Auto Job on Scientific Engineer [1] and read the log. `MINIGAME open` to `DONE` should drop from 10.5 s to about 2 s with `taps` near 51. If `taps` is far above 51 or the time does not drop, presses are being lost: lower `TAP_RATE` or restore a short hold.
+## SP-118 — Auto Job v1.7: walks up to the job giver; closed minigame is not a finished job (2026-11-25, Claude)
+
+**User:** "job does not go towards the quest either even when its right in front of it, if the quest is within 30 studs it should automatically go to it".
+
+**Evidence (Auto Job v1.6 log, 2026-11-25, Scientific Engineer [1]):**
+- **v1.6 key speed works:** the minigame finished in 2.5 s with `taps=57` (`PROGRESS 1/1`, +200 Zeni), down from 10.5 s.
+- **One minigame closed without progress.** Opened with key S, closed 2.2 s later after 50 taps, and the window never read 1/1. v1.6 treated the close as a finished job and pressed [ Quit ] 2 s later; the window went away. Why it closed is unknown (the counter was not logged; S also walks the character backwards).
+- **Then the job could not be taken.** `Workspace.Map.Paperworks.Part.Quest` was held 64 times in 75 s from 3.7 studs, every call `ok=true`, and no job window appeared. The character did not move because 3.7 studs was inside the reach (`MaxActivationDistance − 2`).
+- Earlier the same day the same prompt took 5 holds from 3.8-4.2 studs before a job started. The cause of the failed holds is not known: distance, hold length, or a wait after quitting are all open.
+
+**Changed / untested live — v1.7:**
+- **Take Quest:** the character keeps walking towards the job giver until 2.5 studs while it presses (search range is still 150 studs). The hold lasts the prompt's `HoldDuration` + 0.1 s (was a fixed 90 ms). Presses rotate: hold, hold, the prompt's own key, executor `fireproximityprompt` if present.
+- The `TAKE` line now logs `method= holdMs= maxDist= lineOfSight=`, and `TAKE worked after N tries` when the window appears.
+- **Closed minigame:** if the minigame closes while the window still reads under its total, Auto Job logs `MINIGAME closed without progress: open, counter, taps`, waits 3 s for the progress, then opens the laptop again instead of quitting.
+- **Checks:** edited in the public `AnomalysHub.lua` only, by reading the code. **Not compiled**, no live run. Not in the source tree or private build.
+
+**Next step:** run Auto Job and read the `TAKE` lines: which method and distance start the job. If none does after a Quit, time how long until it works by hand (a server wait after quitting). Read any `MINIGAME closed without progress` line for the counter at close.

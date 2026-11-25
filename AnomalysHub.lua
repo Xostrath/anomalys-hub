@@ -5739,7 +5739,7 @@ controller.RegisterCleanup(function()stop("Unloaded.")end)
 
 end)()
 ;(function()
--- Sparkling Auto Job v1.6 (SP-042/043/071/072/117). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
+-- Sparkling Auto Job v1.7 (SP-042/043/071/072/117/118). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
 -- Evidence (Job Recorder, SP-040, 2026-11-19): a job is taken from a "Take Quest" prompt (Floor Staff: Workspace.NPCs.Thlentil;
 -- Scientific Engineer: Workspace.Map.Model.Model.Paperworks), which creates PlayerGui.Mission ("Progress: a/b"). Floor Staff: one
 -- "Spill" prompt under Workspace.Quest.Spills moves after each wipe; progress rises ~2.2 s after the prompt; at 10/10 the game sends
@@ -5784,7 +5784,7 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- pcall(writefile,path,"SPARKLING AUTO JOB v1.6 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop/tablet, PROGRESS = window text, MINIGAME2 = the [2] click minigame,"
+ pcall(writefile,path,"SPARKLING AUTO JOB v1.7 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop/tablet, PROGRESS = window text, MINIGAME2 = the [2] click minigame,"
   .." DONE = job finished (pay arrives from the game), QUIT = pressed [ Quit ], ZENI = inventory label.\n"..table.concat(state.Lines,"\n"))
 end
 
@@ -5916,19 +5916,37 @@ local function stop(reason)
  log("STOP "..reason);save()
 end
 -- Walk to a prompt and trigger it with a short hold, the way pressing E does (the precedent is Beyond Nen Auto Chests).
-local function usePrompt(humanoid,root,prompt,now,label)
+-- v1.7 (SP-118): the job giver's prompt was held 64 times in a row from 3.7 studs without a job starting, and the character
+-- never moved because 3.7 was inside the old reach. With close=true the character keeps walking until 2.5 studs while it
+-- presses, the hold lasts the prompt's HoldDuration plus 0.1 s, and presses rotate hold, hold, the prompt's key, executor fire.
+local function usePrompt(humanoid,root,prompt,now,label,close)
  local part=promptPart(prompt)
  local distance=(part.Position-root.Position).Magnitude
  local reach=math.max(3,math.min(prompt.MaxActivationDistance,10)-2)
- if distance>reach then
-  if now>=state.NextMove then state.NextMove=now+.3;humanoid:MoveTo(part.Position)end
-  return false
- end
+ if distance>(close and 2.5 or reach) and now>=state.NextMove then state.NextMove=now+.3;humanoid:MoveTo(part.Position)end
+ if distance>reach then return false end
  if now<state.NextPrompt then return false end
  state.NextPrompt=now+1.2
- local ok=pcall(function()prompt:InputHoldBegin()end)
- if ok then table.insert(state.Held,{Prompt=prompt,At=now+.09})end
- log(string.format("%s %s at %.1f studs ok=%s",label,prompt:GetFullName():sub(1,120),distance,tostring(ok)))
+ local hold=math.max(.09,prompt.HoldDuration+.1)
+ local method="hold"
+ if close then
+  state.TakeTries=(state.TakeTries or 0)+1
+  local turn=(state.TakeTries-1)%4
+  if turn==2 then method="key" elseif turn==3 and type(fireproximityprompt)=="function" then method="fire" end
+ end
+ local ok
+ if method=="key" then
+  local key=prompt.KeyboardKeyCode
+  ok=pcall(function()vim:SendKeyEvent(true,key,false,game)end)
+  if ok then table.insert(state.Held,{Key=key,At=now+hold})end
+ elseif method=="fire" then
+  ok=pcall(fireproximityprompt,prompt)
+ else
+  ok=pcall(function()prompt:InputHoldBegin()end)
+  if ok then table.insert(state.Held,{Prompt=prompt,At=now+hold})end
+ end
+ log(string.format("%s %s at %.1f studs ok=%s method=%s holdMs=%d maxDist=%.1f lineOfSight=%s",label,prompt:GetFullName():sub(1,120),distance,tostring(ok),
+  method,math.floor(hold*1000+.5),prompt.MaxActivationDistance,tostring(prompt.RequiresLineOfSight)))
  return ok
 end
 -- v1.1 live run: ten clicks at the button's centre (IgnoreGuiInset ScreenGui, inset 58) never pressed Restart Quest's [ Yes ].
@@ -6000,7 +6018,7 @@ local function freeClickPoint(avoid)
  return nil
 end
 local function resetJob(now)
- state.DoneAt=nil;state.QuitTries=0;state.MinigameSeen=false;state.MinigameDone=false;state.MinigameStart=nil
+ state.DoneAt=nil;state.QuitTries=0;state.MinigameSeen=false;state.MinigameDone=false;state.MinigameStart=nil;state.ClosedAt=nil
  state.LastCounter=nil;state.CounterAt=now;state.SpillWait=nil;state.LastProgressAt=now
  state.Game2Seen=false;state.Game2Counter=nil;state.Game2Timer=nil;state.Game2Start=nil;state.Clicks=0
 end
@@ -6013,7 +6031,7 @@ local function toggle()
  if not humanoid or humanoid.Health<=0 then status.Text="Wait until your character is alive.";return end
  state.Enabled=true;state.Lines={};state.Character=character;state.Jobs=0;state.NextMove=0;state.NextPrompt=0
  state.NextTap=0;state.NextSave=0;state.Paused=false;state.LastDone=nil;state.Kind=nil;state.Taps=0;state.MissionGui=nil
- state.RestartShown=false;state.LastAction="none";table.clear(promptCache)
+ state.RestartShown=false;state.LastAction="none";state.TakeTries=0;table.clear(promptCache)
  resetJob(os.clock())
  button.Text="Auto Job: ON";status.Text="On."
  log("START zeni="..tostring(zeni()))
@@ -6117,17 +6135,30 @@ local function step(now)
   end
   local prompt=findPrompt(root,"Take Quest",nil,jobGiver)
   if not prompt then status.Text="No job giver within "..SEARCH.." studs. Stand near Thlentil (cafe) or the Scientific Engineer job board.";return end
-  if usePrompt(humanoid,root,prompt,now,"TAKE")then state.LastAction="TAKE" end
+  if usePrompt(humanoid,root,prompt,now,"TAKE",true)then state.LastAction="TAKE" end
   status.Text=string.format("Taking a job... Jobs finished: %d",state.Jobs)
   return
  end
  -- A new job window (taken or restarted) starts a fresh job.
- if job.Gui~=state.MissionGui then state.MissionGui=job.Gui;resetJob(now);log("WINDOW new job window")end
+ if job.Gui~=state.MissionGui then
+  if (state.TakeTries or 0)>0 then log("TAKE worked after "..state.TakeTries.." tries")end
+  state.MissionGui=job.Gui;state.TakeTries=0;resetJob(now);log("WINDOW new job window")
+ end
  local kind=job.Name:find("Floor Staff",1,true) and "floor" or job.Name:find("Scientific Engineer",1,true) and "science" or nil
  if kind~=state.Kind then state.Kind=kind;log("JOB "..job.Name.." progress="..tostring(job.Done).."/"..tostring(job.Total))end
  if job.Done~=state.LastDone then state.LastDone=job.Done;state.LastProgressAt=now;log("PROGRESS "..tostring(job.Done).."/"..tostring(job.Total))end
  -- Finished (Floor Staff 10/10, or the minigame has closed or timed out): wait for the pay, then clear the window.
- local finished=(job.Total and job.Total>0 and job.Done and job.Done>=job.Total) or (kind=="science" and state.MinigameSeen and (not game1 or state.MinigameDone))
+ local complete=job.Total and job.Total>0 and job.Done and job.Done>=job.Total
+ local closed=kind=="science" and state.MinigameSeen and (not game1 or state.MinigameDone)
+ -- v1.7 (SP-118): a minigame that closed while the window still reads 0/1 is not a finished job (v1.6 quit one that way and
+ -- could not take the job again). Wait 3 s for the progress, then open the laptop again.
+ if closed and not complete and job.Total and not game1 then
+  if not state.ClosedAt then state.ClosedAt=now;log(string.format("MINIGAME closed without progress: open %.1f s, counter %s, taps %d",now-(state.MinigameStart or now),tostring(state.LastCounter),state.Taps))end
+  if now-state.ClosedAt<3 then status.Text="The minigame closed; waiting for the job progress...";return end
+  state.MinigameSeen=false;state.MinigameDone=false;state.ClosedAt=nil;state.Taps=0;closed=false
+  log("MINIGAME retry: progress still "..tostring(job.Done).."/"..tostring(job.Total))
+ end
+ local finished=complete or closed
  if finished then
   if not state.DoneAt then state.DoneAt=now;state.Jobs+=1;log("DONE "..job.Name.." taps="..state.Taps.." zeni="..tostring(zeni()));state.Taps=0 end
   if now-state.DoneAt<2 then status.Text="Job finished; waiting for the pay...";return end

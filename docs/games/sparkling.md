@@ -3071,3 +3071,16 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 **Limits:** a Blunt from another attacker's light hit inside the 450 ms window is read as "late" and moves the delay 6 ms the wrong way once. Expect the Perfect Counter rate to stay well under the light-hit counter rate; the 370-376 ms band, the best so far, gave 37%.
 
 **Next step:** fight the Shadow and read the `HEAVY_ADAPT` lines. The delay should settle in a band a few steps wide; compare the Perfect Counter rate there with 12% on the old rotation (10 of 90 presses). If it pins at 0.25 or 0.32 s, the model is wrong: recheck which outcome means early.
+
+## SP-117 — Auto Job v1.6: [1] key minigame at full speed (2026-11-25, Claude)
+
+**User:** "for the auto job, make the auto keys run on fullblast".
+
+**Evidence (Auto Job v1.5 log, 2026-11-25):** Scientific Engineer [1] finished twice at `taps=51`, each 10.5 s after the minigame opened (5 presses/s), +200 Zeni per job. The job completes when the count is reached, not when the 60 s timer ends.
+
+**Changed / untested live — v1.6:**
+- The [1] key minigame now presses the shown key on one frame and releases it on the next: ~30 presses/s at 60 FPS (`TAP_RATE=30`, hold 0), up from 5/s with a 40 ms hold. Same method as the [2] clicks (SP-072).
+- Nothing else changed. **Checks:** edited in the public `AnomalysHub.lua` only, by reading the code. **Not compiled**, no live run. Not in the source tree or private build.
+- Unknown: whether the game counts presses released after one frame, whether it caps the rate, and whether it reacts to it.
+
+**Next step:** run Auto Job on Scientific Engineer [1] and read the log. `MINIGAME open` to `DONE` should drop from 10.5 s to about 2 s with `taps` near 51. If `taps` is far above 51 or the time does not drop, presses are being lost: lower `TAP_RATE` or restore a short hold.

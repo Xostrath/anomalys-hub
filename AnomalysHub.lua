@@ -5739,7 +5739,7 @@ controller.RegisterCleanup(function()stop("Unloaded.")end)
 
 end)()
 ;(function()
--- Sparkling Auto Job v1.5 (SP-042/043/071/072). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
+-- Sparkling Auto Job v1.6 (SP-042/043/071/072/117). Floor Staff and Scientific Engineer, looped: take the job, do it, quit the stuck window, take it again.
 -- Evidence (Job Recorder, SP-040, 2026-11-19): a job is taken from a "Take Quest" prompt (Floor Staff: Workspace.NPCs.Thlentil;
 -- Scientific Engineer: Workspace.Map.Model.Model.Paperworks), which creates PlayerGui.Mission ("Progress: a/b"). Floor Staff: one
 -- "Spill" prompt under Workspace.Quest.Spills moves after each wipe; progress rises ~2.2 s after the prompt; at 10/10 the game sends
@@ -5753,6 +5753,7 @@ end)()
 -- longer re-pressed while a minigame is open (v1.3 pressed it every 1.2 s, and both recorded attempts closed early at 133 / 150).
 -- The finish has not been recorded yet: [2] counts as done only when the job window shows its progress complete.
 -- v1.5 (SP-072, user request "full blast"): [2] clicks at ~30/s instead of 8/s.
+-- v1.6 (SP-117, user request): [1] key presses at ~30/s instead of 5/s.
 local env=(getgenv and getgenv()) or shared
 local controller=env.__AnomalyUniversalController
 if type(controller)~="table" or controller.Profile~="Sparkling" then return end
@@ -5767,7 +5768,9 @@ local page=ui.Pages.Auto
 if not page then return end
 
 local SEARCH=150          -- studs to look for job prompts
-local TAP_RATE=5          -- minigame key presses per second (the user did ~4/s; the goal is over 50 in 60 s)
+-- [1] minigame key presses per second. v1.6 (SP-117, user request "full blast"): press on one frame, release on the next, so ~30/s
+-- at 60 FPS, up from 5/s with a 40 ms hold (51 taps took 10.5 s). Whether the game counts them all shows in DONE taps= vs the time.
+local TAP_RATE=30
 -- [2] minigame clicks per second (the user did ~4/s; the goal is over 300 in 60 s, so at least 5/s). User asked for full speed:
 -- press on one frame, release on the next, so ~30/s at 60 FPS. Whether the server counts them all shows in MINIGAME2 closed.
 local CLICK_RATE=30
@@ -5781,7 +5784,7 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- pcall(writefile,path,"SPARKLING AUTO JOB v1.5 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop/tablet, PROGRESS = window text, MINIGAME2 = the [2] click minigame,"
+ pcall(writefile,path,"SPARKLING AUTO JOB v1.6 // prompt holds + key/mouse input only\nTAKE = took a job, TASK = triggered a spill or the laptop/tablet, PROGRESS = window text, MINIGAME2 = the [2] click minigame,"
   .." DONE = job finished (pay arrives from the game), QUIT = pressed [ Quit ], ZENI = inventory label.\n"..table.concat(state.Lines,"\n"))
 end
 
@@ -6065,7 +6068,7 @@ local function step(now)
    if state.Laptop and (root.Position-state.Laptop).Magnitude>5 and now>=state.NextMove then state.NextMove=now+.5;humanoid:MoveTo(state.Laptop)end
    if now>=state.NextTap then
     state.NextTap=now+1/TAP_RATE
-    if pcall(function()vim:SendKeyEvent(true,key,false,game)end)then table.insert(state.Held,{Key=key,At=now+.04});state.Taps+=1 end
+    if pcall(function()vim:SendKeyEvent(true,key,false,game)end)then table.insert(state.Held,{Key=key,At=now});state.Taps+=1 end
    end
    status.Text=string.format("Scientific Engineer minigame: pressing %s (counter %s). Jobs finished: %d",game1.Key,tostring(game1.Counter),state.Jobs)
    return

@@ -3101,3 +3101,39 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - **Checks:** edited in the public `AnomalysHub.lua` only, by reading the code. **Not compiled**, no live run. Not in the source tree or private build.
 
 **Next step:** run Auto Job and read the `TAKE` lines: which method and distance start the job. If none does after a Quit, time how long until it works by hand (a server wait after quitting). Read any `MINIGAME closed without progress` line for the counter at close.
+## SP-119 — Your own punches are why counters fail; Auto Parry v18.8, Auto Shadow v2.8 (2026-11-26, Claude)
+
+**User:** "more auto parry test for you, i need this absolutely perfect, it takes way too many hits for it to MAYBE parry".
+
+**Evidence (Verified from captures):** all 30 parry histories since 2026-11-23 (1,455 F presses on NPC cues), plus a per-hit pass over the 10 since v18.7 (587 self Blunts). Hold Punches (SP-057) was **off** in every one of the 30 (`holdClicks=false`).
+- **What the hits that landed were (v18.7 runs, NPC):** hits 3/4 skipped as too fast (`npc_late_hit`, about 40%), hits 1/2/5 during the Counter cooldown after a failed press (about 30%), hit 5 skipped for ping. A counter on hit 1 or 2 ended the combo every time (136 combos were a single countered hit 1). Most of the damage comes from full combos taken during a 5 s cooldown.
+- **A failed press costs the cooldown:** Blunt after a press → 5 s (45 of 59), whiff (the swing never reached you) → 5 s (13 of 13), GUARD BREAK → 4 s (27 of 27). A blocked hit (BlockEffect) usually does not.
+- **Your own M1 is the main cause of failed presses.** Light hits, by time since your last M1 at the press:
+
+  | Last M1 before the press | Presses | Counter |
+  |---|---|---|
+  | under 0.2 s | 404 | 55% |
+  | 0.2-0.4 s | 193 | 64% |
+  | 0.6-1 s | 42 | 69% |
+  | over 1 s / none | 584 | 88% |
+
+  - Same split in every recording (e.g. 1795674898: 50% vs 93%; 1795715690: 33% vs 73%).
+  - For Shadow-type hits (1,204 presses) counters recover once the last M1 is ~0.9 s old: 58% inside 0.9 s, 89% outside.
+  - Only 71 of the light-hit M1s came after the swing appeared (the part Hold Punches covers); 529 came 0-350 ms before it.
+  - With no M1 before, an M1 0-100 ms after the press still cost some: 84% vs 95% at 100-200 ms.
+- **Rogue heavy: SP-115/116 read the cause wrong.** 78 of 79 GUARD BREAKs had an M1 within 0.3 s before the press, and 146 of 189 heavy presses had one between the swing appearing and the press. With no M1 in the 0.9 s before, 25 presses gave 13 Perfect Counters, 1 GUARD BREAK, 5 Blunt; age + ping 390-399 ms gave 5 of 7. v18.7's adaptive delay (41 `HEAVY_ADAPT` lines, 9 Perfect Counters) wandered 273-303 ms with every outcome at every delay because it was reacting to punches.
+- **Shadow rhythm:** after a self counter, the Shadow's next attack started 1.23 s later at the earliest (795 counters; p10 1.45 s, median 2.93 s).
+- **Shadow farm clicks every 0.3 s** (Auto Shadow v2.7), so in a Shadow fight there is nearly always an M1 just before the swing.
+- Smaller: far NPC swings (11-14 studs) that never reach you still use up a press (13 whiffs). PvP `unverified_style_speed` starts at speed 1.0/2.0 had no paired HitOut, so they stay skipped.
+
+**Changed / untested live:**
+- **Auto Parry v18.8:**
+  - Hold Punches is on by default and turned on once for existing settings (`HoldClicksOn188`); the toggle still works.
+  - The hold now lasts until 150 ms after the press (was 30 ms). Config shows `holdClicks=true@mappedCue->press+150ms`.
+  - Rogue heavy starts at 0.29 s; an outcome after your own M1 within 600 ms no longer moves it (`HEAVY_ADAPT ... lastM1Ms= step=skipped_own_m1`).
+  - New `controller.SparklingParryState()` → Auto Parry on, counter usable-again time, Hold Punches on.
+- **Auto Shadow v2.8, "Parry-First Punches" (on by default, saved in `sparkling_shadow_parry_first.txt`):** while Auto Parry is on, the farm punches only while the counter is at least 0.9 s from usable: ~0.35 s after a counter, ~4 s after a failed press. If the counter sits ready for 6 s, punching resumes until the next counter or failure. `POWER` lines log `parryFirst= punchesWaited=`; the status line shows when punches are held.
+- **Cost:** far fewer Shadow punches per minute. Whether power gain drops with it is unknown.
+- **Checks:** edited in the public `AnomalysHub.lua` only, by reading the code. **Not compiled**, no live run. Not in the source tree or private build. Hold Punches needs `CLICK_HOLD available=true`; hooks from an earlier hub run in the same server need a rejoin (SP-057).
+
+**Next step:** rejoin, run the hub, fight the Shadow (and a rogue if possible). Check `CLICK_HOLD available=true`, count `CLICK_HELD`, then compare the light counter rate with the 58% / 89% split above and the heavy Perfect Counter rate with 22%. Check the Shadow farm's punches per minute and kick-outs against v2.7.

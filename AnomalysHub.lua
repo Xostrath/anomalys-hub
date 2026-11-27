@@ -3953,6 +3953,7 @@ end)()
 -- v2.5 (SP-112, user): gets up with SleepUI's get-up button, pressed up to four times ("sometimes you have to press get up twice"),
 -- then walks at least 15 studs from the bed before pressing J.
 -- v2.6 (SP-113, user): equips the Combat tool (key 1, EquipTool fallback) whenever it isn't out.
+-- v2.8 (SP-119): parry-first punches (see PUNCH_CLEAR).
 -- v2.7 (SP-114, user: "its not moving from the bed"): up = no Sleeping, not anchored, WalkSpeed back; bed clicks/Space/N only while still
 -- locked; injury rests ignore fatigue and end once injuries hold at 10% or less for 10 s.
 local env=(getgenv and getgenv()) or shared
@@ -3998,7 +3999,7 @@ end
 local function save()
  if type(writefile)~="function" then return end
  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
- local body="SPARKLING AUTO SHADOW FARM v2.7 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
+ local body="SPARKLING AUTO SHADOW FARM v2.8 // key and mouse input (bed: mouse, then fireclickdetector)\nENTER/GONE = Shadow appeared/vanished, PRESS J = entering the Inner World,"
   .." SHADOW = the Shadow's fields (looking for an owner tag), POWER = your PowerLevel, PAUSE = chat/menu open, FOCUS = Roblox window focus.\n"
   .."REST = rest phase (injury or fatigue): SLEEP = pressing N, BED scan/path/use, NEARBY = closest clickables when no bed matched, BEDSTATE = sit/anchor/position,"
   .." HEAL = worst injury and fatigue while resting, WAITBED = waiting for you to lie in a bed (your clicks/prompts and what was learned),"
@@ -4009,11 +4010,11 @@ local function save()
  if state.RunPath then pcall(writefile,state.RunPath,body)end
 end
 
-local section=ui.Section(page,"Auto Farm",106,true)
+local section=ui.Section(page,"Auto Farm",136,true)
 section.Frame.LayoutOrder=-60
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,32),Size=UDim2.new(1,-28,0,68),BackgroundTransparency=1,Font=Enum.Font.Gotham,TextSize=10,
  TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. Enters the Inner World with J, walks to your Shadow and punches (M1). At 90% injury or 80% fatigue it sleeps (N) or rests in the nearest bed, then farms again (no bed found: lie in one yourself and it learns it). Turn Auto Parry on for defense. Needs Meditation Type."},section.Body)
+ Text="Off. Enters the Inner World with J, walks to your Shadow and punches (M1). At 90% injury or 80% fatigue it sleeps (N) or rests in the nearest bed, then farms again (no bed found: lie in one yourself and it learns it). Turn Auto Parry on for defense; Parry-First Punches holds punches while a counter may be needed. Needs Meditation Type."},section.Body)
 local button
 
 local function release(item)
@@ -4727,6 +4728,39 @@ local function toggle()
 end
 button=ui.Checkbox(section.Body,"Auto Shadow Farm","Auto Shadow Farm: OFF",toggle)
 button.Position=UDim2.fromOffset(14,0)
+-- v2.8 (SP-119) parry-first punches, on by default. Shadow light parries countered 58% with your own M1 in the 0.9 s before the
+-- press against 89% without (1,204 presses, 25 recordings), and after a counter the Shadow's next swing started 1.23 s later at the
+-- earliest (795 counters). So while Auto Parry is on, punches go out only while its counter is at least 0.9 s from usable: ~0.35 s
+-- after a counter, ~4 s after a failed press. If the counter sits ready for 6 s (the Shadow isn't attacking), punching resumes
+-- until the next counter or failure. Fewer punches per minute is the cost.
+local PUNCH_CLEAR,PARRY_IDLE=.9,6
+local parryFirstPath="AnomalyHub/universal/sparkling_shadow_parry_first.txt"
+state.ParryFirst=true
+if type(readfile)=="function"then local ok,value=pcall(readfile,parryFirstPath);if ok and value=="off" then state.ParryFirst=false end end
+local parryFirstBox
+parryFirstBox=ui.Checkbox(section.Body,"Parry-First Punches","Parry-First Punches: "..(state.ParryFirst and "ON" or "OFF"),function()
+ state.ParryFirst=not state.ParryFirst
+ parryFirstBox.Text="Parry-First Punches: "..(state.ParryFirst and "ON" or "OFF")
+ if type(writefile)=="function"then
+  if type(makefolder)=="function"then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
+  pcall(writefile,parryFirstPath,state.ParryFirst and "on" or "off")
+ end
+ log("SETTING parryFirst="..tostring(state.ParryFirst))
+end)
+parryFirstBox.Position=UDim2.fromOffset(14,102)
+-- nil = punch now; otherwise the reason the punch waits.
+local function punchWait(now)
+ if not state.ParryFirst then return nil end
+ local get=controller.SparklingParryState
+ if type(get)~="function" then return nil end
+ local ok,on,readyAt=pcall(get)
+ if not ok or not on or type(readyAt)~="number" then return nil end
+ local left=readyAt-now
+ if left>0 then state.ParryBusyAt=now end
+ if left>=PUNCH_CLEAR then return nil end
+ if now-(state.ParryBusyAt or -math.huge)>=PARRY_IDLE then return nil end
+ return left>0 and string.format("counter back in %.1f s",left) or "counter ready"
+end
 
 local function beginRest(character,humanoid,root,limb,worst,tired)
  state.Resting=true;releaseAll()
@@ -4827,7 +4861,7 @@ controller.Connect(run.Heartbeat,function()
  if now>=state.NextPower then
   state.NextPower=now+10
   local left,right=character:FindFirstChild("LeftArmInj"),character:FindFirstChild("RightArmInj")
-  log("POWER "..tostring(power(character)).." focused="..tostring(state.Focused).." punches="..state.Clicks.." unfocusedPunches="..state.UnfocusedClicks
+  log("POWER "..tostring(power(character)).." focused="..tostring(state.Focused).." punches="..state.Clicks.." parryFirst="..tostring(state.ParryFirst).." punchesWaited="..(state.ParryWaits or 0).." unfocusedPunches="..state.UnfocusedClicks
    .." arms="..tostring(left and tonumber(left.Value) and math.floor(left.Value) or "?").."/"..tostring(right and tonumber(right.Value) and math.floor(right.Value) or "?")
    .." worstInjury="..tostring(worst and math.floor(worst) or "?").." "..tostring(limb)..string.format(" fatigue=%.2f",tired))
  end
@@ -4867,8 +4901,14 @@ controller.Connect(run.Heartbeat,function()
   local flat=Vector3.new(target.X,root.Position.Y,target.Z)
   if (flat-root.Position).Magnitude>.5 then root.CFrame=CFrame.lookAt(root.Position,flat)end
  end
- if distance<=REACH+1 and now>=state.NextClick and (not enemy or enemy.Health>0) then
-  state.NextClick=now+.3
+ local waiting=distance<=REACH+1 and now>=state.NextClick and punchWait(now)
+ if waiting then
+  -- Re-check every frame-ish so the short window after a counter isn't missed; count skipped punches at the normal 0.3 s pace.
+  state.NextClick=now+.03;state.WaitNote=waiting
+  if now>=(state.NextWaitCount or 0) then state.NextWaitCount=now+.3;state.ParryWaits=(state.ParryWaits or 0)+1 end
+ end
+ if not waiting and distance<=REACH+1 and now>=state.NextClick and (not enemy or enemy.Health>0) then
+  state.NextClick=now+.3;state.WaitNote=nil
   local ok=click()
   if ok==nil then status.Text="The hub covers the screen; hide it (Right Alt) so punches reach the game.";return end
   if not ok then stop("Mouse input failed.");return end
@@ -4881,8 +4921,8 @@ controller.Connect(run.Heartbeat,function()
    log("AIM camera="..tostring(workspace.CurrentCamera.CFrame.LookVector).." mouse="..tostring(mouse.UnitRay.Direction).." toShadow="..tostring((target-root.Position).Unit))
   end
  end
- status.Text=string.format("Fighting your Shadow (%.0f studs). Entries: %d · kicked out: %d · punches: %d · rests: %d · power %s",
-  distance,state.Entries,state.Kicks,state.Clicks,state.Rests,tostring(power(character) and math.floor(power(character)) or "?"))
+ status.Text=string.format("Fighting your Shadow (%.0f studs)%s. Entries: %d · kicked out: %d · punches: %d · rests: %d · power %s",
+  distance,state.WaitNote and " · holding punches, "..state.WaitNote or "",state.Entries,state.Kicks,state.Clicks,state.Rests,tostring(power(character) and math.floor(power(character)) or "?"))
 end)
 -- Tabbed out (SP-035): the farm keeps going; focus changes are logged to check whether key/mouse input still reaches the game.
 controller.Connect(input.WindowFocusReleased,function()state.Focused=false;if state.Enabled then log("FOCUS lost");save()end end)
@@ -7561,7 +7601,8 @@ controller.RegisterCleanup(function()stop("Unloaded.")end)
 
 end)()
 ;(function()
--- Combat page v18.7 / diagnostics v7: rogue heavy delay adjusts itself from each outcome (SP-116).
+-- Combat page v18.8 / diagnostics v7: Hold Punches on by default and held until 150 ms after the press; rogue heavy starts at 0.29 s and ignores outcomes after your own M1 (SP-119).
+-- v18.7: rogue heavy delay adjusts itself from each outcome (SP-116).
 -- v18.6: NPC ping skip uses measured wind-up; rogue heavy rotates 0.28/0.29 s (SP-115).
 -- v18.5: ping compensation (SP-073). v18.4 added recorded player_set_d (SP-068); v18.3 rogue-heavy trial retained.
 -- v16.1 (SP-035/036): keeps running when tabbed out (NPC cues only); own Shadow range 12; approach recheck for NPCs too.
@@ -7637,7 +7678,10 @@ local rogueHeavyTrials={NPC=0,Player=0}
 -- 360-376 ms), late ones in a self Blunt (dominant from 402 ms), and the window between is narrower than the ~20 ms spread in when the
 -- swing is seen. So each press's outcome moves the next one: GUARD BREAK +6 ms, Blunt -6 ms, Perfect Counter keeps it.
 -- Starts at 0.285 s, limits 0.25-0.32 s, per target type, reset on reload.
-local rogueHeavyAdapt={NPC=.285,Player=.285,PressAt=nil,PressKind=nil}
+-- SP-119 (v18.8): the GUARD BREAKs that pushed the delay up were your own punches, not early presses (see Hold Punches). Without an
+-- M1 in the 0.9 s before, 25 presses gave 13 Perfect Counters and 1 GUARD BREAK; press age + ping 390-399 ms gave 5 of 7. So it
+-- starts at 0.29 s and an outcome only moves the delay when no M1 was sent in the 0.6 s before the press.
+local rogueHeavyAdapt={NPC=.29,Player=.29,PressAt=nil,PressKind=nil,PunchedMs=nil}
 -- PlunderTrainer combo (SP-059, history 1795148185, laptop-job place, 1 trainer, all seen at phase 0, speed 1.25). Order from
 -- same-actor sequences: hit1 115562914490424 -> hit2 139627968387116 -> hit3 92411449150342 -> hit4 124959370864638 ->
 -- hit5 80989963053908 (hit 4 is sometimes the rogue heavy instead). Attacker HitOut a median 218 / 167 / 118 / 267 / 184 ms after
@@ -7702,7 +7746,8 @@ local diagnosticStatus,button
 local players=game:GetService("Players")
 -- Combat page options (user's reference layout, 2026-11-17). Auto Parry itself never turns on after a reload; only these options persist.
 local settingsPath=rootPath.."sparkling_combat_settings.json"
-local settings={Range=8,PvE=true,PvP=false,SkipKnocked=true,SkipOffScreen=false,TimingOffsetMs=0,HoldMs=120,HoldClicks=false,PingComp=true,Binds={}}
+-- v18.8 (SP-119): Hold Punches is on by default; HoldClicksOn188 turns it on once for settings saved before v18.8.
+local settings={Range=8,PvE=true,PvP=false,SkipKnocked=true,SkipOffScreen=false,TimingOffsetMs=0,HoldMs=120,HoldClicks=true,HoldClicksOn188=false,PingComp=true,Binds={}}
 if type(readfile)=="function" then
  local ok,saved=pcall(function()return http:JSONDecode(readfile(settingsPath))end)
  if ok and type(saved)=="table" then
@@ -7730,6 +7775,10 @@ local function saveSettings()
  if type(makefolder)=="function" then pcall(makefolder,"AnomalyHub");pcall(makefolder,"AnomalyHub/universal")end
  pcall(writefile,settingsPath,http:JSONEncode(settings))
 end
+-- SP-119: Hold Punches was off in all 30 recordings since 2026-11-23. Light presses with your own M1 in the 0.9 s before
+-- countered 58% (611 Shadow presses) against 89% without, and 146 of 189 rogue-heavy presses had an M1 between the swing
+-- appearing and the press (78 of 79 GUARD BREAKs followed an M1 within 0.3 s). Turned on once; the toggle still works after.
+if not settings.HoldClicksOn188 then settings.HoldClicks=true;settings.HoldClicksOn188=true;saveSettings()end
 
 -- Same bounded, elapsed-time/history convention as Beyond Nen's recorder.
 local function sample(value)
@@ -7847,7 +7896,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=shared_npc_player_catalog timingTrial=npc_policy_pvp_transfer range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 sharedHeavyTrial=102483335944327@260/320/380ms sharedRogue=hit2,hit3@0,hit5@80ms,heavy@adaptive285ms+6/-6;skip1,4 sharedTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 sharedBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms sharedWolfFangClaw@100ms postCounterLockout=1.25s playerSetB=all5@40/0/0/40/20ms playerSetC=hit1@0,hit2/3@20,hit5@100ms;skip4;speed1.175+/-0.025 playerSetD=hit1/5@80,hit2@0ms;skip3,4;speed1.2+/-0.025 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+exact_noncolliding_target_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@mappedCue->press+30ms pingComp="..tostring(settings.PingComp).."@base"..PING_BASE_MS.."ms,skipShort"..math.floor(PING_SKIP_SHORT*1000).."ms,npcWindupMargin>="..math.floor(PING_MIN_MARGIN*1000).."ms@hit1/2=233,hit5=184ms"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4 npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 sharedHeavyTrial=102483335944327@260/320/380ms sharedRogue=hit2,hit3@0,hit5@80ms,heavy@adaptive290ms+6/-6,noStepAfterOwnM1<600ms;skip1,4 sharedTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 sharedBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms sharedWolfFangClaw@100ms postCounterLockout=1.25s playerSetB=all5@40/0/0/40/20ms playerSetC=hit1@0,hit2/3@20,hit5@100ms;skip4;speed1.175+/-0.025 playerSetD=hit1/5@80,hit2@0ms;skip3,4;speed1.2+/-0.025 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+exact_noncolliding_target_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@mappedCue->press+150ms pingComp="..tostring(settings.PingComp).."@base"..PING_BASE_MS.."ms,skipShort"..math.floor(PING_SKIP_SHORT*1000).."ms,npcWindupMargin>="..math.floor(PING_MIN_MARGIN*1000).."ms@hit1/2=233,hit5=184ms"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -8036,7 +8085,7 @@ parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. v18.7: ping compensation (presses shift by ping - 100 ms); NPC hits are tried while the wind-up still beats your ping. Rogue heavy timing adjusts itself after each Guard Break or hit; diagnostics record while enabled."},card)
+ Text="Off. v18.8: your punches are held from an enemy swing until just after the parry press (Hold Punches); punching right before a swing makes counters fail. Ping compensation on; diagnostics record while enabled."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -8143,7 +8192,7 @@ local function observe(model,track)
  end
  if id==rogueHeavy then
   local kind=targetKind(model)
-  local seed=rogueHeavyAdapt[kind] or .285
+  local seed=rogueHeavyAdapt[kind] or .29
   delay=math.max(0,seed+settings.TimingOffsetMs/1000)
   detail=detail.." trial="..(kind=="NPC" and "npc_rogue_heavy" or "player_rogue_heavy").."_adaptive heavyDelayMs="..math.floor(seed*1000+.5)
  end
@@ -8188,8 +8237,10 @@ local function observe(model,track)
  log("CUE_QUEUED",detail.." delay="..delay.." "..geometry)
  -- SP-057: your own M1 sent between an NPC swing appearing and our press made 60 of 64 counters fail (26 histories);
  -- clicks after the press were harmless. SP-064 shares the optional hold with player cues too.
+ -- SP-119: with no M1 before, an M1 0-100 ms after the press still countered 84% against 95% at 100-200 ms (202 / 152 presses),
+ -- so the hold now lasts until 150 ms after the press (was 30 ms).
  if settings.HoldClicks and controller.SparklingHoldClicks then
-  local untilAt=now+delay+.03
+  local untilAt=now+delay+.15
   if untilAt>clickHoldUntil then clickHoldUntil,clickHoldCue=untilAt,serial;controller.SparklingHoldClicks(untilAt)end
  end
  if rangeWait then log("RANGE_WAIT","windowMs=80 marginStuds=3 stepMs=20 "..detail.." "..geometry)end
@@ -8510,12 +8561,15 @@ local function update(dt)
     table.insert(session.Recent,{Id=attempts,At=now})
     if #session.Recent>16 then table.remove(session.Recent,1)end
     log("F_DOWN","attempt="..attempts.." apiReturned=true holdMs="..settings.HoldMs.." "..detail)
-    if cue.Id==rogueHeavy then rogueHeavyAdapt.PressAt=now;rogueHeavyAdapt.PressKind=targetKind(cue.Model)=="NPC" and "NPC" or "Player" end
+    if cue.Id==rogueHeavy then
+     rogueHeavyAdapt.PressAt=now;rogueHeavyAdapt.PressKind=targetKind(cue.Model)=="NPC" and "NPC" or "Player"
+     rogueHeavyAdapt.PunchedMs=now-lastLocalAttack<5 and math.floor((now-lastLocalAttack)*1000+.5) or nil
+    end
     captureState("after_input","attempt="..attempts.." cue="..cue.Serial)
    end
   end
  end
- status.Text=string.format("AUTO PARRY v18.7 · Ping compensation · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("AUTO PARRY v18.8 · Ping compensation · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)
@@ -8535,6 +8589,9 @@ if cooldown and cooldown:IsA("RemoteEvent")then controller.Connect(cooldown.OnCl
   end
  else log("COOLDOWN_UNPARSED","type="..typeof(data))end
 end))end
+-- SP-119: Auto Shadow reads this to punch only while a counter is at least 0.9 s away (see its parry-first punches).
+-- Returns: Auto Parry on, counter usable again at (os.clock), Hold Punches on.
+controller.SparklingParryState=function()return enabled==true,cooldownUntil,settings.HoldClicks==true end
 local effects=requests and requests:FindFirstChild("Effects")
 if effects and effects:IsA("RemoteEvent")then controller.Connect(effects.OnClientEvent,guarded("Effects",function(kind,model,message)
  if not enabled then return end
@@ -8547,10 +8604,13 @@ if effects and effects:IsA("RemoteEvent")then controller.Connect(effects.OnClien
   elseif sincePress>=.05 then
    local adaptKind=rogueHeavyAdapt.PressKind or "NPC"
    local before=rogueHeavyAdapt[adaptKind]
+   local punched=rogueHeavyAdapt.PunchedMs
    local step=message=="GUARD BREAK!" and .006 or message=="Blunt" and -.006 or 0
+   if punched and punched<600 then step=0 end
    rogueHeavyAdapt[adaptKind]=math.clamp(before+step,.25,.32)
    rogueHeavyAdapt.PressAt=nil
-   log("HEAVY_ADAPT","target="..adaptKind.." outcome="..sample(message).." sincePressMs="..math.floor(sincePress*1000+.5).." delayMs="..math.floor(before*1000+.5).."->"..math.floor(rogueHeavyAdapt[adaptKind]*1000+.5))
+   log("HEAVY_ADAPT","target="..adaptKind.." outcome="..sample(message).." sincePressMs="..math.floor(sincePress*1000+.5).." lastM1Ms="..tostring(punched or "none")
+    ..(punched and punched<600 and " step=skipped_own_m1" or "").." delayMs="..math.floor(before*1000+.5).."->"..math.floor(rogueHeavyAdapt[adaptKind]*1000+.5))
   end
  end
  if kind=="Weave" and (message=="Counter Parry!" or message=="Perfect Counter!")then

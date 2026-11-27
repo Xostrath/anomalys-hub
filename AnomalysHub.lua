@@ -7601,7 +7601,7 @@ controller.RegisterCleanup(function()stop("Unloaded.")end)
 
 end)()
 ;(function()
--- Combat page v18.9 / diagnostics v7: fast NPC hits (hit 3/4, rogue hit 1/4, trainer hit 3) are pressed when ping allows (SP-120).
+-- Combat page v18.10 / diagnostics v7: players get the fast-hit rule; NPCs may use player-combo animations (SP-121). fast NPC hits (hit 3/4, rogue hit 1/4, trainer hit 3) are pressed when ping allows (SP-120).
 -- v18.8: Hold Punches on by default and held until 150 ms after the press; rogue heavy starts at 0.29 s and ignores outcomes after your own M1 (SP-119).
 -- v18.7: rogue heavy delay adjusts itself from each outcome (SP-116).
 -- v18.6: NPC ping skip uses measured wind-up; rogue heavy rotates 0.28/0.29 s (SP-115).
@@ -7776,7 +7776,7 @@ local PING_MIN_MARGIN,PING_PRESS_LATENCY=.01,.008
 -- rogue hit 4 97 ms (n=12; 90 used). The group fights ran at ~75 ms ping, leaving ~30 ms, and light presses with 20-40 ms of
 -- margin countered 74% (148). They are pressed at once (NPCs only) when wind-up - 8 ms - ping is at least 25 ms: hits with a
 -- 117 ms wind-up up to ~84 ms ping, hit 4 only under ~50 ms. Otherwise they stay skipped (npc_late_hit, now with fastMarginMs).
-local FAST_WINDUPS={['95937874840716']=.117,['78875817992139']=.117,['92411449150342']=.117,['139487903747364']=.084,['92958519453859']=.090}
+local FAST_WINDUPS={['95937874840716']=.117,['78875817992139']=.117,['92411449150342']=.117,['139487903747364']=.084,['92958519453859']=.090,['111392139942881']=.117,['120956971139764']=.088}
 local FAST_MIN_MARGIN=.025
 local function saveSettings()
  if type(writefile)~="function" then return end
@@ -7904,7 +7904,7 @@ local function report(reason)
   .."\nExisting animations are logged only; they do not trigger defense. Unknown animations remain unmapped. Geometry and timestamps describe the client."
   .."\nLimits: 12000 event lines / 3MB / 2048 bytes per line. On limit, event detail freezes; totals and final status continue. State sampling=0.5s plus after-input/damage snapshots (64 fields each); save=5s."
   .."\nConfig: mode=active_test scope=shared_npc_player_catalog timingTrial=npc_policy_pvp_transfer range="..settings.Range.." watchRange="..math.max(30,settings.Range+10).." pvp="..tostring(settings.PvP).." pve="..tostring(settings.PvE)
-  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4@unless(windup-8ms-ping>=25ms;hit3/rogue1/trainer3=117,hit4=84,rogue4=90ms) npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 sharedHeavyTrial=102483335944327@260/320/380ms sharedRogue=hit2,hit3@0,hit5@80ms,heavy@adaptive290ms+6/-6,noStepAfterOwnM1<600ms;skip1,4 sharedTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 sharedBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms sharedWolfFangClaw@100ms postCounterLockout=1.25s playerSetB=all5@40/0/0/40/20ms playerSetC=hit1@0,hit2/3@20,hit5@100ms;skip4;speed1.175+/-0.025 playerSetD=hit1/5@80,hit2@0ms;skip3,4;speed1.2+/-0.025 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+exact_noncolliding_target_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@mappedCue->press+150ms pingComp="..tostring(settings.PingComp).."@base"..PING_BASE_MS.."ms,skipShort"..math.floor(PING_SKIP_SHORT*1000).."ms,npcWindupMargin>="..math.floor(PING_MIN_MARGIN*1000).."ms@hit1/2=233,hit5=184ms"
+  .." skipKnocked="..tostring(settings.SkipKnocked).." skipOffScreen="..tostring(settings.SkipOffScreen).." attackerDot>=0.2 selfDot>=0 trialSeeds=combo1:0.04,combo2:0.04,combo3:0,combo4:0,combo5:0.04 npcSkip=hit3,hit4@unless(windup-8ms-ping>=25ms;hit3/rogue1/trainer3=117,hit4=84,rogue4=90ms;alsoPlayers,setD3=117,setD4=88ms) playerComboOnNpcs=true npcHit5Seed=0 playerSkip=hit3,hit4 playerHit5Seed=0 offsetMs="..settings.TimingOffsetMs.." holdMs="..settings.HoldMs.." pulseGap=0.3 cueExpiry=0.25 pvpRangeRecheckMs=80 rangeMargin=3 npcRangeRecheck=true npcRange=12 sharedHeavyTrial=102483335944327@260/320/380ms sharedRogue=hit2,hit3@0,hit5@80ms,heavy@adaptive290ms+6/-6,noStepAfterOwnM1<600ms;skip1,4 sharedTrainer=hit1@40,hit2@0,hit4@80,hit5@0ms;skip3 sharedBandit=hit1@120,hit2@0,hit3@40,hit4@0,hit5@40ms sharedWolfFangClaw@100ms postCounterLockout=1.25s playerSetB=all5@40/0/0/40/20ms playerSetC=hit1@0,hit2/3@20,hit5@100ms;skip4;speed1.175+/-0.025 playerSetD=hit1/5@80,hit2@0ms;skip3,4;speed1.2+/-0.025 rangeStepMs=20 rangeSlots=2 typingAlwaysPauses=true cosmeticExclusions=exact_Zvanishdummy+exact_local_anotherHead+exact_noncolliding_target_anotherHead+noncolliding_Thrown_parts holdClicks="..tostring(settings.HoldClicks).."@mappedCue->press+150ms pingComp="..tostring(settings.PingComp).."@base"..PING_BASE_MS.."ms,skipShort"..math.floor(PING_SKIP_SHORT*1000).."ms,npcWindupMargin>="..math.floor(PING_MIN_MARGIN*1000).."ms@hit1/2=233,hit5=184ms"
   .."\n"..table.concat(session.Lines,"\n")
   .."\nSTATUS="..tostring(reason or session.StopReason or "RUNNING")
   ..string.format("\nTOTAL attempts=%d selfCounterEvents=%d otherCounterEvents=%d possibleParried=%d damageEvents=%d held=%s elapsed=%.3f droppedLines=%d",attempts,observedCounters,session.OtherCounters,session.PossibleParried,session.Damage,tostring(held),(session.Ended or os.clock())-session.Started,session.Dropped)
@@ -8093,7 +8093,7 @@ parrySection.Frame.LayoutOrder=1
 local card=parrySection.Body
 local status=ui.Create("TextLabel",{Position=UDim2.fromOffset(14,252),Size=UDim2.new(1,-28,0,54),BackgroundTransparency=1,
  Font=Enum.Font.Gotham,TextSize=10,TextWrapped=true,TextColor3=ui.Colors.Muted,TextXAlignment=Enum.TextXAlignment.Left,
- Text="Off. v18.9: fast hits are tried when your ping is low enough; your punches are held from an enemy swing until just after the parry press (Hold Punches); punching right before a swing makes counters fail. Ping compensation on; diagnostics record while enabled."},card)
+ Text="Off. v18.10: fast hits (NPCs and players) are tried when your ping is low enough; your punches are held from an enemy swing until just after the parry press (Hold Punches); punching right before a swing makes counters fail. Ping compensation on; diagnostics record while enabled."},card)
 local function release(reason,force)
  if not held then return true end
  local now=os.clock()
@@ -8171,7 +8171,9 @@ local function observe(model,track)
  if seen[track] and now-seen[track]<.2 then skip("duplicate_track",detail);return end
  local id=track.Animation and track.Animation.AnimationId:match("%d+")
  local playerMove=id and (playerCombo[id] or playerComboC[id] or playerComboD[id])
- if playerMove and targetKind(model)~="Player" then skip("unmapped_animation",detail.." playerCombo=npc_unverified");return end
+ -- SP-121 (v18.10, user: NPCs use the same moves): player-combo animations now apply to NPCs too (none seen on an NPC in
+ -- 30 recordings up to 2026-11-26; was skipped as playerCombo=npc_unverified).
+ local playerFast=false
  local seed=playerMove and playerMove.Delay or (id and attacks[id])
  local delay=seed and math.max(0,seed+settings.TimingOffsetMs/1000)
  if delay==nil then skip("unmapped_animation",detail);return end
@@ -8183,16 +8185,27 @@ local function observe(model,track)
   if observedSpeed and (type(track.Speed)~="number" or track.Speed~=track.Speed or math.abs(track.Speed-observedSpeed)>.025) then
    skip("unverified_style_speed","stage=observe "..detail);return
   end
-  if playerMove.Skip then skip("player_late_hit","stage=observe "..detail);return end
+  if playerMove.Skip then
+   -- SP-121: a player's fast hits get the same ping rule as NPC ones (see FAST_WINDUPS).
+   local windup=FAST_WINDUPS[id]
+   local fastPing=windup and currentPing()
+   local margin=fastPing and windup-PING_PRESS_LATENCY-fastPing/1000
+   if not margin or margin<FAST_MIN_MARGIN then
+    skip("player_late_hit","stage=observe"..(margin and " fastMarginMs="..math.floor(margin*1000+.5) or "").." "..detail);return
+   end
+   playerFast=true
+   detail=detail.." trial=player_fast_hit windupMs="..math.floor(windup*1000+.5).." fastMarginMs="..math.floor(margin*1000+.5)
+  end
  end
  if rogueHits[id] then detail=detail.." style=rogue hit="..rogueHits[id] end
  if trainerHits[id] then detail=detail.." style=plunder_trainer hit="..trainerHits[id] end
  if banditHits[id] then detail=detail.." style=alien_bandit hit="..banditHits[id] end
  if sharedSkills[id] then detail=detail.." style=shared_skill skill="..sharedSkills[id] end
  -- SP-120 (v18.9): fast NPC hits are pressed at once when your ping leaves enough of their wind-up (see FAST_WINDUPS).
- local fastHit=false
+ local fastHit=playerFast
+ if playerFast then delay=0 end
  if lateHits[id] then
-  local windup=targetKind(model)=="NPC" and FAST_WINDUPS[id]
+  local windup=FAST_WINDUPS[id]
   local fastPing=windup and currentPing()
   local margin=fastPing and windup-PING_PRESS_LATENCY-fastPing/1000
   if not margin or margin<FAST_MIN_MARGIN then
@@ -8200,7 +8213,7 @@ local function observe(model,track)
     ..(margin and " fastMarginMs="..math.floor(margin*1000+.5) or "").." "..detail);return
   end
   fastHit=true;delay=0
-  detail=detail.." trial=npc_fast_hit hit="..lateHits[id].." windupMs="..math.floor(windup*1000+.5).." fastMarginMs="..math.floor(margin*1000+.5)
+  detail=detail.." trial="..(targetKind(model)=="NPC" and "npc" or "player").."_fast_hit hit="..lateHits[id].." windupMs="..math.floor(windup*1000+.5).." fastMarginMs="..math.floor(margin*1000+.5)
  end
  if id==immediateHit5 then delay=math.max(0,settings.TimingOffsetMs/1000);detail=detail.." trial="..(targetKind(model)=="NPC" and "npc_hit5_seed0" or "player_hit5_seed0") end
  if id==npcHeavy then
@@ -8591,7 +8604,7 @@ local function update(dt)
    end
   end
  end
- status.Text=string.format("AUTO PARRY v18.9 · Ping compensation · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
+ status.Text=string.format("AUTO PARRY v18.10 · Ping compensation · %d F attempts · %d self counters\n%d possible opponent parries · diagnostics recording",attempts,observedCounters,session.PossibleParried)
 end
 controller.Connect(run.Heartbeat,function(dt)
  local ok,err=pcall(update,dt)

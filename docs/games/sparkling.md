@@ -3168,3 +3168,25 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - **Checks:** edited in the public `AnomalysHub.lua` only, by reading the code. **Not compiled**, no live run. Not in the source tree or private build.
 
 **Next step:** a wave or Wolf Fang fight at under ~85 ms ping. Count `npc_fast_hit` presses and their counters by `fastMarginMs`. If the 25-35 ms band counters under ~55%, raise `FAST_MIN_MARGIN`.
+## SP-121 — Fast-hit rule for players; player combos allowed on NPCs, Auto Parry v18.10 (2026-11-26, Claude)
+
+**User:** "still logged the players animations for npcs because npcs have the same thing".
+
+**Evidence (Verified from captures, 30 histories since 2026-11-23):**
+- **No NPC played a player-combo animation:** 0 `playerCombo=npc_unverified` skips.
+- **Players throw the same fast hits as NPCs, at the same timing.** Median start → HitOut:
+
+  | Player move | Starts | Wind-up | Ping in those fights |
+  |---|---|---|---|
+  | set D hit 3 `111392139942881` (speed 1.2) | 13 | 117 ms | ~115 ms |
+  | set D hit 4 `120956971139764` | 9 | 88 ms | ~115 ms |
+  | PlunderTrainer hit 3 `92411449150342` | 5 | 109 ms | ~118 ms |
+
+  They landed 7, 4 and 2 times.
+- **The two most frequent unmapped player animations aren't regular attacks.** `122608582490382` and `11138955942` started ~350 times each but were followed by a HitOut only 19 / 27 times and landed 10 / 15 times. Not mapped.
+
+**Changed / untested live — v18.10:**
+- The SP-120 fast-hit rule (press at once when wind-up − 8 ms − ping ≥ 25 ms) now applies to players too: shared `lateHits` IDs plus set D hits 3/4 (117 / 88 ms). Logged `trial=player_fast_hit`.
+- At the ~115 ms ping of the recorded PvP fights the margin is negative, so they would still be skipped there.
+- Player-combo animations (sets B/C/D, with their speed checks) now apply to NPCs as well. Config shows `playerComboOnNpcs=true`.
+- **Checks:** edited in the public `AnomalysHub.lua` only, by reading the code. **Not compiled**, no live run. Not in the source tree or private build.

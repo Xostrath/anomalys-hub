@@ -3137,3 +3137,34 @@ All selected Thug5 and recorded no target health changes. The first ends at 87.1
 - **Checks:** edited in the public `AnomalysHub.lua` only, by reading the code. **Not compiled**, no live run. Not in the source tree or private build. Hold Punches needs `CLICK_HOLD available=true`; hooks from an earlier hub run in the same server need a rejoin (SP-057).
 
 **Next step:** rejoin, run the hub, fight the Shadow (and a rogue if possible). Check `CLICK_HOLD available=true`, count `CLICK_HELD`, then compare the light counter rate with the 58% / 89% split above and the heavy Perfect Counter rate with 22%. Check the Shadow farm's punches per minute and kick-outs against v2.7.
+## SP-120 — Non-Shadow fights; fast NPC hits pressed when ping allows, Auto Parry v18.9 (2026-11-26, Claude)
+
+**User:** "there is more in there than shadows" (about SP-119, which was read mostly from Shadow fights).
+
+**Evidence (Verified from captures):** every self Blunt / GUARD BREAK in the 30 histories since 2026-11-23, attributed to the attacker whose HitOut came within 0.2 s before it.
+
+| Attacker | Hits taken | Presses | Counters |
+|---|---|---|---|
+| Shadow | 2,046 | 1,333 | 66% |
+| Players | 72 | 16 | 56% |
+| PlunderTrainer | 57 | 39 | 62% |
+| EX Wolf Fang (ambush/wave) | 82 | 47 | 43% |
+| Yeti (waves) | 61 | 23 | 70% |
+| Thug (waves) | 25 | 22 | 41% |
+| No HitOut found (skills, projectiles) | 276 | — | — |
+
+- **Why the ~300 non-Shadow hits landed:**
+  - 108 skipped as too fast (`npc_late_hit`): Wolf Fang/rogue hit 1 `78875817992139` (41), Yeti/Thug hits 3/4 (40), PlunderTrainer hit 3 `92411449150342` (16), rogue hit 4 (11).
+  - 84 during the Counter cooldown. In wave and ambush fights one enemy's counter or miss leaves you open to the others.
+  - 27 skipped by the facing checks (self 19, attacker 8) and still hit. No press has ever been made below `selfDot` 0.3, so whether a counter works facing away is unknown. Unchanged.
+  - Players: 22 with no attack animation seen, 18 unmapped (`11138955942` ×7, `122608582490382` ×7), 15 `player_late_hit`.
+- **Fast hits are not too fast at your ping in those fights.** Median wind-up (swing seen to HitOut): standard hit 3 117 ms (n=506), rogue hit 1 117 ms (n=59), PlunderTrainer hit 3 117 ms (n=20), standard hit 4 84 ms (n=459), rogue hit 4 97 ms (n=12). The wave/ambush recordings ran at a median ~75 ms ping (1795715690, 1795716377), leaving ~30 ms. Light presses with 20-40 ms of margin countered 74% (148). SP-031's 15% / 8% came at ~110 ms ping, where the margin is about 0.
+
+**Changed / untested live — Auto Parry v18.9:**
+- Hits in `lateHits` with a measured wind-up (NPCs only) are pressed at once, with no ping delay, when wind-up − 8 ms − ping ≥ 25 ms. That means up to ~84 ms ping for the 117 ms hits, and hit 4 only under ~50 ms ping.
+- Logged `trial=npc_fast_hit hit= windupMs= fastMarginMs=`. Skips keep `npc_late_hit`, now with `fastMarginMs`. Config shows `npcSkip=hit3,hit4@unless(...)`.
+- Players unchanged. Their fast hits are `player_set_*` skips with their own timings.
+- **Risk:** a failed press costs the 5 s cooldown. With ~70% success it should still beat taking the hit, since a counter on an early hit ends the combo (SP-031).
+- **Checks:** edited in the public `AnomalysHub.lua` only, by reading the code. **Not compiled**, no live run. Not in the source tree or private build.
+
+**Next step:** a wave or Wolf Fang fight at under ~85 ms ping. Count `npc_fast_hit` presses and their counters by `fastMarginMs`. If the 25-35 ms band counters under ~55%, raise `FAST_MIN_MARGIN`.
